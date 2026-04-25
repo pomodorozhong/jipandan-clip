@@ -1,0 +1,29 @@
+[project]
+name = "jipandan-clips"
+version = "0.1.0"
+description = "Jipandan-clips is a small tool to make clips from lengthy, raw audio files."
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "mlx-whisper>=0.4.3",
+]
+
+[project.scripts]
+transcribe = "jipandan.cli.transcribe:main"
+generate-commands = "jipandan.cli.generate_commands:main"
+
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.2.0",
+    "pip>=26.0.1",
+]
