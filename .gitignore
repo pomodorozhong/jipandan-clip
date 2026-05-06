@@ -17,3 +17,5 @@ raw/*
 !raw/.gitkeep
 clip/*
 !clip/.gitkeep
+tmp/*
+!tmp/.gitkeep

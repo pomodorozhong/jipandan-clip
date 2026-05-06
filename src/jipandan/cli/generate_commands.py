@@ -88,25 +88,54 @@ def _build_notebook(entries: list[SubtitleEntry], input_audio: Path, clip_dir: P
         safe_title = shlex.quote(entry.text)
         safe_output = f'"{_escape_for_double_quotes(output_prefix)}${{title}}.mp3"'
 
-        preview_cmd = (
-            f"!mpv --start={shlex.quote(start_mpv)} "
-            f"--length={shlex.quote(duration_str)} {safe_input}"
+        tmp_clip = f"tmp/clip_{entry.index:04d}.mp3"
+        tmp_wave = f"tmp/clip_{entry.index:04d}.png"
+
+        mpv_preview_cmd = (
+            f"!mpv --no-terminal --start={shlex.quote(start_mpv)} "
+            f"--length={shlex.quote(duration_str)} {safe_input}\n"
+        )
+
+        soundwave_cmd = (
+            f'!ffmpeg -y -loglevel quiet -i {safe_input} -ss {shlex.quote(start_ffmpeg)} '
+            f'-t {shlex.quote(duration_str)} -c copy "{tmp_clip}"\n'
+            f'!ffmpeg -y -loglevel quiet -i "{tmp_clip}" -filter_complex '
+            f'"showwavespic=s=800x200:colors=cyan" -frames:v 1 "{tmp_wave}"\n\n'
+            "from IPython.display import Image, display\n"
+            f'display(Image(filename="{tmp_wave}"))'
         )
         clip_cmd = (
-            f"!title={safe_title}; ffmpeg -y -i {safe_input} -ss {shlex.quote(start_ffmpeg)} "
+            f"!title={safe_title}; ffmpeg -y -loglevel quiet -i {safe_input} -ss {shlex.quote(start_ffmpeg)} "
             f"-t {shlex.quote(duration_str)} -c copy "
-            f'-metadata title="$title" {safe_output}'
+            f'-metadata title="$title" {safe_output}\n'
+            f"!title={safe_title}; ffmpeg -y -loglevel quiet -i {safe_output} "
+            '-af silenceremove=start_periods=1:start_duration=0.02:start_silence=0.1:start_threshold=-40dB:'
+            'stop_periods=1:stop_duration=0.2:stop_threshold=-50dB '
+            f'"{_escape_for_double_quotes(output_prefix)}${{title}}_silencerm.mp3"\n'
+            f'!title={safe_title}; ffmpeg -y -loglevel quiet -i "{_escape_for_double_quotes(output_prefix)}${{title}}_silencerm.mp3" '
+            '-filter_complex "showwavespic=s=800x200:colors=cyan" -frames:v 1 '
+            f'"tmp/clip_{entry.index:04d}_silencerm.png"\n'
+            f'!title={safe_title}; mpv --no-terminal "{_escape_for_double_quotes(output_prefix)}${{title}}_silencerm.mp3"\n'
+            "\nfrom IPython.display import Image, display\n"
+            f'display(Image(filename="tmp/clip_{entry.index:04d}_silencerm.png"))'
         )
 
         cells.append(
             _markdown_cell(
-                f"## Clip {entry.index}: {entry.text}\n\n"
+                f"## {entry.index}: Preview - {entry.text}\n\n"
+            )
+        )
+        cells.append(_code_cell(mpv_preview_cmd))
+
+        cells.append(
+            _markdown_cell(
+                f"## {entry.index}: Clipping\n\n"
                 f"- Start: `{entry.start}`\n"
                 f"- End: `{entry.end}`\n"
                 f"- Duration: `{duration_str}s`\n\n"
             )
         )
-        cells.append(_code_cell(preview_cmd))
+        cells.append(_code_cell(soundwave_cmd))
         cells.append(_code_cell(clip_cmd))
 
     return {
