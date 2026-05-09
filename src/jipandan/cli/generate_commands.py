@@ -126,6 +126,9 @@ def _build_notebook(entries: list[SubtitleEntry], input_audio: Path, clip_dir: P
                 f"## {entry.index}: Preview - {entry.text}\n\n"
             )
         )
+
+        cells.append(_code_cell(soundwave_cmd))
+
         cells.append(_code_cell(mpv_preview_cmd))
 
         cells.append(
@@ -136,7 +139,6 @@ def _build_notebook(entries: list[SubtitleEntry], input_audio: Path, clip_dir: P
                 f"- Duration: `{duration_str}s`\n\n"
             )
         )
-        cells.append(_code_cell(soundwave_cmd))
         cells.append(_code_cell(clip_cmd))
 
     return {
