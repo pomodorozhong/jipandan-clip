@@ -86,7 +86,8 @@ def _build_notebook(entries: list[SubtitleEntry], input_audio: Path, clip_dir: P
 
         safe_input = shlex.quote(str(input_audio))
         safe_title = shlex.quote(entry.text)
-        safe_output = f'"{_escape_for_double_quotes(output_prefix)}${{title}}.mp3"'
+        safe_final_output = f'"{_escape_for_double_quotes(output_prefix)}${{title}}.mp3"'
+        safe_tmp_output = f'"tmp/clip_{entry.index:04d}_${{title}}.mp3"'
 
         tmp_clip = f"tmp/clip_{entry.index:04d}.mp3"
         tmp_wave = f"tmp/clip_{entry.index:04d}.png"
@@ -107,17 +108,17 @@ def _build_notebook(entries: list[SubtitleEntry], input_audio: Path, clip_dir: P
         clip_cmd = (
             f"!title={safe_title}; ffmpeg -y -loglevel quiet -i {safe_input} -ss {shlex.quote(start_ffmpeg)} "
             f"-t {shlex.quote(duration_str)} -c copy "
-            f'-metadata title="$title" {safe_output}\n'
-            f"!title={safe_title}; ffmpeg -y -loglevel quiet -i {safe_output} "
+            f'-metadata title="$title" {safe_tmp_output}\n'
+            f"!title={safe_title}; ffmpeg -y -loglevel quiet -i {safe_tmp_output} "
             '-af silenceremove=start_periods=1:start_duration=0.02:start_silence=0.1:start_threshold=-40dB:'
             'stop_periods=1:stop_duration=0.2:stop_threshold=-50dB '
-            f'"{_escape_for_double_quotes(output_prefix)}${{title}}_silencerm.mp3"\n'
-            f'!title={safe_title}; ffmpeg -y -loglevel quiet -i "{_escape_for_double_quotes(output_prefix)}${{title}}_silencerm.mp3" '
+            f"{safe_final_output}\n"
+            f'!title={safe_title}; ffmpeg -y -loglevel quiet -i {safe_final_output} '
             '-filter_complex "showwavespic=s=800x200:colors=cyan" -frames:v 1 '
-            f'"tmp/clip_{entry.index:04d}_silencerm.png"\n'
-            f'!title={safe_title}; mpv --no-terminal "{_escape_for_double_quotes(output_prefix)}${{title}}_silencerm.mp3"\n'
+            f'"tmp/clip_{entry.index:04d}.png"\n'
+            f"!title={safe_title}; mpv --no-terminal {safe_final_output}\n"
             "\nfrom IPython.display import Image, display\n"
-            f'display(Image(filename="tmp/clip_{entry.index:04d}_silencerm.png"))'
+            f'display(Image(filename="tmp/clip_{entry.index:04d}.png"))'
         )
 
         cells.append(
