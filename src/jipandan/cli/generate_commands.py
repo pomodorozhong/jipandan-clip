@@ -110,8 +110,8 @@ def _build_notebook(entries: list[SubtitleEntry], input_audio: Path, clip_dir: P
             f"-t {shlex.quote(duration_str)} -c copy "
             f'-metadata title="$title" {safe_tmp_output}\n'
             f"!title={safe_title}; ffmpeg -y -loglevel quiet -i {safe_tmp_output} "
-            '-af silenceremove=start_periods=1:start_duration=0.02:start_silence=0.1:start_threshold=-40dB:'
-            'stop_periods=1:stop_duration=0.2:stop_threshold=-50dB '
+            '-af silenceremove=start_periods=1:start_duration=0.1:start_silence=0.1:start_threshold=-40dB:'
+            'stop_periods=1:stop_duration=1:stop_threshold=-50dB '
             f"{safe_final_output}\n"
             f'!title={safe_title}; ffmpeg -y -loglevel quiet -i {safe_final_output} '
             '-filter_complex "showwavespic=s=800x200:colors=cyan" -frames:v 1 '
