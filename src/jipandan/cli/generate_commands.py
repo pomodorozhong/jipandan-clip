@@ -85,38 +85,40 @@ def _build_notebook(entries: list[SubtitleEntry], input_audio: Path, clip_dir: P
         output_prefix = str(clip_dir / f"clip_{entry.index:04d}_")
 
         safe_input = shlex.quote(str(input_audio))
-        safe_title = shlex.quote(entry.text)
-        safe_final_output = f'"{_escape_for_double_quotes(output_prefix)}${{title}}.mp3"'
-        safe_tmp_output = f'"tmp/clip_{entry.index:04d}_${{title}}.mp3"'
+        title_literal = json.dumps(entry.text, ensure_ascii=False)
 
         tmp_clip = f"tmp/clip_{entry.index:04d}.mp3"
         tmp_wave = f"tmp/clip_{entry.index:04d}.png"
 
-        mpv_preview_cmd = (
-            f"!mpv --no-terminal --start={shlex.quote(start_mpv)} "
-            f"--length={shlex.quote(duration_str)} {safe_input}\n"
-        )
 
         soundwave_cmd = (
-            f'!ffmpeg -y -loglevel quiet -i {safe_input} -ss {shlex.quote(start_ffmpeg)} '
-            f'-t {shlex.quote(duration_str)} -c copy "{tmp_clip}"\n'
+            f"title{entry.index} = {title_literal}\n"
+            f"timestamp{entry.index} = {json.dumps(start_ffmpeg)}\n"
+            f"duration{entry.index} = {json.dumps(duration_str)}\n"
+            f'!ffmpeg -y -loglevel quiet -i {safe_input} -ss $timestamp{entry.index} '
+            f'-t $duration{entry.index} -c copy "{tmp_clip}"\n'
             f'!ffmpeg -y -loglevel quiet -i "{tmp_clip}" -filter_complex '
             f'"showwavespic=s=800x200:colors=cyan" -frames:v 1 "{tmp_wave}"\n\n'
             "from IPython.display import Image, display\n"
             f'display(Image(filename="{tmp_wave}"))'
         )
+
+        mpv_preview_cmd = (
+            f"!mpv --no-terminal --start=$timestamp{entry.index} "
+            f"--length=$duration{entry.index} {safe_input}\n"
+        )
+
         clip_cmd = (
-            f"!title={safe_title}; ffmpeg -y -loglevel quiet -i {safe_input} -ss {shlex.quote(start_ffmpeg)} "
-            f"-t {shlex.quote(duration_str)} -c copy "
-            f'-metadata title="$title" {safe_tmp_output}\n'
-            f"!title={safe_title}; ffmpeg -y -loglevel quiet -i {safe_tmp_output} "
+            f'!ffmpeg -y -loglevel quiet -i {safe_input} -ss $timestamp{entry.index} -t $duration{entry.index} '
+            f'-c copy -metadata title="$title{entry.index}" "tmp/clip_{entry.index:04d}_{{title{entry.index}}}.mp3"\n'
+            f'!ffmpeg -y -loglevel quiet -i "tmp/clip_{entry.index:04d}_{{title{entry.index}}}.mp3" '
             '-af silenceremove=start_periods=1:start_duration=0.1:start_silence=0.1:start_threshold=-40dB:'
             'stop_periods=1:stop_duration=1:stop_threshold=-50dB '
-            f"{safe_final_output}\n"
-            f'!title={safe_title}; ffmpeg -y -loglevel quiet -i {safe_final_output} '
+            f'"{_escape_for_double_quotes(output_prefix)}{{title{entry.index}}}.mp3"\n'
+            f'!ffmpeg -y -loglevel quiet -i "{_escape_for_double_quotes(output_prefix)}{{title{entry.index}}}.mp3" '
             '-filter_complex "showwavespic=s=800x200:colors=cyan" -frames:v 1 '
             f'"tmp/clip_{entry.index:04d}.png"\n'
-            f"!title={safe_title}; mpv --no-terminal {safe_final_output}\n"
+            f'!mpv --no-terminal "{_escape_for_double_quotes(output_prefix)}{{title{entry.index}}}.mp3"\n'
             "\nfrom IPython.display import Image, display\n"
             f'display(Image(filename="tmp/clip_{entry.index:04d}.png"))'
         )
