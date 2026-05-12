@@ -135,10 +135,7 @@ def _build_notebook(entries: list[SubtitleEntry], input_audio: Path, clip_dir: P
 
         cells.append(
             _markdown_cell(
-                f"## {entry.index}: Clipping\n\n"
-                f"- Start: `{entry.start}`\n"
-                f"- End: `{entry.end}`\n"
-                f"- Duration: `{duration_str}s`\n\n"
+                f"## {entry.index}: Clipping"
             )
         )
         cells.append(_code_cell(clip_cmd))
