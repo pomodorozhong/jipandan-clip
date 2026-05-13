@@ -2,7 +2,7 @@ import argparse
 import json
 import shlex
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -177,10 +177,14 @@ def main() -> None:
         "-o",
         "--output",
         type=Path,
-        default=Path(f"clip_commands_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ipynb"),
-        help="Output notebook file path.",
+        default=None,
+        help="Output notebook file path (default: {audio_stem}_{ISO-8601 UTC time}.ipynb).",
     )
     args = parser.parse_args()
+
+    if args.output is None:
+        iso_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
+        args.output = Path(f"{args.audio.stem}_{iso_ts}.ipynb")
 
     entries = _parse_srt(args.input)
     if not entries:
