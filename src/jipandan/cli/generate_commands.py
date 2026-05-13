@@ -110,7 +110,8 @@ def _build_notebook(entries: list[SubtitleEntry], input_audio: Path, clip_dir: P
 
         clip_cmd = (
             f'!ffmpeg -y -loglevel quiet -i {safe_input} -ss $timestamp{entry.index} -t $duration{entry.index} '
-            f'-c copy -metadata title="$title{entry.index}" "tmp/clip_{entry.index:04d}_{{title{entry.index}}}.mp3"\n'
+            f'-c copy -metadata title="$title{entry.index}" -metadata TXXX:ORIGINAL_START_TIME="{start_ffmpeg}" '
+            f'"tmp/clip_{entry.index:04d}_{{title{entry.index}}}.mp3"\n'
             f'!ffmpeg -y -loglevel quiet -i "tmp/clip_{entry.index:04d}_{{title{entry.index}}}.mp3" '
             '-af silenceremove=start_periods=1:start_duration=0.1:start_silence=0.2:start_threshold=-40dB:'
             'stop_periods=1:stop_duration=1:stop_threshold=-50dB '
