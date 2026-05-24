@@ -27,6 +27,8 @@ FILTER_LABELS = {
     "exported": "Exported",
 }
 
+SKIPPED_HIDDEN_CLASS = "skipped-hidden"
+
 
 class ClipListItem(ListItem):
     def __init__(self, candidate: ClipCandidate) -> None:
@@ -83,6 +85,10 @@ class ReviewScreen(Screen):
     #clip-list {
         width: 40%;
         border: solid $primary;
+    }
+
+    #clip-list ListItem.skipped-hidden {
+        display: none;
     }
 
     #detail-panel {
@@ -181,18 +187,118 @@ class ReviewScreen(Screen):
             candidates = [candidate for candidate in candidates if candidate.status != "skipped"]
         return candidates
 
-    def _rebuild_list(
+    def _candidate_index_after_removing(self, visible_index: int) -> int | None:
+        if visible_index + 1 < len(self.filtered_indices):
+            return self.filtered_indices[visible_index + 1]
+        if visible_index > 0:
+            return self.filtered_indices[visible_index - 1]
+        return None
+
+    @staticmethod
+    def _is_visible_item(item: ListItem) -> bool:
+        return isinstance(item, ClipListItem) and SKIPPED_HIDDEN_CLASS not in item.classes
+
+    def _visible_position(self, list_view: ListView, dom_index: int) -> int:
+        visible = 0
+        for index, item in enumerate(list_view.children):
+            if index == dom_index:
+                return visible
+            if self._is_visible_item(item):
+                visible += 1
+        raise IndexError(dom_index)
+
+    def _next_visible_dom_index(
+        self,
+        list_view: ListView,
+        from_dom_index: int,
+        *,
+        forward: bool = True,
+    ) -> int | None:
+        if forward:
+            indices = range(from_dom_index + 1, len(list_view.children))
+        else:
+            indices = range(from_dom_index - 1, -1, -1)
+        for index in indices:
+            if self._is_visible_item(list_view.children[index]):
+                return index
+        return None
+
+    def _sync_filtered_indices(self, list_view: ListView) -> None:
+        self.filtered_indices = [
+            item.candidate_index
+            for item in list_view.children
+            if self._is_visible_item(item)
+        ]
+
+    def _select_after_hide(
+        self,
+        list_view: ListView,
+        hidden_dom_index: int,
+        next_candidate_index: int | None,
+    ) -> None:
+        next_dom = self._next_visible_dom_index(list_view, hidden_dom_index)
+        if next_dom is None:
+            next_dom = self._next_visible_dom_index(
+                list_view, hidden_dom_index, forward=False
+            )
+        if next_dom is not None:
+            list_view.index = next_dom
+        else:
+            list_view.index = None
+        self.query_one("#filter-bar", Static).update(self._filter_bar_text())
+        if next_candidate_index is not None:
+            self._update_detail(next_candidate_index)
+        else:
+            self._clear_detail()
+
+    def _hide_skipped_at(
+        self,
+        list_view: ListView,
+        dom_index: int,
+        next_candidate_index: int | None,
+    ) -> None:
+        item = list_view.children[dom_index]
+        if isinstance(item, ClipListItem):
+            item.add_class(SKIPPED_HIDDEN_CLASS)
+        visible_index = self._visible_position(list_view, dom_index)
+        del self.filtered_indices[visible_index]
+        self._select_after_hide(list_view, dom_index, next_candidate_index)
+
+    def _hide_skipped_bulk(
+        self,
+        list_view: ListView,
+        candidate_indices: list[int],
+        next_candidate_index: int | None,
+    ) -> None:
+        candidate_set = set(candidate_indices)
+        hidden_dom_index = list_view.index or 0
+        for item in list_view.children:
+            if not isinstance(item, ClipListItem):
+                continue
+            if item.candidate_index not in candidate_set:
+                continue
+            candidate = self.session.get_candidate(item.candidate_index)
+            if candidate is not None and candidate.status == "skipped":
+                item.add_class(SKIPPED_HIDDEN_CLASS)
+        self._sync_filtered_indices(list_view)
+        self._select_after_hide(list_view, hidden_dom_index, next_candidate_index)
+
+    @work(exclusive=True)
+    async def _rebuild_list(
         self,
         select_first: bool = False,
         preserve_index: int | None = None,
     ) -> None:
         list_view = self.query_one("#clip-list", ListView)
-        list_view.clear()
+        await list_view.clear()
         self.filtered_indices = []
+        items: list[ClipListItem] = []
         for candidate in self._visible_candidates():
             self.filtered_indices.append(candidate.index)
-            list_view.append(ClipListItem(candidate))
+            items.append(ClipListItem(candidate))
         self.query_one("#filter-bar", Static).update(self._filter_bar_text())
+        if items:
+            await list_view.mount(*items)
         if preserve_index is not None and preserve_index in self.filtered_indices:
             list_view.index = self.filtered_indices.index(preserve_index)
             self._update_detail(preserve_index)
@@ -203,17 +309,26 @@ class ReviewScreen(Screen):
             list_view.index = 0
             self._update_detail(self.filtered_indices[0])
         elif not self.filtered_indices:
+            list_view.index = None
             self._clear_detail()
 
-    def _current_candidate(self) -> ClipCandidate | None:
+    def _highlighted_item(self) -> ClipListItem | None:
         list_view = self.query_one("#clip-list", ListView)
         if list_view.index is None:
             return None
         try:
-            index = self.filtered_indices[list_view.index]
+            item = list_view.children[list_view.index]
         except IndexError:
             return None
-        return self.session.get_candidate(index)
+        if self._is_visible_item(item):
+            return item
+        return None
+
+    def _current_candidate(self) -> ClipCandidate | None:
+        item = self._highlighted_item()
+        if item is None:
+            return None
+        return self.session.get_candidate(item.candidate_index)
 
     def _clear_detail(self) -> None:
         self.query_one("#clip-title", Static).update("No clips in current filter.")
@@ -274,17 +389,22 @@ class ReviewScreen(Screen):
         if candidate is None:
             return
         list_view = self.query_one("#clip-list", ListView)
-        list_index = list_view.index
+        dom_index = list_view.index
+        visible_index = (
+            self._visible_position(list_view, dom_index)
+            if dom_index is not None
+            else None
+        )
+        preserve = (
+            self._candidate_index_after_removing(visible_index)
+            if visible_index is not None
+            else None
+        )
         candidate.status = status
         if self.hide_skipped and status == "skipped":
             self._persist()
-            self._rebuild_list()
-            if self.filtered_indices:
-                new_index = min(list_index or 0, len(self.filtered_indices) - 1)
-                list_view.index = new_index
-                self._update_detail(self.filtered_indices[new_index])
-            else:
-                self._clear_detail()
+            if dom_index is not None:
+                self._hide_skipped_at(list_view, dom_index, preserve)
             return
         self._refresh_list_item(candidate)
         self.query_one("#clip-status", Static).update(f"Status: {candidate.status}")
@@ -294,17 +414,27 @@ class ReviewScreen(Screen):
         list_view = self.query_one("#clip-list", ListView)
         if list_view.index is None:
             return
-        if list_view.index < len(self.filtered_indices) - 1:
-            list_view.index += 1
-            self._update_detail(self.filtered_indices[list_view.index])
+        next_dom = self._next_visible_dom_index(list_view, list_view.index)
+        if next_dom is None:
+            return
+        list_view.index = next_dom
+        item = list_view.children[next_dom]
+        if isinstance(item, ClipListItem):
+            self._update_detail(item.candidate_index)
 
     def action_cursor_up(self) -> None:
         list_view = self.query_one("#clip-list", ListView)
         if list_view.index is None:
             return
-        if list_view.index > 0:
-            list_view.index -= 1
-            self._update_detail(self.filtered_indices[list_view.index])
+        next_dom = self._next_visible_dom_index(
+            list_view, list_view.index, forward=False
+        )
+        if next_dom is None:
+            return
+        list_view.index = next_dom
+        item = list_view.children[next_dom]
+        if isinstance(item, ClipListItem):
+            self._update_detail(item.candidate_index)
 
     def action_mark_group1(self) -> None:
         self._set_status("group1")
@@ -319,13 +449,14 @@ class ReviewScreen(Screen):
         list_view = self.query_one("#clip-list", ListView)
         if list_view.index is None or not self.filtered_indices:
             return
-        indices_to_skip = self.filtered_indices[: list_view.index + 1]
+        dom_index = list_view.index
+        visible_index = self._visible_position(list_view, dom_index)
+        preserve = self._candidate_index_after_removing(visible_index)
+        indices_to_skip = self.filtered_indices[: visible_index + 1]
         count = self.session.bulk_skip(indices_to_skip)
         self._persist()
         if self.hide_skipped and count > 0:
-            current = self._current_candidate()
-            preserve = current.index if current is not None else None
-            self._rebuild_list(preserve_index=preserve)
+            self._hide_skipped_bulk(list_view, indices_to_skip, preserve)
         else:
             for index in indices_to_skip:
                 candidate = self.session.get_candidate(index)
