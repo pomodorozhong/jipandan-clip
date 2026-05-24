@@ -11,6 +11,12 @@ FINETUNE_HELP = (
 )
 
 
+def format_playback_remaining(seconds: float) -> str:
+    total = max(0, int(seconds))
+    minutes, secs = divmod(total, 60)
+    return f"Playing audio ({minutes}:{secs:02d} remaining)"
+
+
 class WaveformWidget(Vertical):
     DEFAULT_CSS = """
     WaveformWidget {

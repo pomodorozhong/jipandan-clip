@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 from textual import on, work
@@ -5,11 +6,12 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
+from textual.timer import Timer
 from textual.widgets import Footer, Header, Label, ListItem, ListView, Static
 
 from jipandan.core import ffmpeg
 from jipandan.core.models import ClipCandidate, ClipStatus, Session
-from jipandan.tui.widgets.waveform import FINETUNE_HELP, WaveformWidget
+from jipandan.tui.widgets.waveform import FINETUNE_HELP, WaveformWidget, format_playback_remaining
 
 STATUS_BADGE: dict[ClipStatus, str] = {
     "pending": "  ",
@@ -98,6 +100,11 @@ class ReviewScreen(Screen):
         padding: 1 2;
     }
 
+    #playback-status {
+        height: 1;
+        width: 100%;
+    }
+
     #clip-title {
         height: auto;
         padding-bottom: 1;
@@ -131,6 +138,8 @@ class ReviewScreen(Screen):
         self._waveform_generation = 0
         self._waveform_cache: dict[tuple[int, str, str], Path] = {}
         self._skip_undo_stack: list[tuple[int, ClipStatus]] = []
+        self._playback_end: float | None = None
+        self._playback_timer: Timer | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -138,6 +147,7 @@ class ReviewScreen(Screen):
         with Horizontal(id="main-pane"):
             yield ListView(id="clip-list")
             with Vertical(id="detail-panel"):
+                yield Static("", id="playback-status")
                 yield Static("", id="clip-title")
                 yield WaveformWidget(id="waveform")
                 yield Static(FINETUNE_HELP, id="waveform-hints")
@@ -358,6 +368,31 @@ class ReviewScreen(Screen):
             return None
         return self.session.get_candidate(item.candidate_index)
 
+    def _clear_playback_status(self) -> None:
+        self._playback_end = None
+        if self._playback_timer is not None:
+            self._playback_timer.stop()
+            self._playback_timer = None
+        self.query_one("#playback-status", Static).update("")
+
+    def _start_playback_status(self, duration_seconds: float) -> None:
+        self._playback_end = time.monotonic() + duration_seconds
+        self._update_playback_status()
+        if self._playback_timer is not None:
+            self._playback_timer.stop()
+        self._playback_timer = self.set_interval(0.2, self._update_playback_status)
+
+    def _update_playback_status(self) -> None:
+        if self._playback_end is None:
+            return
+        remaining = self._playback_end - time.monotonic()
+        if remaining <= 0:
+            self._clear_playback_status()
+            return
+        self.query_one("#playback-status", Static).update(
+            format_playback_remaining(remaining)
+        )
+
     def _clear_detail(self) -> None:
         self.query_one("#clip-title", Static).update("No clips in current filter.")
         self.query_one("#waveform", WaveformWidget).show_placeholder("No waveform.")
@@ -573,10 +608,14 @@ class ReviewScreen(Screen):
 
     @work(thread=True, exclusive=True)
     def run_play_preview(self, candidate: ClipCandidate) -> None:
+        duration = float(candidate.duration)
+        self.app.call_from_thread(self._start_playback_status, duration)
         try:
             ffmpeg.play_preview(self.session.audio, candidate.start, candidate.duration)
         except Exception as exc:
             self.app.call_from_thread(self.notify, f"mpv failed: {exc}", severity="error")
+        finally:
+            self.app.call_from_thread(self._clear_playback_status)
 
     def action_export_clip(self) -> None:
         candidate = self._current_candidate()
@@ -604,14 +643,17 @@ class ReviewScreen(Screen):
         )
         self._persist()
         self.notify(f"Exported {output.name}")
-        self.run_play_exported(output)
+        self.run_play_exported(output, float(candidate.duration))
 
     @work(thread=True, exclusive=True)
-    def run_play_exported(self, output: Path) -> None:
+    def run_play_exported(self, output: Path, duration: float) -> None:
+        self.app.call_from_thread(self._start_playback_status, duration)
         try:
             ffmpeg.play_file(output)
         except Exception as exc:
             self.app.call_from_thread(self.notify, f"mpv failed: {exc}", severity="error")
+        finally:
+            self.app.call_from_thread(self._clear_playback_status)
 
     @work(thread=True, exclusive=True)
     def _generate_waveform(self, candidate: ClipCandidate) -> None:
