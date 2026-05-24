@@ -24,9 +24,10 @@ STATUS_BADGE: dict[ClipStatus, str] = {
     "skipped": "--",
 }
 
-FILTER_ORDER = ["all", "group1", "group2", "exported"]
+FILTER_ORDER = ["all", "unsorted", "group1", "group2", "exported"]
 FILTER_LABELS = {
     "all": "All",
+    "unsorted": "Unsorted",
     "group1": "G1",
     "group2": "G2",
     "exported": "Exported",
@@ -196,6 +197,12 @@ class ReviewScreen(Screen):
     def _visible_candidates(self) -> list[ClipCandidate]:
         if self.filter_mode == "all":
             candidates = self.session.candidates
+        elif self.filter_mode == "unsorted":
+            candidates = [
+                candidate
+                for candidate in self.session.candidates
+                if candidate.status == "pending"
+            ]
         else:
             candidates = [
                 candidate
