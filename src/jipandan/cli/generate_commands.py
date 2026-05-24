@@ -1,32 +1,20 @@
 import argparse
 import json
 import shlex
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+
+from jipandan.core.srt import (
+    SubtitleEntry,
+    compute_duration,
+    parse_srt,
+    srt_time_to_ffmpeg,
+)
 
 
 CELLS_PER_CLIP = 5
 NOTEBOOK_CONTROL_CELLS = 1
 DEFAULT_MAX_CELLS_PER_NOTEBOOK = 2000
-
-
-@dataclass
-class SubtitleEntry:
-    index: int
-    start: str
-    end: str
-    text: str
-
-
-def _srt_time_to_seconds(value: str) -> float:
-    hhmmss, millis = value.split(",")
-    hours, minutes, seconds = hhmmss.split(":")
-    return int(hours) * 3600 + int(minutes) * 60 + int(seconds) + int(millis) / 1000.0
-
-
-def _srt_time_to_ffmpeg(value: str) -> str:
-    return value.replace(",", ".")
 
 
 def _escape_for_double_quotes(value: str) -> str:
@@ -36,26 +24,6 @@ def _escape_for_double_quotes(value: str) -> str:
         .replace("$", "\\$")
         .replace("`", "\\`")
     )
-
-
-def _parse_srt(srt_path: Path) -> list[SubtitleEntry]:
-    raw_text = srt_path.read_text(encoding="utf-8")
-    blocks = [block.strip() for block in raw_text.split("\n\n") if block.strip()]
-    entries: list[SubtitleEntry] = []
-    for block in blocks:
-        lines = block.splitlines()
-        if len(lines) < 3:
-            continue
-        try:
-            index = int(lines[0].strip())
-        except ValueError:
-            continue
-        if " --> " not in lines[1]:
-            continue
-        start, end = [part.strip() for part in lines[1].split(" --> ", maxsplit=1)]
-        text = " ".join(line.strip() for line in lines[2:] if line.strip())
-        entries.append(SubtitleEntry(index=index, start=start, end=end, text=text))
-    return entries
 
 
 def _code_cell(source: str) -> dict:
@@ -83,13 +51,8 @@ def _control_cell() -> dict:
 def _cells_for_entry(
     entry: SubtitleEntry, input_audio: Path, clip_dir: Path
 ) -> list[dict]:
-    start_seconds = _srt_time_to_seconds(entry.start)
-    end_seconds = _srt_time_to_seconds(entry.end)
-    duration_seconds = max(0.0, end_seconds - start_seconds)
-
-    start_mpv = _srt_time_to_ffmpeg(entry.start)
-    start_ffmpeg = start_mpv
-    duration_str = f"{duration_seconds:.3f}"
+    start_ffmpeg = srt_time_to_ffmpeg(entry.start)
+    duration_str = compute_duration(entry.start, entry.end)
 
     output_prefix = str(clip_dir / f"clip_{entry.index:04d}_")
 
@@ -237,7 +200,7 @@ def main() -> None:
     if base_output.suffix.lower() != ".ipynb":
         base_output = base_output.with_suffix(".ipynb")
 
-    entries = _parse_srt(args.input)
+    entries = parse_srt(args.input)
     if not entries:
         raise ValueError(f"No valid subtitle entries found in {args.input}")
 
