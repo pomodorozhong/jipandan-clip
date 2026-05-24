@@ -8,6 +8,9 @@ SILENCE_REMOVE_FILTER = (
     "stop_periods=1:stop_duration=1:stop_threshold=-50dB"
 )
 
+# Play audio without opening an mpv window (e.g. album-art UI on macOS).
+MPV_BASE = ["--no-terminal", "--no-video", "--force-window=no", "--audio-display=no"]
+
 
 def _run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True)
@@ -122,7 +125,7 @@ def play_preview(input_audio: Path, start: str, duration: str) -> None:
     _run(
         [
             "mpv",
-            "--no-terminal",
+            *MPV_BASE,
             f"--start={start}",
             f"--length={duration}",
             str(input_audio),
@@ -131,4 +134,4 @@ def play_preview(input_audio: Path, start: str, duration: str) -> None:
 
 
 def play_file(path: Path) -> None:
-    _run(["mpv", "--no-terminal", str(path)])
+    _run(["mpv", *MPV_BASE, str(path)])

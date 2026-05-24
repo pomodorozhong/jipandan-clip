@@ -36,29 +36,6 @@ class JipandanApp(App):
 
     def on_mount(self) -> None:
         session_path = self.audio.with_suffix(".jipandan.json")
-        if self.resume and session_path.exists():
-            session = Session.load(session_path)
-            session.audio = self.audio
-            session.srt = self.srt_path
-            session.clip_dir = self.clip_dir
-            if self.srt_path.exists():
-                warnings = session.merge_with_srt()
-                for warning in warnings:
-                    self.notify(warning, severity="warning")
-            session.save()
-            self.push_screen(ReviewScreen(session))
-            return
-
-        if session_path.exists() and not self.resume:
-            session = Session.load(session_path)
-            session.audio = self.audio
-            session.srt = self.srt_path
-            session.clip_dir = self.clip_dir
-            if self.srt_path.exists():
-                session.merge_with_srt()
-            session.save()
-            self.push_screen(ReviewScreen(session))
-            return
 
         if not self.srt_path.exists():
             self.push_screen(
@@ -73,6 +50,28 @@ class JipandanApp(App):
                     entropy_thold=self.entropy_thold,
                 )
             )
+            return
+
+        if self.resume and session_path.exists():
+            session = Session.load(session_path)
+            session.audio = self.audio
+            session.srt = self.srt_path
+            session.clip_dir = self.clip_dir
+            warnings = session.merge_with_srt()
+            for warning in warnings:
+                self.notify(warning, severity="warning")
+            session.save()
+            self.push_screen(ReviewScreen(session))
+            return
+
+        if session_path.exists():
+            session = Session.load(session_path)
+            session.audio = self.audio
+            session.srt = self.srt_path
+            session.clip_dir = self.clip_dir
+            session.merge_with_srt()
+            session.save()
+            self.push_screen(ReviewScreen(session))
             return
 
         session = Session.from_srt(self.audio, self.srt_path, self.clip_dir)

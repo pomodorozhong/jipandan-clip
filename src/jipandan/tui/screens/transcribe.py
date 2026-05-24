@@ -60,7 +60,8 @@ class TranscribeScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.run_transcribe()
+        # Defer until the screen is active so @work scheduling is reliable.
+        self.call_later(self.run_transcribe)
 
     @work(thread=True, exclusive=True)
     def run_transcribe(self) -> None:

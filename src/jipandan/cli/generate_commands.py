@@ -4,12 +4,15 @@ import shlex
 from datetime import datetime, timezone
 from pathlib import Path
 
+from jipandan.core.ffmpeg import MPV_BASE
 from jipandan.core.srt import (
     SubtitleEntry,
     compute_duration,
     parse_srt,
     srt_time_to_ffmpeg,
 )
+
+_MPV_FLAGS = " ".join(MPV_BASE)
 
 
 CELLS_PER_CLIP = 5
@@ -76,7 +79,7 @@ def _cells_for_entry(
 
     mpv_preview_cmd = (
         "if RUN_MPV_PREVIEW:\n"
-        f"    !mpv --no-terminal --start=$timestamp{entry.index} "
+        f"    !mpv {_MPV_FLAGS} --start=$timestamp{entry.index} "
         f"--length=$duration{entry.index} {safe_input}\n"
     )
 
@@ -92,7 +95,7 @@ def _cells_for_entry(
         f'    !ffmpeg -y -loglevel quiet -i "{_escape_for_double_quotes(output_prefix)}{{title{entry.index}}}.mp3" '
         '-filter_complex "showwavespic=s=800x200:colors=cyan" -frames:v 1 '
         f'"tmp/clip_{entry.index:04d}.png"\n'
-        f'    !mpv --no-terminal "{_escape_for_double_quotes(output_prefix)}{{title{entry.index}}}.mp3"\n'
+        f'    !mpv {_MPV_FLAGS} "{_escape_for_double_quotes(output_prefix)}{{title{entry.index}}}.mp3"\n'
         "\n    from IPython.display import Image, display\n"
         f'    display(Image(filename="tmp/clip_{entry.index:04d}.png"))'
     )

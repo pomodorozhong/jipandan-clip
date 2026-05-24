@@ -1,6 +1,9 @@
 import argparse
 from pathlib import Path
 
+# Configure tqdm/Hugging Face before Textual starts (stderr has no real fd in TUIs).
+import jipandan.core.whisper  # noqa: F401
+
 from jipandan.tui.app import JipandanApp
 
 

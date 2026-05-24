@@ -1,4 +1,28 @@
+from __future__ import annotations
+
+import os
+import threading
 from pathlib import Path
+
+# Textual (and other TUIs) expose stderr.fileno() == -1. tqdm then tries to
+# create a multiprocessing lock for progress bars, which crashes with
+# "bad value(s) in fds_to_keep" when Hugging Face downloads models from a
+# background worker thread.
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+
+try:
+    import tqdm
+
+    tqdm.tqdm.set_lock(threading.RLock())
+except ImportError:
+    pass
+
+try:
+    from huggingface_hub.utils import tqdm as hf_tqdm
+
+    hf_tqdm.set_lock(threading.RLock())
+except ImportError:
+    pass
 
 import mlx_whisper
 
