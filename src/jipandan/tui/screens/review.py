@@ -11,6 +11,9 @@ from textual.widgets import Footer, Header, Label, ListItem, ListView, Static
 
 from jipandan.core import ffmpeg
 from jipandan.core.models import ClipCandidate, ClipStatus, Session
+from jipandan.core.ffmpeg import ExportOptions
+from jipandan.tui.screens.export_mode import ExportModeModal
+from jipandan.tui.screens.export_title import ExportTitleModal
 from jipandan.tui.widgets.waveform import FINETUNE_HELP, WaveformWidget, format_playback_remaining
 
 STATUS_BADGE: dict[ClipStatus, str] = {
@@ -621,15 +624,54 @@ class ReviewScreen(Screen):
         candidate = self._current_candidate()
         if candidate is None:
             return
-        self.run_export(candidate)
+        self.app.push_screen(
+            ExportModeModal(),
+            lambda options: self._after_export_mode(candidate.index, options),
+        )
+
+    def _after_export_mode(
+        self, candidate_index: int, options: ExportOptions | None
+    ) -> None:
+        if options is None:
+            return
+        candidate = self.session.get_candidate(candidate_index)
+        if candidate is None:
+            return
+        self.app.push_screen(
+            ExportTitleModal(candidate.title),
+            lambda title: self._start_export(candidate_index, options, title),
+        )
+
+    def _start_export(
+        self,
+        candidate_index: int,
+        export_options: ExportOptions,
+        title: str | None,
+    ) -> None:
+        if title is None:
+            return
+        candidate = self.session.get_candidate(candidate_index)
+        if candidate is None:
+            return
+        candidate.title = title
+        self._refresh_list_item(candidate)
+        self._update_detail(candidate.index)
+        self.run_export(candidate, title, export_options)
 
     @work(thread=True, exclusive=True)
-    def run_export(self, candidate: ClipCandidate) -> None:
+    def run_export(
+        self,
+        candidate: ClipCandidate,
+        export_title: str,
+        export_options: ExportOptions,
+    ) -> None:
         try:
             output = ffmpeg.export_clip(
                 self.session.audio,
                 candidate,
                 self.session.clip_dir,
+                export_title=export_title,
+                export_options=export_options,
             )
             candidate.status = "exported"
             self.app.call_from_thread(self._after_export, candidate, output)
