@@ -96,10 +96,13 @@ def extract_preview(
     )
 
 
+WAVEFORM_PIXEL_SIZE = (800, 200)
+
+
 def render_waveform(
     mp3: Path,
     out_png: Path,
-    size: tuple[int, int] = (800, 200),
+    size: tuple[int, int] = WAVEFORM_PIXEL_SIZE,
 ) -> None:
     out_png.parent.mkdir(parents=True, exist_ok=True)
     width, height = size

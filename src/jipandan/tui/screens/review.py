@@ -33,6 +33,7 @@ FILTER_LABELS = {
 }
 
 SKIPPED_HIDDEN_CLASS = "skipped-hidden"
+WAVEFORM_DEBOUNCE_SECONDS = 0.4
 
 
 class ClipListItem(ListItem):
@@ -143,6 +144,9 @@ class ReviewScreen(Screen):
         self._skip_undo_stack: list[tuple[int, ClipStatus]] = []
         self._playback_end: float | None = None
         self._playback_timer: Timer | None = None
+        self._waveform_debounce_timer: Timer | None = None
+        self._pending_waveform_index: int | None = None
+        self._displayed_waveform_viewport: tuple[str, str] | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -397,12 +401,39 @@ class ReviewScreen(Screen):
         )
 
     def _clear_detail(self) -> None:
+        self._displayed_waveform_viewport = None
         self.query_one("#clip-title", Static).update("No clips in current filter.")
         self.query_one("#waveform", WaveformWidget).show_placeholder("No waveform.")
         self.query_one("#clip-times", Static).update("")
         self.query_one("#clip-status", Static).update("")
 
-    def _update_detail(self, index: int) -> None:
+    def _cancel_waveform_debounce(self) -> None:
+        if self._waveform_debounce_timer is not None:
+            self._waveform_debounce_timer.stop()
+            self._waveform_debounce_timer = None
+        self._pending_waveform_index = None
+
+    def _schedule_waveform_refresh(self, candidate_index: int) -> None:
+        self._waveform_generation += 1
+        self._cancel_waveform_debounce()
+        self._pending_waveform_index = candidate_index
+
+        def refresh_waveform() -> None:
+            self._waveform_debounce_timer = None
+            if self._pending_waveform_index != candidate_index:
+                return
+            candidate = self.session.get_candidate(candidate_index)
+            if candidate is None:
+                return
+            self._show_waveform(candidate)
+
+        self._waveform_debounce_timer = self.set_timer(
+            WAVEFORM_DEBOUNCE_SECONDS,
+            refresh_waveform,
+            name="waveform-debounce",
+        )
+
+    def _update_detail(self, index: int, *, debounce_waveform: bool = False) -> None:
         candidate = self.session.get_candidate(index)
         if candidate is None:
             self._clear_detail()
@@ -421,16 +452,43 @@ class ReviewScreen(Screen):
             f"Status: {candidate.status}  Original: {candidate.original_start} → {candidate.original_end}"
         )
         self.query_one("#filter-bar", Static).update(self._filter_bar_text())
-        self._show_waveform(candidate)
+        if debounce_waveform:
+            self._schedule_waveform_refresh(index)
+            self._refresh_waveform_markers(candidate)
+        else:
+            self._cancel_waveform_debounce()
+            self._show_waveform(candidate)
 
     @staticmethod
     def _waveform_cache_key(candidate: ClipCandidate) -> tuple[int, str, str]:
         return (candidate.index, candidate.start, candidate.duration)
 
+    def _present_waveform(
+        self,
+        path: Path,
+        viewport_start: str,
+        viewport_duration: str,
+    ) -> None:
+        self._displayed_waveform_viewport = (viewport_start, viewport_duration)
+        self.query_one("#waveform", WaveformWidget).display_waveform(
+            path,
+            viewport_start,
+            viewport_duration,
+        )
+
+    def _refresh_waveform_markers(self, candidate: ClipCandidate) -> None:
+        if self._displayed_waveform_viewport is None:
+            return
+        self.query_one("#waveform", WaveformWidget).overlay_trim_bounds(
+            candidate.start,
+            candidate.end,
+        )
+
     def _show_waveform(self, candidate: ClipCandidate) -> None:
-        cached = self._waveform_cache.get(self._waveform_cache_key(candidate))
+        cache_key = self._waveform_cache_key(candidate)
+        cached = self._waveform_cache.get(cache_key)
         if cached is not None and cached.exists():
-            self.query_one("#waveform", WaveformWidget).update_image(cached)
+            self._present_waveform(cached, candidate.start, candidate.duration)
             return
         self._generate_waveform(candidate)
 
@@ -592,7 +650,7 @@ class ReviewScreen(Screen):
         if candidate is None:
             return
         self.session.nudge_start(candidate.index, delta)
-        self._update_detail(candidate.index)
+        self._update_detail(candidate.index, debounce_waveform=True)
         self._persist()
 
     def _nudge_end(self, delta: float) -> None:
@@ -600,7 +658,7 @@ class ReviewScreen(Screen):
         if candidate is None:
             return
         self.session.nudge_end(candidate.index, delta)
-        self._update_detail(candidate.index)
+        self._update_detail(candidate.index, debounce_waveform=True)
         self._persist()
 
     def action_play_preview(self) -> None:
@@ -721,8 +779,10 @@ class ReviewScreen(Screen):
                 return
             self._waveform_cache[cache_key] = tmp_png
             self.app.call_from_thread(
-                self.query_one("#waveform", WaveformWidget).update_image,
+                self._present_waveform,
                 tmp_png,
+                candidate.start,
+                candidate.duration,
             )
         except Exception as exc:
             if generation != self._waveform_generation:
