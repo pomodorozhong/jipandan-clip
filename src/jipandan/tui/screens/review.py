@@ -33,6 +33,7 @@ FILTER_LABELS = {
 }
 
 SKIPPED_HIDDEN_CLASS = "skipped-hidden"
+WAVEFORM_DEBOUNCE_SECONDS = 0.4
 
 
 class ClipListItem(ListItem):
@@ -143,6 +144,8 @@ class ReviewScreen(Screen):
         self._skip_undo_stack: list[tuple[int, ClipStatus]] = []
         self._playback_end: float | None = None
         self._playback_timer: Timer | None = None
+        self._waveform_debounce_timer: Timer | None = None
+        self._pending_waveform_index: int | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -402,7 +405,33 @@ class ReviewScreen(Screen):
         self.query_one("#clip-times", Static).update("")
         self.query_one("#clip-status", Static).update("")
 
-    def _update_detail(self, index: int) -> None:
+    def _cancel_waveform_debounce(self) -> None:
+        if self._waveform_debounce_timer is not None:
+            self._waveform_debounce_timer.stop()
+            self._waveform_debounce_timer = None
+        self._pending_waveform_index = None
+
+    def _schedule_waveform_refresh(self, candidate_index: int) -> None:
+        self._waveform_generation += 1
+        self._cancel_waveform_debounce()
+        self._pending_waveform_index = candidate_index
+
+        def refresh_waveform() -> None:
+            self._waveform_debounce_timer = None
+            if self._pending_waveform_index != candidate_index:
+                return
+            candidate = self.session.get_candidate(candidate_index)
+            if candidate is None:
+                return
+            self._show_waveform(candidate)
+
+        self._waveform_debounce_timer = self.set_timer(
+            WAVEFORM_DEBOUNCE_SECONDS,
+            refresh_waveform,
+            name="waveform-debounce",
+        )
+
+    def _update_detail(self, index: int, *, debounce_waveform: bool = False) -> None:
         candidate = self.session.get_candidate(index)
         if candidate is None:
             self._clear_detail()
@@ -421,7 +450,11 @@ class ReviewScreen(Screen):
             f"Status: {candidate.status}  Original: {candidate.original_start} → {candidate.original_end}"
         )
         self.query_one("#filter-bar", Static).update(self._filter_bar_text())
-        self._show_waveform(candidate)
+        if debounce_waveform:
+            self._schedule_waveform_refresh(index)
+        else:
+            self._cancel_waveform_debounce()
+            self._show_waveform(candidate)
 
     @staticmethod
     def _waveform_cache_key(candidate: ClipCandidate) -> tuple[int, str, str]:
@@ -592,7 +625,7 @@ class ReviewScreen(Screen):
         if candidate is None:
             return
         self.session.nudge_start(candidate.index, delta)
-        self._update_detail(candidate.index)
+        self._update_detail(candidate.index, debounce_waveform=True)
         self._persist()
 
     def _nudge_end(self, delta: float) -> None:
@@ -600,7 +633,7 @@ class ReviewScreen(Screen):
         if candidate is None:
             return
         self.session.nudge_end(candidate.index, delta)
-        self._update_detail(candidate.index)
+        self._update_detail(candidate.index, debounce_waveform=True)
         self._persist()
 
     def action_play_preview(self) -> None:
