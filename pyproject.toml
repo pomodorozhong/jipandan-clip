@@ -6,11 +6,14 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "mlx-whisper>=0.4.3",
+    "textual>=1.0.0",
+    "textual-image>=0.12.0",
 ]
 
 [project.scripts]
 transcribe = "jipandan.cli.transcribe:main"
 generate-commands = "jipandan.cli.generate_commands:main"
+jipandan = "jipandan.cli.main:main"
 
 [build-system]
 requires = ["setuptools>=69", "wheel"]
