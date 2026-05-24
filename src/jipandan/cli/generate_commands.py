@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 CELLS_PER_CLIP = 5
+NOTEBOOK_CONTROL_CELLS = 1
 DEFAULT_MAX_CELLS_PER_NOTEBOOK = 2000
 
 
@@ -75,6 +76,10 @@ def _markdown_cell(source: str) -> dict:
     }
 
 
+def _control_cell() -> dict:
+    return _code_cell("RUN_MPV_PREVIEW = False\nRUN_CLIP = False\n")
+
+
 def _cells_for_entry(
     entry: SubtitleEntry, input_audio: Path, clip_dir: Path
 ) -> list[dict]:
@@ -107,24 +112,26 @@ def _cells_for_entry(
     )
 
     mpv_preview_cmd = (
-        f"!mpv --no-terminal --start=$timestamp{entry.index} "
+        "if RUN_MPV_PREVIEW:\n"
+        f"    !mpv --no-terminal --start=$timestamp{entry.index} "
         f"--length=$duration{entry.index} {safe_input}\n"
     )
 
     clip_cmd = (
-        f'!ffmpeg -y -loglevel quiet -i {safe_input} -ss $timestamp{entry.index} -t $duration{entry.index} '
+        "if RUN_CLIP:\n"
+        f'    !ffmpeg -y -loglevel quiet -i {safe_input} -ss $timestamp{entry.index} -t $duration{entry.index} '
         f'-c copy -metadata title="$title{entry.index}" -metadata TXXX:ORIGINAL_START_TIME="{start_ffmpeg}" '
         f'"tmp/clip_{entry.index:04d}_{{title{entry.index}}}.mp3"\n'
-        f'!ffmpeg -y -loglevel quiet -i "tmp/clip_{entry.index:04d}_{{title{entry.index}}}.mp3" '
+        f'    !ffmpeg -y -loglevel quiet -i "tmp/clip_{entry.index:04d}_{{title{entry.index}}}.mp3" '
         '-af silenceremove=start_periods=1:start_duration=0.1:start_silence=0.2:start_threshold=-40dB:'
         'stop_periods=1:stop_duration=1:stop_threshold=-50dB '
         f'"{_escape_for_double_quotes(output_prefix)}{{title{entry.index}}}.mp3"\n'
-        f'!ffmpeg -y -loglevel quiet -i "{_escape_for_double_quotes(output_prefix)}{{title{entry.index}}}.mp3" '
+        f'    !ffmpeg -y -loglevel quiet -i "{_escape_for_double_quotes(output_prefix)}{{title{entry.index}}}.mp3" '
         '-filter_complex "showwavespic=s=800x200:colors=cyan" -frames:v 1 '
         f'"tmp/clip_{entry.index:04d}.png"\n'
-        f'!mpv --no-terminal "{_escape_for_double_quotes(output_prefix)}{{title{entry.index}}}.mp3"\n'
-        "\nfrom IPython.display import Image, display\n"
-        f'display(Image(filename="tmp/clip_{entry.index:04d}.png"))'
+        f'    !mpv --no-terminal "{_escape_for_double_quotes(output_prefix)}{{title{entry.index}}}.mp3"\n'
+        "\n    from IPython.display import Image, display\n"
+        f'    display(Image(filename="tmp/clip_{entry.index:04d}.png"))'
     )
 
     return [
@@ -148,7 +155,7 @@ def _notebook_metadata() -> dict:
 
 
 def _build_notebook(entries: list[SubtitleEntry], input_audio: Path, clip_dir: Path) -> dict:
-    cells: list[dict] = []
+    cells: list[dict] = [_control_cell()]
     for entry in entries:
         cells.extend(_cells_for_entry(entry, input_audio, clip_dir))
     return {
@@ -164,7 +171,7 @@ def _chunk_entries(
 ) -> list[list[SubtitleEntry]]:
     chunks: list[list[SubtitleEntry]] = []
     current: list[SubtitleEntry] = []
-    cell_count = 0
+    cell_count = NOTEBOOK_CONTROL_CELLS
     for entry in entries:
         if cell_count + CELLS_PER_CLIP > max_cells_per_notebook and current:
             chunks.append(current)
