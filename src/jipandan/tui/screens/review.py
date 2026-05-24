@@ -54,6 +54,7 @@ class ReviewScreen(Screen):
         Binding("1", "mark_group1", "Group 1"),
         Binding("2", "mark_group2", "Group 2"),
         Binding("x", "mark_skipped", "Skip"),
+        Binding("u", "undo_skip", "Undo skip"),
         Binding("ctrl+shift+x", "bulk_skip_above", "Skip above"),
         Binding("space", "play_preview", "Play"),
         Binding("[", "nudge_start_down", "Start -"),
@@ -129,6 +130,7 @@ class ReviewScreen(Screen):
         self.filtered_indices: list[int] = []
         self._waveform_generation = 0
         self._waveform_cache: dict[tuple[int, str, str], Path] = {}
+        self._skip_undo_stack: list[tuple[int, ClipStatus]] = []
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -170,7 +172,7 @@ class ReviewScreen(Screen):
 
     def _help_text(self) -> str:
         return (
-            "j/k nav  1/2 group  x skip  Ctrl+Shift+X skip above  "
+            "j/k nav  1/2 group  x skip  u undo skip  Ctrl+Shift+X skip above  "
             "f filter  h hide skipped  Ctrl+S save  q quit"
         )
 
@@ -250,6 +252,32 @@ class ReviewScreen(Screen):
             self._update_detail(next_candidate_index)
         else:
             self._clear_detail()
+
+    def _find_list_item(self, candidate_index: int) -> ClipListItem | None:
+        list_view = self.query_one("#clip-list", ListView)
+        for item in list_view.children:
+            if isinstance(item, ClipListItem) and item.candidate_index == candidate_index:
+                return item
+        return None
+
+    def _restore_skipped(
+        self,
+        candidate_index: int,
+        previous_status: ClipStatus,
+    ) -> None:
+        candidate = self.session.get_candidate(candidate_index)
+        if candidate is None:
+            return
+        candidate.status = previous_status
+        list_view = self.query_one("#clip-list", ListView)
+        item = self._find_list_item(candidate_index)
+        if item is None:
+            return
+        item.remove_class(SKIPPED_HIDDEN_CLASS)
+        item.refresh_candidate(candidate)
+        self._sync_filtered_indices(list_view)
+        list_view.index = list_view.children.index(item)
+        self._update_detail(candidate_index)
 
     def _hide_skipped_at(
         self,
@@ -400,13 +428,17 @@ class ReviewScreen(Screen):
             if visible_index is not None
             else None
         )
+        previous_status = candidate.status
         candidate.status = status
         if self.hide_skipped and status == "skipped":
+            self._skip_undo_stack.append((candidate.index, previous_status))
             self._persist()
             if dom_index is not None:
                 self._hide_skipped_at(list_view, dom_index, preserve)
             return
         self._refresh_list_item(candidate)
+        if status == "skipped":
+            self._skip_undo_stack.append((candidate.index, previous_status))
         self.query_one("#clip-status", Static).update(f"Status: {candidate.status}")
         self._persist()
 
@@ -445,6 +477,19 @@ class ReviewScreen(Screen):
     def action_mark_skipped(self) -> None:
         self._set_status("skipped")
 
+    def action_undo_skip(self) -> None:
+        if not self._skip_undo_stack:
+            self.notify("Nothing to undo")
+            return
+        candidate_index, previous_status = self._skip_undo_stack.pop()
+        candidate = self.session.get_candidate(candidate_index)
+        if candidate is None or candidate.status != "skipped":
+            self.notify("Nothing to undo")
+            return
+        self._restore_skipped(candidate_index, previous_status)
+        self._persist()
+        self.notify(f"Restored #{candidate_index}")
+
     def action_bulk_skip_above(self) -> None:
         list_view = self.query_one("#clip-list", ListView)
         if list_view.index is None or not self.filtered_indices:
@@ -453,7 +498,15 @@ class ReviewScreen(Screen):
         visible_index = self._visible_position(list_view, dom_index)
         preserve = self._candidate_index_after_removing(visible_index)
         indices_to_skip = self.filtered_indices[: visible_index + 1]
+        restored_before_skip = [
+            (index, "pending")
+            for index in indices_to_skip
+            if (candidate := self.session.get_candidate(index)) is not None
+            and candidate.status == "pending"
+        ]
         count = self.session.bulk_skip(indices_to_skip)
+        for entry in restored_before_skip:
+            self._skip_undo_stack.append(entry)
         self._persist()
         if self.hide_skipped and count > 0:
             self._hide_skipped_bulk(list_view, indices_to_skip, preserve)
