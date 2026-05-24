@@ -150,8 +150,11 @@ class Session:
         candidate = self.get_candidate(index)
         if candidate is None:
             return
-        start_seconds = srt_time_to_seconds(candidate.start.replace(".", ",")) + delta_seconds
-        candidate.start = seconds_to_ffmpeg_timestamp(start_seconds)
+        start_seconds = srt_time_to_seconds(candidate.start.replace(".", ","))
+        end_seconds = start_seconds + float(candidate.duration)
+        nudged_start = min(end_seconds, start_seconds + delta_seconds)
+        candidate.start = seconds_to_ffmpeg_timestamp(nudged_start)
+        candidate.duration = f"{max(0.0, end_seconds - nudged_start):.3f}"
 
     def nudge_end(self, index: int, delta_seconds: float) -> None:
         candidate = self.get_candidate(index)
