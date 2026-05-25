@@ -134,25 +134,47 @@ class WaveformWidget(Vertical):
         if self._markers_match_viewport():
             return base
 
+        image_start = self._viewport_start
+        image_duration = self._viewport_duration
+        image_end = image_start + image_duration
+        marker_start = self._marker_start
+        marker_end = self._marker_end
+
+        render_start = min(image_start, marker_start)
+        render_end = max(image_end, marker_end)
+        render_duration = max(render_end - render_start, _MARKER_EPSILON_SECONDS)
+
         width, height = base.size
+        if render_duration > image_duration + _MARKER_EPSILON_SECONDS:
+            image_left_px = max(
+                0,
+                int(round((image_start - render_start) / render_duration * width)),
+            )
+            image_right_px = min(
+                width,
+                int(round((image_end - render_start) / render_duration * width)),
+            )
+            new_image_width = max(1, image_right_px - image_left_px)
+            resized = base.resize(
+                (new_image_width, height), Image.Resampling.LANCZOS
+            )
+            canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+            canvas.paste(resized, (image_left_px, 0))
+        else:
+            canvas = base
+
         start_x = _time_to_pixel_x(
-            self._marker_start,
-            self._viewport_start,
-            self._viewport_duration,
-            width,
+            marker_start, render_start, render_duration, width
         )
         end_x = _time_to_pixel_x(
-            self._marker_end,
-            self._viewport_start,
-            self._viewport_duration,
-            width,
+            marker_end, render_start, render_duration, width
         )
-        draw = ImageDraw.Draw(base)
+        draw = ImageDraw.Draw(canvas)
         for x, color in ((start_x, _START_MARKER_COLOR), (end_x, _END_MARKER_COLOR)):
             x0 = max(0, x - _MARKER_WIDTH_PX // 2)
             x1 = min(width - 1, x + _MARKER_WIDTH_PX // 2)
             draw.rectangle((x0, 0, x1, height - 1), fill=color)
-        return base
+        return canvas
 
     def _apply_image(self) -> None:
         placeholder = self.query_one("#waveform-placeholder", Static)
