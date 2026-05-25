@@ -9,11 +9,6 @@ from textual_image.widget import Image as TerminalImage
 from jipandan.core.ffmpeg import WAVEFORM_PIXEL_SIZE
 from jipandan.core.srt import srt_time_to_seconds
 
-FINETUNE_HELP = (
-    "Space play  [ start −0.1s  ] start +0.1s  o set start/end offsets (+5, -35)  "
-    "{ end −0.1s  } end +0.1s  e export"
-)
-
 _MARKER_EPSILON_SECONDS = 0.001
 _START_MARKER_COLOR = (255, 200, 0, 255)
 _END_MARKER_COLOR = (255, 80, 200, 255)

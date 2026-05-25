@@ -15,7 +15,7 @@ from jipandan.core.ffmpeg import ExportOptions
 from jipandan.tui.screens.export_mode import ExportModeModal
 from jipandan.tui.screens.export_title import ExportTitleModal
 from jipandan.tui.screens.start_offset import StartOffsetModal, TrimOffsets
-from jipandan.tui.widgets.waveform import FINETUNE_HELP, WaveformWidget, format_playback_remaining
+from jipandan.tui.widgets.waveform import WaveformWidget, format_playback_remaining
 
 STATUS_BADGE: dict[ClipStatus, str] = {
     "pending": "  ",
@@ -39,9 +39,30 @@ WAVEFORM_DEBOUNCE_SECONDS = 0.4
 
 
 class ClipListItem(ListItem):
+    DEFAULT_CSS = """
+    ClipListItem > Horizontal {
+        width: 100%;
+        height: 1;
+    }
+    ClipListItem .clip-main {
+        width: 1fr;
+        height: 1;
+    }
+    ClipListItem .clip-duration {
+        width: auto;
+        height: 1;
+        padding-left: 1;
+    }
+    """
+
     def __init__(self, candidate: ClipCandidate) -> None:
         self.candidate_index = candidate.index
-        super().__init__(Label(self.label_text(candidate)))
+        super().__init__(
+            Horizontal(
+                Label(self.label_text(candidate), classes="clip-main"),
+                Label(self.duration_text(candidate), classes="clip-duration"),
+            )
+        )
 
     @staticmethod
     def label_text(candidate: ClipCandidate) -> str:
@@ -51,8 +72,13 @@ class ClipListItem(ListItem):
             title = title[:45] + "..."
         return f"{candidate.index:4d} ({badge}) {title}"
 
+    @staticmethod
+    def duration_text(candidate: ClipCandidate) -> str:
+        return f"[{float(candidate.duration):.0f}s]"
+
     def refresh_candidate(self, candidate: ClipCandidate) -> None:
-        self.query_one(Label).update(self.label_text(candidate))
+        self.query_one(".clip-main", Label).update(self.label_text(candidate))
+        self.query_one(".clip-duration", Label).update(self.duration_text(candidate))
 
 
 class ReviewScreen(Screen):
@@ -83,6 +109,12 @@ class ReviewScreen(Screen):
     }
 
     #filter-bar {
+        height: 1;
+        padding: 0 1;
+        background: $surface;
+    }
+
+    #status-bar {
         height: 1;
         padding: 0 1;
         background: $surface;
@@ -154,16 +186,16 @@ class ReviewScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         yield Static(self._filter_bar_text(include_position=False), id="filter-bar")
+        yield Static(self._status_bar_text(), id="status-bar")
         with Horizontal(id="main-pane"):
             yield ListView(id="clip-list")
             with Vertical(id="detail-panel"):
                 yield Static("", id="playback-status")
                 yield Static("", id="clip-title")
                 yield WaveformWidget(id="waveform")
-                yield Static(FINETUNE_HELP, id="waveform-hints")
                 yield Static("", id="clip-times")
                 yield Static("", id="clip-status")
-        yield Static(self._help_text(), id="help-bar")
+        # yield Static(self._help_text(), id="help-bar")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -184,11 +216,24 @@ class ReviewScreen(Screen):
             f"({FILTER_LABELS[mode]})" if mode == self.filter_mode else FILTER_LABELS[mode]
             for mode in FILTER_ORDER
         )
-        hide_label = "on" if self.hide_skipped else "off"
         return (
-            f"{self.session.audio.name}  Filter: {filters}  "
-            f"Hide skipped: {hide_label}{position}  ({total} clips)"
+            f"{self.session.audio.name}  Filter: {filters}{position}  ({total} clips)"
         )
+
+    def _status_bar_text(self) -> str:
+        hide_label = "on" if self.hide_skipped else "off"
+        return f"Hide skipped: {hide_label}"
+
+    @staticmethod
+    def _clip_status_text(candidate: ClipCandidate) -> str:
+        return (
+            f"Status: {candidate.status}\n"
+            f"Original: {candidate.original_start} → {candidate.original_end}"
+        )
+
+    def _refresh_status_bars(self) -> None:
+        self.query_one("#filter-bar", Static).update(self._filter_bar_text())
+        self.query_one("#status-bar", Static).update(self._status_bar_text())
 
     def _help_text(self) -> str:
         return (
@@ -273,7 +318,7 @@ class ReviewScreen(Screen):
             list_view.index = next_dom
         else:
             list_view.index = None
-        self.query_one("#filter-bar", Static).update(self._filter_bar_text())
+        self._refresh_status_bars()
         if next_candidate_index is not None:
             self._update_detail(next_candidate_index)
         else:
@@ -350,7 +395,7 @@ class ReviewScreen(Screen):
         for candidate in self._visible_candidates():
             self.filtered_indices.append(candidate.index)
             items.append(ClipListItem(candidate))
-        self.query_one("#filter-bar", Static).update(self._filter_bar_text())
+        self._refresh_status_bars()
         if items:
             await list_view.mount(*items)
         if preserve_index is not None and preserve_index in self.filtered_indices:
@@ -459,9 +504,9 @@ class ReviewScreen(Screen):
             f"Duration: {candidate.duration}s"
         )
         self.query_one("#clip-status", Static).update(
-            f"Status: {candidate.status}  Original: {candidate.original_start} → {candidate.original_end}"
+            self._clip_status_text(candidate)
         )
-        self.query_one("#filter-bar", Static).update(self._filter_bar_text())
+        self._refresh_status_bars()
         if debounce_waveform:
             self._schedule_waveform_refresh(index)
             self._refresh_waveform_markers(candidate)
@@ -547,7 +592,9 @@ class ReviewScreen(Screen):
         self._refresh_list_item(candidate)
         if status == "skipped":
             self._skip_undo_stack.append((candidate.index, previous_status))
-        self.query_one("#clip-status", Static).update(f"Status: {candidate.status}")
+        self.query_one("#clip-status", Static).update(
+            self._clip_status_text(candidate)
+        )
         self._persist()
 
     def action_cursor_down(self) -> None:
@@ -625,7 +672,9 @@ class ReviewScreen(Screen):
                     self._refresh_list_item(candidate)
             current = self._current_candidate()
             if current is not None:
-                self.query_one("#clip-status", Static).update(f"Status: {current.status}")
+                self.query_one("#clip-status", Static).update(
+                    self._clip_status_text(current)
+                )
         self.notify(f"Skipped {count} unmarked clips (current and above)")
 
     def action_cycle_filter(self) -> None:
@@ -780,7 +829,7 @@ class ReviewScreen(Screen):
     def _after_export(self, candidate: ClipCandidate, output: Path) -> None:
         self._refresh_list_item(candidate)
         self.query_one("#clip-status", Static).update(
-            f"Status: exported  Saved: {output}"
+            f"{self._clip_status_text(candidate)}\nSaved: {output}"
         )
         self._persist()
         self.notify(f"Exported {output.name}")
