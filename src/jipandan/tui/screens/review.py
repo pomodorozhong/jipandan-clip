@@ -629,6 +629,7 @@ class ReviewScreen(Screen):
         self._persist()
 
     def action_cursor_down(self) -> None:
+        self._stop_playback()
         list_view = self.query_one("#clip-list", ListView)
         if list_view.index is None:
             return
@@ -641,6 +642,7 @@ class ReviewScreen(Screen):
             self._update_detail(item.candidate_id)
 
     def action_cursor_up(self) -> None:
+        self._stop_playback()
         list_view = self.query_one("#clip-list", ListView)
         if list_view.index is None:
             return
