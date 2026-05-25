@@ -434,7 +434,7 @@ class ReviewScreen(Screen):
             candidate = self.session.get_candidate(candidate_index)
             if candidate is None:
                 return
-            self._show_waveform(candidate)
+            self._show_waveform(candidate, keep_previous=True)
 
         self._waveform_debounce_timer = self.set_timer(
             WAVEFORM_DEBOUNCE_SECONDS,
@@ -494,13 +494,15 @@ class ReviewScreen(Screen):
             candidate.end,
         )
 
-    def _show_waveform(self, candidate: ClipCandidate) -> None:
+    def _show_waveform(
+        self, candidate: ClipCandidate, *, keep_previous: bool = False
+    ) -> None:
         cache_key = self._waveform_cache_key(candidate)
         cached = self._waveform_cache.get(cache_key)
         if cached is not None and cached.exists():
             self._present_waveform(cached, candidate.start, candidate.duration)
             return
-        self._generate_waveform(candidate)
+        self._generate_waveform(candidate, keep_previous=keep_previous)
 
     @on(ListView.Selected)
     def on_list_selected(self, event: ListView.Selected) -> None:
@@ -795,17 +797,20 @@ class ReviewScreen(Screen):
             self.app.call_from_thread(self._clear_playback_status)
 
     @work(thread=True, exclusive=True)
-    def _generate_waveform(self, candidate: ClipCandidate) -> None:
+    def _generate_waveform(
+        self, candidate: ClipCandidate, *, keep_previous: bool = False
+    ) -> None:
         cache_key = self._waveform_cache_key(candidate)
         generation = self._waveform_generation + 1
         self._waveform_generation = generation
         tmp_dir = Path("tmp")
         tmp_mp3 = tmp_dir / f"clip_{candidate.index:04d}.mp3"
         tmp_png = tmp_dir / f"clip_{candidate.index:04d}.png"
-        self.app.call_from_thread(
-            self.query_one("#waveform", WaveformWidget).show_placeholder,
-            "Generating waveform…",
-        )
+        if not (keep_previous and self._displayed_waveform_viewport is not None):
+            self.app.call_from_thread(
+                self.query_one("#waveform", WaveformWidget).show_placeholder,
+                "Generating waveform…",
+            )
         try:
             ffmpeg.extract_preview(
                 self.session.audio,
