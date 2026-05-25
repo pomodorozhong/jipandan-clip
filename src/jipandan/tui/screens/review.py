@@ -1,3 +1,4 @@
+import subprocess
 import time
 from pathlib import Path
 
@@ -179,6 +180,7 @@ class ReviewScreen(Screen):
         self._skip_undo_stack: list[tuple[int, ClipStatus]] = []
         self._playback_end: float | None = None
         self._playback_timer: Timer | None = None
+        self._playback_process: subprocess.Popen | None = None
         self._waveform_debounce_timer: Timer | None = None
         self._pending_waveform_index: int | None = None
         self._displayed_waveform_viewport: tuple[str, str] | None = None
@@ -752,20 +754,41 @@ class ReviewScreen(Screen):
         self._persist()
 
     def action_play_preview(self) -> None:
+        if self._is_playing():
+            self._stop_playback()
+            return
         candidate = self._current_candidate()
         if candidate is None:
             return
         self.run_play_preview(candidate)
 
+    def _is_playing(self) -> bool:
+        process = self._playback_process
+        return process is not None and process.poll() is None
+
+    def _stop_playback(self) -> None:
+        process = self._playback_process
+        if process is None:
+            return
+        if process.poll() is None:
+            process.terminate()
+
     @work(thread=True, exclusive=True)
     def run_play_preview(self, candidate: ClipCandidate) -> None:
         duration = float(candidate.duration)
         self.app.call_from_thread(self._start_playback_status, duration)
+        process: subprocess.Popen | None = None
         try:
-            ffmpeg.play_preview(self.session.audio, candidate.start, candidate.duration)
+            process = ffmpeg.spawn_play_preview(
+                self.session.audio, candidate.start, candidate.duration
+            )
+            self._playback_process = process
+            process.wait()
         except Exception as exc:
             self.app.call_from_thread(self.notify, f"mpv failed: {exc}", severity="error")
         finally:
+            if self._playback_process is process:
+                self._playback_process = None
             self.app.call_from_thread(self._clear_playback_status)
 
     def action_export_clip(self) -> None:
@@ -838,11 +861,16 @@ class ReviewScreen(Screen):
     @work(thread=True, exclusive=True)
     def run_play_exported(self, output: Path, duration: float) -> None:
         self.app.call_from_thread(self._start_playback_status, duration)
+        process: subprocess.Popen | None = None
         try:
-            ffmpeg.play_file(output)
+            process = ffmpeg.spawn_play_file(output)
+            self._playback_process = process
+            process.wait()
         except Exception as exc:
             self.app.call_from_thread(self.notify, f"mpv failed: {exc}", severity="error")
         finally:
+            if self._playback_process is process:
+                self._playback_process = None
             self.app.call_from_thread(self._clear_playback_status)
 
     @work(thread=True, exclusive=True)

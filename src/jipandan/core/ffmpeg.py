@@ -228,3 +228,21 @@ def play_preview(input_audio: Path, start: str, duration: str) -> None:
 
 def play_file(path: Path) -> None:
     _run(["mpv", *MPV_BASE, str(path)])
+
+
+def spawn_play_preview(
+    input_audio: Path, start: str, duration: str
+) -> subprocess.Popen:
+    return subprocess.Popen(
+        [
+            "mpv",
+            *MPV_BASE,
+            f"--start={start}",
+            f"--length={duration}",
+            str(input_audio),
+        ]
+    )
+
+
+def spawn_play_file(path: Path) -> subprocess.Popen:
+    return subprocess.Popen(["mpv", *MPV_BASE, str(path)])
