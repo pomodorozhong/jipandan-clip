@@ -57,7 +57,7 @@ class ClipListItem(ListItem):
     """
 
     def __init__(self, candidate: ClipCandidate) -> None:
-        self.candidate_index = candidate.index
+        self.candidate_id = candidate.clip_id
         super().__init__(
             Horizontal(
                 Label(self.label_text(candidate), classes="clip-main"),
@@ -71,7 +71,7 @@ class ClipListItem(ListItem):
         title = candidate.title
         if len(title) > 48:
             title = title[:45] + "..."
-        return f"{candidate.index:4d} ({badge}) {title}"
+        return f"{candidate.clip_id:>6s} ({badge}) {title}"
 
     @staticmethod
     def duration_text(candidate: ClipCandidate) -> str:
@@ -90,6 +90,7 @@ class ReviewScreen(Screen):
         Binding("2", "mark_group2", "Group 2"),
         Binding("x", "mark_skipped", "Skip"),
         Binding("u", "undo_skip", "Undo skip"),
+        Binding("d", "duplicate_clip", "Duplicate"),
         Binding("ctrl+shift+x", "bulk_skip_above", "Skip above"),
         Binding("space", "play_preview", "Play"),
         Binding("[", "nudge_start_down", "Start -"),
@@ -174,15 +175,15 @@ class ReviewScreen(Screen):
         self.session = session
         self.filter_mode = "all"
         self.hide_skipped = True
-        self.filtered_indices: list[int] = []
+        self.filtered_clip_ids: list[str] = []
         self._waveform_generation = 0
-        self._waveform_cache: dict[tuple[int, str, str], Path] = {}
-        self._skip_undo_stack: list[tuple[int, ClipStatus]] = []
+        self._waveform_cache: dict[tuple[str, str, str], Path] = {}
+        self._skip_undo_stack: list[tuple[str, ClipStatus]] = []
         self._playback_end: float | None = None
         self._playback_timer: Timer | None = None
         self._playback_process: subprocess.Popen | None = None
         self._waveform_debounce_timer: Timer | None = None
-        self._pending_waveform_index: int | None = None
+        self._pending_waveform_id: str | None = None
         self._displayed_waveform_viewport: tuple[str, str] | None = None
 
     def compose(self) -> ComposeResult:
@@ -210,8 +211,8 @@ class ReviewScreen(Screen):
             current = self._current_candidate()
             if current is not None:
                 try:
-                    pos = self.filtered_indices.index(current.index) + 1
-                    position = f"  {pos}/{len(self.filtered_indices)}"
+                    pos = self.filtered_clip_ids.index(current.clip_id) + 1
+                    position = f"  {pos}/{len(self.filtered_clip_ids)}"
                 except ValueError:
                     pass
         filters = " | ".join(
@@ -262,11 +263,11 @@ class ReviewScreen(Screen):
             candidates = [candidate for candidate in candidates if candidate.status != "skipped"]
         return candidates
 
-    def _candidate_index_after_removing(self, visible_index: int) -> int | None:
-        if visible_index + 1 < len(self.filtered_indices):
-            return self.filtered_indices[visible_index + 1]
+    def _clip_id_after_removing(self, visible_index: int) -> str | None:
+        if visible_index + 1 < len(self.filtered_clip_ids):
+            return self.filtered_clip_ids[visible_index + 1]
         if visible_index > 0:
-            return self.filtered_indices[visible_index - 1]
+            return self.filtered_clip_ids[visible_index - 1]
         return None
 
     @staticmethod
@@ -298,9 +299,9 @@ class ReviewScreen(Screen):
                 return index
         return None
 
-    def _sync_filtered_indices(self, list_view: ListView) -> None:
-        self.filtered_indices = [
-            item.candidate_index
+    def _sync_filtered_clip_ids(self, list_view: ListView) -> None:
+        self.filtered_clip_ids = [
+            item.candidate_id
             for item in list_view.children
             if self._is_visible_item(item)
         ]
@@ -309,7 +310,7 @@ class ReviewScreen(Screen):
         self,
         list_view: ListView,
         hidden_dom_index: int,
-        next_candidate_index: int | None,
+        next_clip_id: str | None,
     ) -> None:
         next_dom = self._next_visible_dom_index(list_view, hidden_dom_index)
         if next_dom is None:
@@ -321,95 +322,95 @@ class ReviewScreen(Screen):
         else:
             list_view.index = None
         self._refresh_status_bars()
-        if next_candidate_index is not None:
-            self._update_detail(next_candidate_index)
+        if next_clip_id is not None:
+            self._update_detail(next_clip_id)
         else:
             self._clear_detail()
 
-    def _find_list_item(self, candidate_index: int) -> ClipListItem | None:
+    def _find_list_item(self, clip_id: str) -> ClipListItem | None:
         list_view = self.query_one("#clip-list", ListView)
         for item in list_view.children:
-            if isinstance(item, ClipListItem) and item.candidate_index == candidate_index:
+            if isinstance(item, ClipListItem) and item.candidate_id == clip_id:
                 return item
         return None
 
     def _restore_skipped(
         self,
-        candidate_index: int,
+        clip_id: str,
         previous_status: ClipStatus,
     ) -> None:
-        candidate = self.session.get_candidate(candidate_index)
+        candidate = self.session.get_candidate(clip_id)
         if candidate is None:
             return
         candidate.status = previous_status
         list_view = self.query_one("#clip-list", ListView)
-        item = self._find_list_item(candidate_index)
+        item = self._find_list_item(clip_id)
         if item is None:
             return
         item.remove_class(SKIPPED_HIDDEN_CLASS)
         item.refresh_candidate(candidate)
-        self._sync_filtered_indices(list_view)
+        self._sync_filtered_clip_ids(list_view)
         list_view.index = list_view.children.index(item)
-        self._update_detail(candidate_index)
+        self._update_detail(clip_id)
 
     def _hide_skipped_at(
         self,
         list_view: ListView,
         dom_index: int,
-        next_candidate_index: int | None,
+        next_clip_id: str | None,
     ) -> None:
         item = list_view.children[dom_index]
         if isinstance(item, ClipListItem):
             item.add_class(SKIPPED_HIDDEN_CLASS)
         visible_index = self._visible_position(list_view, dom_index)
-        del self.filtered_indices[visible_index]
-        self._select_after_hide(list_view, dom_index, next_candidate_index)
+        del self.filtered_clip_ids[visible_index]
+        self._select_after_hide(list_view, dom_index, next_clip_id)
 
     def _hide_skipped_bulk(
         self,
         list_view: ListView,
-        candidate_indices: list[int],
-        next_candidate_index: int | None,
+        clip_ids: list[str],
+        next_clip_id: str | None,
     ) -> None:
-        candidate_set = set(candidate_indices)
+        clip_id_set = set(clip_ids)
         hidden_dom_index = list_view.index or 0
         for item in list_view.children:
             if not isinstance(item, ClipListItem):
                 continue
-            if item.candidate_index not in candidate_set:
+            if item.candidate_id not in clip_id_set:
                 continue
-            candidate = self.session.get_candidate(item.candidate_index)
+            candidate = self.session.get_candidate(item.candidate_id)
             if candidate is not None and candidate.status == "skipped":
                 item.add_class(SKIPPED_HIDDEN_CLASS)
-        self._sync_filtered_indices(list_view)
-        self._select_after_hide(list_view, hidden_dom_index, next_candidate_index)
+        self._sync_filtered_clip_ids(list_view)
+        self._select_after_hide(list_view, hidden_dom_index, next_clip_id)
 
     @work(exclusive=True)
     async def _rebuild_list(
         self,
         select_first: bool = False,
-        preserve_index: int | None = None,
+        preserve_clip_id: str | None = None,
     ) -> None:
         list_view = self.query_one("#clip-list", ListView)
         await list_view.clear()
-        self.filtered_indices = []
+        self.filtered_clip_ids = []
         items: list[ClipListItem] = []
         for candidate in self._visible_candidates():
-            self.filtered_indices.append(candidate.index)
+            self.filtered_clip_ids.append(candidate.clip_id)
             items.append(ClipListItem(candidate))
         self._refresh_status_bars()
         if items:
             await list_view.mount(*items)
-        if preserve_index is not None and preserve_index in self.filtered_indices:
-            list_view.index = self.filtered_indices.index(preserve_index)
-            self._update_detail(preserve_index)
-        elif preserve_index is not None and self.filtered_indices:
+        if preserve_clip_id is not None and preserve_clip_id in self.filtered_clip_ids:
+            list_view.index = self.filtered_clip_ids.index(preserve_clip_id)
+            self._update_detail(preserve_clip_id)
+        elif preserve_clip_id is not None and self.filtered_clip_ids:
             list_view.index = 0
-            self._update_detail(self.filtered_indices[0])
-        elif select_first and self.filtered_indices:
+            self._update_detail(self.filtered_clip_ids[0])
+        elif select_first and self.filtered_clip_ids:
             list_view.index = 0
-            self._update_detail(self.filtered_indices[0])
-        elif not self.filtered_indices:
+            self._update_detail(self.filtered_clip_ids[0])
+        elif not self.filtered_clip_ids:
             list_view.index = None
             self._clear_detail()
 
@@ -429,7 +430,7 @@ class ReviewScreen(Screen):
         item = self._highlighted_item()
         if item is None:
             return None
-        return self.session.get_candidate(item.candidate_index)
+        return self.session.get_candidate(item.candidate_id)
 
     def _clear_playback_status(self) -> None:
         self._playback_end = None
@@ -467,18 +468,18 @@ class ReviewScreen(Screen):
         if self._waveform_debounce_timer is not None:
             self._waveform_debounce_timer.stop()
             self._waveform_debounce_timer = None
-        self._pending_waveform_index = None
+        self._pending_waveform_id = None
 
-    def _schedule_waveform_refresh(self, candidate_index: int) -> None:
+    def _schedule_waveform_refresh(self, clip_id: str) -> None:
         self._waveform_generation += 1
         self._cancel_waveform_debounce()
-        self._pending_waveform_index = candidate_index
+        self._pending_waveform_id = clip_id
 
         def refresh_waveform() -> None:
             self._waveform_debounce_timer = None
-            if self._pending_waveform_index != candidate_index:
+            if self._pending_waveform_id != clip_id:
                 return
-            candidate = self.session.get_candidate(candidate_index)
+            candidate = self.session.get_candidate(clip_id)
             if candidate is None:
                 return
             self._show_waveform(candidate, keep_previous=True)
@@ -489,8 +490,8 @@ class ReviewScreen(Screen):
             name="waveform-debounce",
         )
 
-    def _update_detail(self, index: int, *, debounce_waveform: bool = False) -> None:
-        candidate = self.session.get_candidate(index)
+    def _update_detail(self, clip_id: str, *, debounce_waveform: bool = False) -> None:
+        candidate = self.session.get_candidate(clip_id)
         if candidate is None:
             self._clear_detail()
             return
@@ -498,7 +499,7 @@ class ReviewScreen(Screen):
         start_offset = candidate.start_offset_seconds()
         end_offset = candidate.end_offset_seconds()
         self.query_one("#clip-title", Static).update(
-            f"#{candidate.index}  {candidate.title}"
+            f"#{candidate.clip_id}  {candidate.title}"
         )
         self.query_one("#clip-times", Static).update(
             f"Start: {candidate.start}  ({start_offset:+.3f}s from original)\n"
@@ -510,15 +511,15 @@ class ReviewScreen(Screen):
         )
         self._refresh_status_bars()
         if debounce_waveform:
-            self._schedule_waveform_refresh(index)
+            self._schedule_waveform_refresh(clip_id)
             self._refresh_waveform_markers(candidate)
         else:
             self._cancel_waveform_debounce()
             self._show_waveform(candidate)
 
     @staticmethod
-    def _waveform_cache_key(candidate: ClipCandidate) -> tuple[int, str, str]:
-        return (candidate.index, candidate.start, candidate.duration)
+    def _waveform_cache_key(candidate: ClipCandidate) -> tuple[str, str, str]:
+        return (candidate.clip_id, candidate.start, candidate.duration)
 
     def _present_waveform(
         self,
@@ -555,12 +556,12 @@ class ReviewScreen(Screen):
     def on_list_selected(self, event: ListView.Selected) -> None:
         item = event.item
         if isinstance(item, ClipListItem):
-            self._update_detail(item.candidate_index)
+            self._update_detail(item.candidate_id)
 
     def _refresh_list_item(self, candidate: ClipCandidate) -> None:
         list_view = self.query_one("#clip-list", ListView)
         for item in list_view.children:
-            if isinstance(item, ClipListItem) and item.candidate_index == candidate.index:
+            if isinstance(item, ClipListItem) and item.candidate_id == candidate.clip_id:
                 item.refresh_candidate(candidate)
                 break
 
@@ -579,21 +580,21 @@ class ReviewScreen(Screen):
             else None
         )
         preserve = (
-            self._candidate_index_after_removing(visible_index)
+            self._clip_id_after_removing(visible_index)
             if visible_index is not None
             else None
         )
         previous_status = candidate.status
         candidate.status = status
         if self.hide_skipped and status == "skipped":
-            self._skip_undo_stack.append((candidate.index, previous_status))
+            self._skip_undo_stack.append((candidate.clip_id, previous_status))
             self._persist()
             if dom_index is not None:
                 self._hide_skipped_at(list_view, dom_index, preserve)
             return
         self._refresh_list_item(candidate)
         if status == "skipped":
-            self._skip_undo_stack.append((candidate.index, previous_status))
+            self._skip_undo_stack.append((candidate.clip_id, previous_status))
         self.query_one("#clip-status", Static).update(
             self._clip_status_text(candidate)
         )
@@ -609,7 +610,7 @@ class ReviewScreen(Screen):
         list_view.index = next_dom
         item = list_view.children[next_dom]
         if isinstance(item, ClipListItem):
-            self._update_detail(item.candidate_index)
+            self._update_detail(item.candidate_id)
 
     def action_cursor_up(self) -> None:
         list_view = self.query_one("#clip-list", ListView)
@@ -623,7 +624,7 @@ class ReviewScreen(Screen):
         list_view.index = next_dom
         item = list_view.children[next_dom]
         if isinstance(item, ClipListItem):
-            self._update_detail(item.candidate_index)
+            self._update_detail(item.candidate_id)
 
     def action_mark_group1(self) -> None:
         self._set_status("group1")
@@ -638,38 +639,54 @@ class ReviewScreen(Screen):
         if not self._skip_undo_stack:
             self.notify("Nothing to undo")
             return
-        candidate_index, previous_status = self._skip_undo_stack.pop()
-        candidate = self.session.get_candidate(candidate_index)
+        clip_id, previous_status = self._skip_undo_stack.pop()
+        candidate = self.session.get_candidate(clip_id)
         if candidate is None or candidate.status != "skipped":
             self.notify("Nothing to undo")
             return
-        self._restore_skipped(candidate_index, previous_status)
+        self._restore_skipped(clip_id, previous_status)
         self._persist()
-        self.notify(f"Restored #{candidate_index}")
+        self.notify(f"Restored #{clip_id}")
+
+    def action_duplicate_clip(self) -> None:
+        current = self._current_candidate()
+        if current is None:
+            return
+        source_clip_id = current.clip_id
+        duplicate = self.session.duplicate_candidate(source_clip_id)
+        if duplicate is None:
+            return
+        self._persist()
+        current_visible = self._current_candidate()
+        preserve = (
+            current_visible.clip_id if current_visible is not None else duplicate.clip_id
+        )
+        self._rebuild_list(preserve_clip_id=preserve)
+        self.notify(f"Duplicated #{source_clip_id} → #{duplicate.clip_id}")
 
     def action_bulk_skip_above(self) -> None:
         list_view = self.query_one("#clip-list", ListView)
-        if list_view.index is None or not self.filtered_indices:
+        if list_view.index is None or not self.filtered_clip_ids:
             return
         dom_index = list_view.index
         visible_index = self._visible_position(list_view, dom_index)
-        preserve = self._candidate_index_after_removing(visible_index)
-        indices_to_skip = self.filtered_indices[: visible_index + 1]
+        preserve = self._clip_id_after_removing(visible_index)
+        clip_ids_to_skip = self.filtered_clip_ids[: visible_index + 1]
         restored_before_skip = [
-            (index, "pending")
-            for index in indices_to_skip
-            if (candidate := self.session.get_candidate(index)) is not None
+            (clip_id, "pending")
+            for clip_id in clip_ids_to_skip
+            if (candidate := self.session.get_candidate(clip_id)) is not None
             and candidate.status == "pending"
         ]
-        count = self.session.bulk_skip(indices_to_skip)
+        count = self.session.bulk_skip(clip_ids_to_skip)
         for entry in restored_before_skip:
             self._skip_undo_stack.append(entry)
         self._persist()
         if self.hide_skipped and count > 0:
-            self._hide_skipped_bulk(list_view, indices_to_skip, preserve)
+            self._hide_skipped_bulk(list_view, clip_ids_to_skip, preserve)
         else:
-            for index in indices_to_skip:
-                candidate = self.session.get_candidate(index)
+            for clip_id in clip_ids_to_skip:
+                candidate = self.session.get_candidate(clip_id)
                 if candidate is not None:
                     self._refresh_list_item(candidate)
             current = self._current_candidate()
@@ -687,8 +704,8 @@ class ReviewScreen(Screen):
     def action_toggle_hide_skipped(self) -> None:
         self.hide_skipped = not self.hide_skipped
         current = self._current_candidate()
-        preserve = current.index if current is not None else None
-        self._rebuild_list(preserve_index=preserve)
+        preserve = current.clip_id if current is not None else None
+        self._rebuild_list(preserve_clip_id=preserve)
         state = "hidden" if self.hide_skipped else "shown"
         self.notify(f"Skipped clips {state}")
 
@@ -706,26 +723,27 @@ class ReviewScreen(Screen):
         candidate = self._current_candidate()
         if candidate is None:
             return
+        clip_id = candidate.clip_id
         self.app.push_screen(
             StartOffsetModal(
                 candidate.start_offset_seconds(),
                 candidate.end_offset_seconds(),
             ),
-            lambda offsets: self._after_trim_offsets(candidate.index, offsets),
+            lambda offsets: self._after_trim_offsets(clip_id, offsets),
         )
 
     def _after_trim_offsets(
-        self, candidate_index: int, offsets: TrimOffsets | None
+        self, clip_id: str, offsets: TrimOffsets | None
     ) -> None:
         if offsets is None:
             return
-        candidate = self.session.get_candidate(candidate_index)
+        candidate = self.session.get_candidate(clip_id)
         if candidate is None:
             return
         self.session.set_trim_offsets(
-            candidate_index, offsets.start, offsets.end
+            clip_id, offsets.start, offsets.end
         )
-        self._update_detail(candidate_index, debounce_waveform=True)
+        self._update_detail(clip_id, debounce_waveform=True)
         self._persist()
         self.notify(
             f"Offsets set: start {offsets.start:+.3f}s, end {offsets.end:+.3f}s from original"
@@ -741,16 +759,16 @@ class ReviewScreen(Screen):
         candidate = self._current_candidate()
         if candidate is None:
             return
-        self.session.nudge_start(candidate.index, delta)
-        self._update_detail(candidate.index, debounce_waveform=True)
+        self.session.nudge_start(candidate.clip_id, delta)
+        self._update_detail(candidate.clip_id, debounce_waveform=True)
         self._persist()
 
     def _nudge_end(self, delta: float) -> None:
         candidate = self._current_candidate()
         if candidate is None:
             return
-        self.session.nudge_end(candidate.index, delta)
-        self._update_detail(candidate.index, debounce_waveform=True)
+        self.session.nudge_end(candidate.clip_id, delta)
+        self._update_detail(candidate.clip_id, debounce_waveform=True)
         self._persist()
 
     def action_play_preview(self) -> None:
@@ -795,38 +813,39 @@ class ReviewScreen(Screen):
         candidate = self._current_candidate()
         if candidate is None:
             return
+        clip_id = candidate.clip_id
         self.app.push_screen(
             ExportModeModal(),
-            lambda options: self._after_export_mode(candidate.index, options),
+            lambda options: self._after_export_mode(clip_id, options),
         )
 
     def _after_export_mode(
-        self, candidate_index: int, options: ExportOptions | None
+        self, clip_id: str, options: ExportOptions | None
     ) -> None:
         if options is None:
             return
-        candidate = self.session.get_candidate(candidate_index)
+        candidate = self.session.get_candidate(clip_id)
         if candidate is None:
             return
         self.app.push_screen(
             ExportTitleModal(candidate.title),
-            lambda title: self._start_export(candidate_index, options, title),
+            lambda title: self._start_export(clip_id, options, title),
         )
 
     def _start_export(
         self,
-        candidate_index: int,
+        clip_id: str,
         export_options: ExportOptions,
         title: str | None,
     ) -> None:
         if title is None:
             return
-        candidate = self.session.get_candidate(candidate_index)
+        candidate = self.session.get_candidate(clip_id)
         if candidate is None:
             return
         candidate.title = title
         self._refresh_list_item(candidate)
-        self._update_detail(candidate.index)
+        self._update_detail(candidate.clip_id)
         self.run_export(candidate, title, export_options)
 
     @work(thread=True, exclusive=True)
@@ -881,8 +900,8 @@ class ReviewScreen(Screen):
         generation = self._waveform_generation + 1
         self._waveform_generation = generation
         tmp_dir = Path("tmp")
-        tmp_mp3 = tmp_dir / f"clip_{candidate.index:04d}.mp3"
-        tmp_png = tmp_dir / f"clip_{candidate.index:04d}.png"
+        tmp_mp3 = tmp_dir / f"clip_{candidate.filename_token}.mp3"
+        tmp_png = tmp_dir / f"clip_{candidate.filename_token}.png"
         if not (keep_previous and self._displayed_waveform_viewport is not None):
             self.app.call_from_thread(
                 self.query_one("#waveform", WaveformWidget).show_placeholder,

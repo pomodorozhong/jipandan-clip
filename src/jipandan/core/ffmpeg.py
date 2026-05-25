@@ -131,8 +131,8 @@ def _safe_filename(value: str) -> str:
     return cleaned.strip(". ") or "untitled"
 
 
-def export_basename(input_audio: Path, index: int, title: str) -> str:
-    return f"{_safe_filename(input_audio.stem)}_{index:04d}_{_safe_filename(title)}"
+def export_basename(input_audio: Path, clip_token: str, title: str) -> str:
+    return f"{_safe_filename(input_audio.stem)}_{clip_token}_{_safe_filename(title)}"
 
 
 def _audio_filter_for_options(options: ExportOptions) -> str | None:
@@ -168,7 +168,7 @@ def export_clip(
     clip_dir.mkdir(parents=True, exist_ok=True)
 
     title = export_title if export_title is not None else candidate.title
-    basename = export_basename(input_audio, candidate.index, title)
+    basename = export_basename(input_audio, candidate.filename_token, title)
     tmp_clip = tmp_root / f"{basename}.mp3"
     final_clip = clip_dir / f"{basename}.mp3"
 

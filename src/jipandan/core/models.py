@@ -24,6 +24,20 @@ class ClipCandidate:
     start: str
     duration: str
     status: ClipStatus = "pending"
+    # 0 for the original SRT-derived clip, 2+ for duplicates ("144-2", "144-3", ...).
+    suffix: int = 0
+
+    @property
+    def clip_id(self) -> str:
+        if self.suffix == 0:
+            return str(self.index)
+        return f"{self.index}-{self.suffix}"
+
+    @property
+    def filename_token(self) -> str:
+        if self.suffix == 0:
+            return f"{self.index:04d}"
+        return f"{self.index:04d}-{self.suffix}"
 
     @property
     def end(self) -> str:
@@ -110,55 +124,120 @@ class Session:
         )
 
     def merge_with_srt(self) -> list[str]:
-        """Refresh candidates from SRT, preserving status and finetuned times where possible."""
+        """Refresh candidates from SRT, preserving status, finetuned times, and duplicates."""
         warnings: list[str] = []
         fresh = Session.from_srt(self.audio, self.srt, self.clip_dir)
-        existing = {candidate.index: candidate for candidate in self.candidates}
+        existing_by_index: dict[int, list[ClipCandidate]] = {}
+        for candidate in self.candidates:
+            existing_by_index.setdefault(candidate.index, []).append(candidate)
         merged: list[ClipCandidate] = []
 
-        for candidate in fresh.candidates:
-            prior = existing.get(candidate.index)
-            if prior is None:
-                merged.append(candidate)
+        for fresh_candidate in fresh.candidates:
+            group = existing_by_index.pop(fresh_candidate.index, None)
+            if group is None:
+                merged.append(fresh_candidate)
                 continue
-            merged.append(
-                ClipCandidate(
-                    index=candidate.index,
-                    title=candidate.title,
-                    original_start=candidate.original_start,
-                    original_end=candidate.original_end,
-                    start=prior.start,
-                    duration=prior.duration,
-                    status=prior.status,
-                )
-            )
+            for prior in group:
+                if prior.suffix == 0:
+                    merged.append(
+                        ClipCandidate(
+                            index=fresh_candidate.index,
+                            title=fresh_candidate.title,
+                            original_start=fresh_candidate.original_start,
+                            original_end=fresh_candidate.original_end,
+                            start=prior.start,
+                            duration=prior.duration,
+                            status=prior.status,
+                            suffix=0,
+                        )
+                    )
+                else:
+                    merged.append(
+                        ClipCandidate(
+                            index=fresh_candidate.index,
+                            title=prior.title,
+                            original_start=fresh_candidate.original_start,
+                            original_end=fresh_candidate.original_end,
+                            start=prior.start,
+                            duration=prior.duration,
+                            status=prior.status,
+                            suffix=prior.suffix,
+                        )
+                    )
 
         fresh_indices = {candidate.index for candidate in fresh.candidates}
-        removed = [index for index in existing if index not in fresh_indices]
-        if removed:
-            warnings.append(f"Removed {len(removed)} candidates no longer in SRT.")
+        removed_indices = [index for index in existing_by_index if index not in fresh_indices]
+        if removed_indices:
+            warnings.append(f"Removed {len(removed_indices)} candidates no longer in SRT.")
 
-        added = [candidate.index for candidate in fresh.candidates if candidate.index not in existing]
+        added = [
+            candidate.index
+            for candidate in fresh.candidates
+            if candidate.index not in {c.index for c in self.candidates}
+        ]
         if added:
             warnings.append(f"Added {len(added)} new candidates from SRT.")
 
         self.candidates = merged
         return warnings
 
-    def get_candidate(self, index: int) -> ClipCandidate | None:
+    def get_candidate(self, clip_id: str) -> ClipCandidate | None:
         for candidate in self.candidates:
-            if candidate.index == index:
+            if candidate.clip_id == clip_id:
                 return candidate
         return None
 
+    def _find_position(self, clip_id: str) -> int | None:
+        for position, candidate in enumerate(self.candidates):
+            if candidate.clip_id == clip_id:
+                return position
+        return None
+
+    def duplicate_candidate(self, clip_id: str) -> ClipCandidate | None:
+        """Duplicate the clip identified by clip_id, inserted immediately after it."""
+        position = self._find_position(clip_id)
+        if position is None:
+            return None
+        source = self.candidates[position]
+        existing_suffixes = {
+            candidate.suffix
+            for candidate in self.candidates
+            if candidate.index == source.index
+        }
+        new_suffix = 2
+        while new_suffix in existing_suffixes:
+            new_suffix += 1
+        # The duplicate has no exported file yet; demote "exported" to "pending".
+        duplicate_status: ClipStatus = (
+            "pending" if source.status == "exported" else source.status
+        )
+        duplicate = ClipCandidate(
+            index=source.index,
+            title=source.title,
+            original_start=source.original_start,
+            original_end=source.original_end,
+            start=source.start,
+            duration=source.duration,
+            status=duplicate_status,
+            suffix=new_suffix,
+        )
+        last_sibling_position = position
+        for offset in range(position + 1, len(self.candidates)):
+            if self.candidates[offset].index == source.index:
+                last_sibling_position = offset
+            else:
+                break
+        self.candidates.insert(last_sibling_position + 1, duplicate)
+        return duplicate
+
     def set_trim_offsets(
         self,
-        index: int,
+        clip_id: str,
         start_offset_seconds: float,
         end_offset_seconds: float,
     ) -> None:
         """Set clip bounds from original SRT times plus signed offsets in seconds."""
-        candidate = self.get_candidate(index)
+        candidate = self.get_candidate(clip_id)
         if candidate is None:
             return
         original_start = srt_time_to_seconds(candidate.original_start.replace(".", ","))
@@ -170,8 +249,8 @@ class Session:
         candidate.start = seconds_to_ffmpeg_timestamp(new_start)
         candidate.duration = f"{max(0.0, new_end - new_start):.3f}"
 
-    def nudge_start(self, index: int, delta_seconds: float) -> None:
-        candidate = self.get_candidate(index)
+    def nudge_start(self, clip_id: str, delta_seconds: float) -> None:
+        candidate = self.get_candidate(clip_id)
         if candidate is None:
             return
         start_seconds = srt_time_to_seconds(candidate.start.replace(".", ","))
@@ -180,19 +259,19 @@ class Session:
         candidate.start = seconds_to_ffmpeg_timestamp(nudged_start)
         candidate.duration = f"{max(0.0, end_seconds - nudged_start):.3f}"
 
-    def nudge_end(self, index: int, delta_seconds: float) -> None:
-        candidate = self.get_candidate(index)
+    def nudge_end(self, clip_id: str, delta_seconds: float) -> None:
+        candidate = self.get_candidate(clip_id)
         if candidate is None:
             return
         duration = max(0.0, float(candidate.duration) + delta_seconds)
         candidate.duration = f"{duration:.3f}"
 
-    def bulk_skip(self, indices: list[int]) -> int:
-        """Mark pending candidates in indices as skipped. Returns count changed."""
-        index_set = set(indices)
+    def bulk_skip(self, clip_ids: list[str]) -> int:
+        """Mark pending candidates in clip_ids as skipped. Returns count changed."""
+        clip_id_set = set(clip_ids)
         count = 0
         for candidate in self.candidates:
-            if candidate.index not in index_set:
+            if candidate.clip_id not in clip_id_set:
                 continue
             if candidate.status != "pending":
                 continue
