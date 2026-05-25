@@ -14,6 +14,7 @@ from jipandan.core.models import ClipCandidate, ClipStatus, Session
 from jipandan.core.ffmpeg import ExportOptions
 from jipandan.tui.screens.export_mode import ExportModeModal
 from jipandan.tui.screens.export_title import ExportTitleModal
+from jipandan.tui.screens.start_offset import StartOffsetModal, TrimOffsets
 from jipandan.tui.widgets.waveform import FINETUNE_HELP, WaveformWidget, format_playback_remaining
 
 STATUS_BADGE: dict[ClipStatus, str] = {
@@ -66,6 +67,7 @@ class ReviewScreen(Screen):
         Binding("space", "play_preview", "Play"),
         Binding("[", "nudge_start_down", "Start -"),
         Binding("]", "nudge_start_up", "Start +"),
+        Binding("o", "set_trim_offsets", "Trim offsets"),
         Binding("{", "nudge_end_down", "End -"),
         Binding("}", "nudge_end_up", "End +"),
         Binding("e", "export_clip", "Export"),
@@ -446,14 +448,15 @@ class ReviewScreen(Screen):
             self._clear_detail()
             return
 
-        offset = candidate.start_offset_seconds()
-        offset_text = f"{offset:+.3f}s from original"
+        start_offset = candidate.start_offset_seconds()
+        end_offset = candidate.end_offset_seconds()
         self.query_one("#clip-title", Static).update(
             f"#{candidate.index}  {candidate.title}"
         )
         self.query_one("#clip-times", Static).update(
-            f"Start: {candidate.start}  ({offset_text})\n"
-            f"End: {candidate.end}  Duration: {candidate.duration}s"
+            f"Start: {candidate.start}  ({start_offset:+.3f}s from original)\n"
+            f"End: {candidate.end}  ({end_offset:+.3f}s from original)  "
+            f"Duration: {candidate.duration}s"
         )
         self.query_one("#clip-status", Static).update(
             f"Status: {candidate.status}  Original: {candidate.original_start} → {candidate.original_end}"
@@ -645,6 +648,35 @@ class ReviewScreen(Screen):
 
     def action_nudge_start_up(self) -> None:
         self._nudge_start(0.1)
+
+    def action_set_trim_offsets(self) -> None:
+        candidate = self._current_candidate()
+        if candidate is None:
+            return
+        self.app.push_screen(
+            StartOffsetModal(
+                candidate.start_offset_seconds(),
+                candidate.end_offset_seconds(),
+            ),
+            lambda offsets: self._after_trim_offsets(candidate.index, offsets),
+        )
+
+    def _after_trim_offsets(
+        self, candidate_index: int, offsets: TrimOffsets | None
+    ) -> None:
+        if offsets is None:
+            return
+        candidate = self.session.get_candidate(candidate_index)
+        if candidate is None:
+            return
+        self.session.set_trim_offsets(
+            candidate_index, offsets.start, offsets.end
+        )
+        self._update_detail(candidate_index, debounce_waveform=True)
+        self._persist()
+        self.notify(
+            f"Offsets set: start {offsets.start:+.3f}s, end {offsets.end:+.3f}s from original"
+        )
 
     def action_nudge_end_down(self) -> None:
         self._nudge_end(-0.1)

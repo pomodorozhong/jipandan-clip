@@ -10,7 +10,7 @@ from jipandan.core.ffmpeg import WAVEFORM_PIXEL_SIZE
 from jipandan.core.srt import srt_time_to_seconds
 
 FINETUNE_HELP = (
-    "Space play  [ start −0.1s  ] start +0.1s  "
+    "Space play  [ start −0.1s  ] start +0.1s  o set start/end offsets (+5, -35)  "
     "{ end −0.1s  } end +0.1s  e export"
 )
 

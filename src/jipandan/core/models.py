@@ -35,6 +35,11 @@ class ClipCandidate:
             self.original_start.replace(".", ",")
         )
 
+    def end_offset_seconds(self) -> float:
+        return srt_time_to_seconds(self.end.replace(".", ",")) - srt_time_to_seconds(
+            self.original_end.replace(".", ",")
+        )
+
 
 @dataclass
 class Session:
@@ -145,6 +150,25 @@ class Session:
             if candidate.index == index:
                 return candidate
         return None
+
+    def set_trim_offsets(
+        self,
+        index: int,
+        start_offset_seconds: float,
+        end_offset_seconds: float,
+    ) -> None:
+        """Set clip bounds from original SRT times plus signed offsets in seconds."""
+        candidate = self.get_candidate(index)
+        if candidate is None:
+            return
+        original_start = srt_time_to_seconds(candidate.original_start.replace(".", ","))
+        original_end = srt_time_to_seconds(candidate.original_end.replace(".", ","))
+        new_start = max(0.0, original_start + start_offset_seconds)
+        new_end = max(0.0, original_end + end_offset_seconds)
+        if new_start > new_end:
+            new_start = new_end
+        candidate.start = seconds_to_ffmpeg_timestamp(new_start)
+        candidate.duration = f"{max(0.0, new_end - new_start):.3f}"
 
     def nudge_start(self, index: int, delta_seconds: float) -> None:
         candidate = self.get_candidate(index)
