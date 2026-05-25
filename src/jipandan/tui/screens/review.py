@@ -1,3 +1,4 @@
+import hashlib
 import subprocess
 import time
 from pathlib import Path
@@ -102,6 +103,7 @@ class ReviewScreen(Screen):
         Binding("}", "nudge_end_up", "End +"),
         Binding("e", "export_clip", "Export"),
         Binding("f", "cycle_filter", "Filter"),
+        Binding("g", "generate_filter_waveforms", "Pregen waveforms"),
         Binding("h", "toggle_hide_skipped", "Hide skipped"),
         Binding("ctrl+s", "save_session", "Save"),
         Binding("q", "app.quit", "Quit"),
@@ -179,7 +181,9 @@ class ReviewScreen(Screen):
         self.hide_skipped = True
         self.filtered_clip_ids: list[str] = []
         self._waveform_generation = 0
-        self._waveform_cache: dict[tuple[str, str, str], Path] = {}
+        self._waveform_cache_dir = (
+            Path("tmp") / "waveform" / session.audio.stem
+        )
         self._skip_undo_stack: list[tuple[str, ClipStatus]] = []
         self._playback_end: float | None = None
         self._playback_timer: Timer | None = None
@@ -187,6 +191,7 @@ class ReviewScreen(Screen):
         self._waveform_debounce_timer: Timer | None = None
         self._pending_waveform_id: str | None = None
         self._displayed_waveform_viewport: tuple[str, str] | None = None
+        self._waveform_bulk_progress: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -227,7 +232,10 @@ class ReviewScreen(Screen):
 
     def _status_bar_text(self) -> str:
         hide_label = "on" if self.hide_skipped else "off"
-        return f"Hide skipped: {hide_label}"
+        parts = [f"Hide skipped: {hide_label}"]
+        if self._waveform_bulk_progress is not None:
+            parts.append(self._waveform_bulk_progress)
+        return "  ".join(parts)
 
     @staticmethod
     def _clip_status_text(candidate: ClipCandidate) -> str:
@@ -520,8 +528,15 @@ class ReviewScreen(Screen):
             self._show_waveform(candidate)
 
     @staticmethod
-    def _waveform_cache_key(candidate: ClipCandidate) -> tuple[str, str, str]:
-        return (candidate.clip_id, candidate.start, candidate.duration)
+    def _waveform_key_digest(candidate: ClipCandidate) -> str:
+        key = f"{candidate.start}|{candidate.duration}"
+        return hashlib.md5(key.encode("utf-8")).hexdigest()[:10]
+
+    def _waveform_cache_path(
+        self, candidate: ClipCandidate, *, suffix: str
+    ) -> Path:
+        digest = self._waveform_key_digest(candidate)
+        return self._waveform_cache_dir / f"{candidate.filename_token}_{digest}{suffix}"
 
     def _present_waveform(
         self,
@@ -547,9 +562,8 @@ class ReviewScreen(Screen):
     def _show_waveform(
         self, candidate: ClipCandidate, *, keep_previous: bool = False
     ) -> None:
-        cache_key = self._waveform_cache_key(candidate)
-        cached = self._waveform_cache.get(cache_key)
-        if cached is not None and cached.exists():
+        cached = self._waveform_cache_path(candidate, suffix=".png")
+        if cached.exists():
             self._present_waveform(cached, candidate.start, candidate.duration)
             return
         self._generate_waveform(candidate, keep_previous=keep_previous)
@@ -726,6 +740,31 @@ class ReviewScreen(Screen):
         current_idx = FILTER_ORDER.index(self.filter_mode)
         self.filter_mode = FILTER_ORDER[(current_idx + 1) % len(FILTER_ORDER)]
         self._rebuild_list(select_first=True)
+
+    def action_generate_filter_waveforms(self) -> None:
+        if self._waveform_bulk_progress is not None:
+            self.notify("Waveform pre-generation already running.", severity="warning")
+            return
+        candidates = list(self._visible_candidates())
+        if not candidates:
+            self.notify("No clips in current filter.")
+            return
+        pending = [
+            candidate
+            for candidate in candidates
+            if not self._waveform_cache_path(candidate, suffix=".png").exists()
+        ]
+        cached = len(candidates) - len(pending)
+        if not pending:
+            self.notify(
+                f"All {len(candidates)} clip waveforms already cached."
+            )
+            return
+        self.notify(
+            f"Generating {len(pending)} waveforms "
+            f"({cached} already cached)..."
+        )
+        self._run_bulk_waveform_generation(candidates)
 
     def action_toggle_hide_skipped(self) -> None:
         self.hide_skipped = not self.hide_skipped
@@ -918,35 +957,75 @@ class ReviewScreen(Screen):
                 self._playback_process = None
             self.app.call_from_thread(self._clear_playback_status)
 
+    @work(thread=True, exclusive=True, group="bulk-waveform")
+    def _run_bulk_waveform_generation(
+        self, candidates: list[ClipCandidate]
+    ) -> None:
+        total = len(candidates)
+        generated = 0
+        cached = 0
+        failed = 0
+        try:
+            for index, candidate in enumerate(candidates, 1):
+                target = self._waveform_cache_path(candidate, suffix=".png")
+                if target.exists():
+                    cached += 1
+                else:
+                    try:
+                        self._generate_waveform_file(candidate)
+                        generated += 1
+                    except Exception:
+                        failed += 1
+                self._waveform_bulk_progress = (
+                    f"Pregen waveforms: {index}/{total}"
+                )
+                self.app.call_from_thread(self._refresh_status_bars)
+        finally:
+            self._waveform_bulk_progress = None
+            self.app.call_from_thread(self._refresh_status_bars)
+        self.app.call_from_thread(
+            self.notify,
+            f"Waveform pre-generation done: "
+            f"{generated} generated, {cached} cached, {failed} failed.",
+        )
+
+    def _generate_waveform_file(self, candidate: ClipCandidate) -> Path:
+        """Generate (or reuse) the cached waveform PNG for ``candidate``.
+
+        Safe to call from a worker thread; performs no UI work.
+        """
+        target_png = self._waveform_cache_path(candidate, suffix=".png")
+        if target_png.exists():
+            return target_png
+        target_mp3 = self._waveform_cache_path(candidate, suffix=".mp3")
+        target_png.parent.mkdir(parents=True, exist_ok=True)
+        ffmpeg.extract_preview(
+            self.session.audio,
+            candidate.start,
+            candidate.duration,
+            target_mp3,
+        )
+        ffmpeg.render_waveform(target_mp3, target_png)
+        return target_png
+
     @work(thread=True, exclusive=True)
     def _generate_waveform(
         self, candidate: ClipCandidate, *, keep_previous: bool = False
     ) -> None:
-        cache_key = self._waveform_cache_key(candidate)
         generation = self._waveform_generation + 1
         self._waveform_generation = generation
-        tmp_dir = Path("tmp")
-        tmp_mp3 = tmp_dir / f"clip_{candidate.filename_token}.mp3"
-        tmp_png = tmp_dir / f"clip_{candidate.filename_token}.png"
         if not (keep_previous and self._displayed_waveform_viewport is not None):
             self.app.call_from_thread(
                 self.query_one("#waveform", WaveformWidget).show_placeholder,
                 "Generating waveform…",
             )
         try:
-            ffmpeg.extract_preview(
-                self.session.audio,
-                candidate.start,
-                candidate.duration,
-                tmp_mp3,
-            )
-            ffmpeg.render_waveform(tmp_mp3, tmp_png)
+            target_png = self._generate_waveform_file(candidate)
             if generation != self._waveform_generation:
                 return
-            self._waveform_cache[cache_key] = tmp_png
             self.app.call_from_thread(
                 self._present_waveform,
-                tmp_png,
+                target_png,
                 candidate.start,
                 candidate.duration,
             )
