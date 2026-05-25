@@ -14,6 +14,10 @@ from jipandan.core.srt import (
 ClipStatus = Literal["pending", "group1", "group2", "exported", "skipped"]
 SESSION_VERSION = 1
 
+# When an operation collapses a clip to zero duration (start == end), the end is
+# pushed out by this many seconds so the clip remains usable.
+ZERO_DURATION_BUMP_SECONDS = 1.0
+
 
 @dataclass
 class ClipCandidate:
@@ -230,6 +234,12 @@ class Session:
         self.candidates.insert(last_sibling_position + 1, duplicate)
         return duplicate
 
+    @staticmethod
+    def _ensure_nonzero_duration(candidate: ClipCandidate) -> None:
+        """When start == end, push the end out by ``ZERO_DURATION_BUMP_SECONDS``."""
+        if float(candidate.duration) <= 0.0:
+            candidate.duration = f"{ZERO_DURATION_BUMP_SECONDS:.3f}"
+
     def set_trim_offsets(
         self,
         clip_id: str,
@@ -248,6 +258,7 @@ class Session:
             new_start = new_end
         candidate.start = seconds_to_ffmpeg_timestamp(new_start)
         candidate.duration = f"{max(0.0, new_end - new_start):.3f}"
+        self._ensure_nonzero_duration(candidate)
 
     def nudge_start(self, clip_id: str, delta_seconds: float) -> None:
         candidate = self.get_candidate(clip_id)
@@ -258,6 +269,7 @@ class Session:
         nudged_start = min(end_seconds, start_seconds + delta_seconds)
         candidate.start = seconds_to_ffmpeg_timestamp(nudged_start)
         candidate.duration = f"{max(0.0, end_seconds - nudged_start):.3f}"
+        self._ensure_nonzero_duration(candidate)
 
     def nudge_end(self, clip_id: str, delta_seconds: float) -> None:
         candidate = self.get_candidate(clip_id)
@@ -265,6 +277,7 @@ class Session:
             return
         duration = max(0.0, float(candidate.duration) + delta_seconds)
         candidate.duration = f"{duration:.3f}"
+        self._ensure_nonzero_duration(candidate)
 
     def bulk_skip(self, clip_ids: list[str]) -> int:
         """Mark pending candidates in clip_ids as skipped. Returns count changed."""

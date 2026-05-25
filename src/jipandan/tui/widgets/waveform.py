@@ -67,7 +67,11 @@ class WaveformWidget(Vertical):
         self._marker_end: float | None = None
 
     def compose(self) -> ComposeResult:
-        yield Static("Generating waveform…", id="waveform-placeholder")
+        yield Static(
+            "Generating waveform…",
+            id="waveform-placeholder",
+            markup=False,
+        )
         yield TerminalImage(id="waveform-image")
 
     def show_placeholder(self, message: str) -> None:

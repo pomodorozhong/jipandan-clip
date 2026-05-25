@@ -62,8 +62,16 @@ class ClipListItem(ListItem):
         self.candidate_id = candidate.clip_id
         super().__init__(
             Horizontal(
-                Label(self.label_text(candidate), classes="clip-main"),
-                Label(self.duration_text(candidate), classes="clip-duration"),
+                Label(
+                    self.label_text(candidate),
+                    classes="clip-main",
+                    markup=False,
+                ),
+                Label(
+                    self.duration_text(candidate),
+                    classes="clip-duration",
+                    markup=False,
+                ),
             )
         )
 
@@ -195,16 +203,20 @@ class ReviewScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Static(self._filter_bar_text(include_position=False), id="filter-bar")
-        yield Static(self._status_bar_text(), id="status-bar")
+        yield Static(
+            self._filter_bar_text(include_position=False),
+            id="filter-bar",
+            markup=False,
+        )
+        yield Static(self._status_bar_text(), id="status-bar", markup=False)
         with Horizontal(id="main-pane"):
             yield ListView(id="clip-list")
             with Vertical(id="detail-panel"):
-                yield Static("", id="playback-status")
-                yield Static("", id="clip-title")
+                yield Static("", id="playback-status", markup=False)
+                yield Static("", id="clip-title", markup=False)
                 yield WaveformWidget(id="waveform")
-                yield Static("", id="clip-times")
-                yield Static("", id="clip-status")
+                yield Static("", id="clip-times", markup=False)
+                yield Static("", id="clip-status", markup=False)
         # yield Static(self._help_text(), id="help-bar")
         yield Footer()
 
