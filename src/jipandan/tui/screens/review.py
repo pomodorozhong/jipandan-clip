@@ -13,6 +13,7 @@ from textual.widgets import Footer, Header, Label, ListItem, ListView, Static
 from jipandan.core import ffmpeg
 from jipandan.core.models import ClipCandidate, ClipStatus, Session
 from jipandan.core.ffmpeg import ExportOptions
+from jipandan.tui.screens.edit_title import EditTitleModal
 from jipandan.tui.screens.export_mode import ExportModeModal
 from jipandan.tui.screens.export_title import ExportTitleModal
 from jipandan.tui.screens.start_offset import StartOffsetModal, TrimOffsets
@@ -91,6 +92,7 @@ class ReviewScreen(Screen):
         Binding("x", "mark_skipped", "Skip"),
         Binding("u", "undo_skip", "Undo skip"),
         Binding("d", "duplicate_clip", "Duplicate"),
+        Binding("r", "rename_title", "Rename"),
         Binding("ctrl+shift+x", "bulk_skip_above", "Skip above"),
         Binding("space", "play_preview", "Play"),
         Binding("[", "nudge_start_down", "Start -"),
@@ -663,6 +665,30 @@ class ReviewScreen(Screen):
         )
         self._rebuild_list(preserve_clip_id=preserve)
         self.notify(f"Duplicated #{source_clip_id} → #{duplicate.clip_id}")
+
+    def action_rename_title(self) -> None:
+        candidate = self._current_candidate()
+        if candidate is None:
+            return
+        clip_id = candidate.clip_id
+        self.app.push_screen(
+            EditTitleModal(candidate.title, clip_id),
+            lambda title: self._after_rename_title(clip_id, title),
+        )
+
+    def _after_rename_title(self, clip_id: str, title: str | None) -> None:
+        if title is None:
+            return
+        candidate = self.session.get_candidate(clip_id)
+        if candidate is None:
+            return
+        if candidate.title == title:
+            return
+        candidate.title = title
+        self._refresh_list_item(candidate)
+        self._update_detail(candidate.clip_id)
+        self._persist()
+        self.notify(f"Renamed #{clip_id}")
 
     def action_bulk_skip_above(self) -> None:
         list_view = self.query_one("#clip-list", ListView)
