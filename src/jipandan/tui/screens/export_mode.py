@@ -24,6 +24,13 @@ _MIN_THRESHOLD_DB = -90.0
 _MAX_THRESHOLD_DB = -5.0
 
 
+def _mode_index(mode: ExportMode) -> int:
+    for index, (candidate, _label) in enumerate(_EXPORT_MODE_OPTIONS):
+        if candidate == mode:
+            return index
+    return _DEFAULT_INDEX
+
+
 class ExportModeModal(ModalScreen[ExportOptions | None]):
     """Pick export mode and silence thresholds before naming the clip."""
 
@@ -64,6 +71,10 @@ class ExportModeModal(ModalScreen[ExportOptions | None]):
     }
     """
 
+    def __init__(self, initial_options: ExportOptions | None = None) -> None:
+        super().__init__()
+        self._initial_options = initial_options
+
     def compose(self) -> ComposeResult:
         with Vertical(id="export-dialog"):
             yield Label("Export mode")
@@ -95,8 +106,20 @@ class ExportModeModal(ModalScreen[ExportOptions | None]):
     def on_mount(self) -> None:
         option_list = self.query_one("#export-mode-list", OptionList)
         option_list.focus()
-        option_list.highlighted = _DEFAULT_INDEX
-        self._apply_defaults_for_mode("trim_edges")
+        initial = self._initial_options
+        if initial is None:
+            option_list.highlighted = _DEFAULT_INDEX
+            self._apply_defaults_for_mode("trim_edges")
+            return
+        option_list.highlighted = _mode_index(initial.mode)
+        self._apply_defaults_for_mode(initial.mode)
+        if initial.mode != "as_is":
+            self.query_one("#start-threshold-db", Input).value = str(
+                initial.start_threshold_db
+            )
+            self.query_one("#stop-threshold-db", Input).value = str(
+                initial.stop_threshold_db
+            )
 
     def on_option_list_option_highlighted(
         self, event: OptionList.OptionHighlighted

@@ -16,6 +16,7 @@ from jipandan.core.models import ClipCandidate, ClipStatus, Session
 from jipandan.core.ffmpeg import ExportOptions
 from jipandan.tui.screens.edit_title import EditTitleModal
 from jipandan.tui.screens.export_mode import ExportModeModal
+from jipandan.tui.screens.export_preview import ExportPreviewModal
 from jipandan.tui.screens.export_title import ExportTitleModal
 from jipandan.tui.screens.start_offset import StartOffsetModal, TrimOffsets
 from jipandan.tui.widgets.waveform import WaveformWidget, format_playback_remaining
@@ -892,9 +893,15 @@ class ReviewScreen(Screen):
         candidate = self._current_candidate()
         if candidate is None:
             return
+        self._stop_playback()
         clip_id = candidate.clip_id
+        self._open_export_mode_modal(clip_id, None)
+
+    def _open_export_mode_modal(
+        self, clip_id: str, initial_options: ExportOptions | None
+    ) -> None:
         self.app.push_screen(
-            ExportModeModal(),
+            ExportModeModal(initial_options=initial_options),
             lambda options: self._after_export_mode(clip_id, options),
         )
 
@@ -902,6 +909,30 @@ class ReviewScreen(Screen):
         self, clip_id: str, options: ExportOptions | None
     ) -> None:
         if options is None:
+            return
+        candidate = self.session.get_candidate(clip_id)
+        if candidate is None:
+            return
+        self.app.push_screen(
+            ExportPreviewModal(self.session.audio, candidate, options),
+            lambda confirmed: self._after_export_preview(
+                clip_id, options, confirmed
+            ),
+        )
+
+    def _after_export_preview(
+        self,
+        clip_id: str,
+        options: ExportOptions,
+        confirmed: bool | None,
+    ) -> None:
+        if not confirmed:
+            # Esc on the preview reopens the export mode picker so the user
+            # can tweak settings without restarting the export flow.
+            candidate = self.session.get_candidate(clip_id)
+            if candidate is None:
+                return
+            self._open_export_mode_modal(clip_id, options)
             return
         candidate = self.session.get_candidate(clip_id)
         if candidate is None:

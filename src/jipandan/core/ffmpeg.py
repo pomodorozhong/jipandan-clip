@@ -70,6 +70,26 @@ def _run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True)
 
 
+def probe_duration_seconds(audio: Path) -> float:
+    """Return the duration of ``audio`` in seconds as reported by ffprobe."""
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(audio),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return float(result.stdout.strip())
+
+
 def extract_preview(
     input_audio: Path,
     start: str,
