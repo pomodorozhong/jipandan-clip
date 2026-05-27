@@ -12,6 +12,7 @@ from jipandan.core.ffmpeg import (
     ExportMode,
     ExportOptions,
 )
+from jipandan.tui.widgets.stepper import SteppedNumberInput
 
 _EXPORT_MODE_OPTIONS: list[tuple[ExportMode, str]] = [
     ("as_is", "As is"),
@@ -29,6 +30,16 @@ def _mode_index(mode: ExportMode) -> int:
         if candidate == mode:
             return index
     return _DEFAULT_INDEX
+
+
+class ThresholdDbInput(SteppedNumberInput):
+    """dB input that steps with arrow keys and clamps to the valid range."""
+
+    def _parse(self, raw: str) -> float:
+        return float(raw.strip().lower().removesuffix("db"))
+
+    def _clamp(self, value: float) -> float:
+        return max(_MIN_THRESHOLD_DB, min(_MAX_THRESHOLD_DB, value))
 
 
 class ExportModeModal(ModalScreen[ExportOptions | None]):
@@ -87,13 +98,13 @@ class ExportModeModal(ModalScreen[ExportOptions | None]):
             )
             with Horizontal(id="threshold-row"):
                 yield Label("Start dB:", classes="threshold-label")
-                yield Input(
+                yield ThresholdDbInput(
                     str(DEFAULT_START_THRESHOLD_DB),
                     id="start-threshold-db",
                     type="number",
                 )
                 yield Label("Stop dB:", classes="threshold-label")
-                yield Input(
+                yield ThresholdDbInput(
                     str(DEFAULT_STOP_THRESHOLD_DB),
                     id="stop-threshold-db",
                     type="number",
@@ -219,4 +230,12 @@ class ExportModeModal(ModalScreen[ExportOptions | None]):
         )
 
     def action_cancel(self) -> None:
+        focused = self.focused
+        if focused is not None:
+            if focused.id == "stop-threshold-db":
+                self.query_one("#start-threshold-db", Input).focus()
+                return
+            if focused.id == "start-threshold-db":
+                self.query_one("#export-mode-list", OptionList).focus()
+                return
         self.dismiss(None)

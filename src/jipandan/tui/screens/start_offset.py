@@ -6,6 +6,8 @@ from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Input, Label
 
+from jipandan.tui.widgets.stepper import SteppedNumberInput
+
 
 @dataclass(frozen=True)
 class TrimOffsets:
@@ -30,6 +32,16 @@ def format_offset_seconds(offset_seconds: float) -> str:
     if offset_seconds == int(offset_seconds):
         return f"{int(offset_seconds):+d}"
     return f"{offset_seconds:+.3f}"
+
+
+class OffsetSecondsInput(SteppedNumberInput):
+    """Signed seconds input that steps with arrow keys."""
+
+    MIN_STEP = 0.01
+    MAGNIFICATION = 50.0
+
+    def _format(self, value: float) -> str:
+        return format_offset_seconds(value)
 
 
 class StartOffsetModal(ModalScreen[TrimOffsets | None]):
@@ -66,13 +78,13 @@ class StartOffsetModal(ModalScreen[TrimOffsets | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="offset-dialog"):
             yield Label("Start offset from original (seconds)")
-            yield Input(
+            yield OffsetSecondsInput(
                 format_offset_seconds(self._default_start_offset),
                 id="start-offset-input",
                 placeholder="+5 or -35",
             )
             yield Label("End offset from original (seconds)")
-            yield Input(
+            yield OffsetSecondsInput(
                 format_offset_seconds(self._default_end_offset),
                 id="end-offset-input",
                 placeholder="+2 or -10",
@@ -110,4 +122,8 @@ class StartOffsetModal(ModalScreen[TrimOffsets | None]):
         self.dismiss(TrimOffsets(start=start_offset, end=end_offset))
 
     def action_cancel(self) -> None:
+        focused = self.focused
+        if focused is not None and focused.id == "end-offset-input":
+            self.query_one("#start-offset-input", Input).focus()
+            return
         self.dismiss(None)

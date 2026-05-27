@@ -95,8 +95,8 @@ class ClipListItem(ListItem):
 
 class ReviewScreen(Screen):
     BINDINGS = [
-        Binding("j", "cursor_down", "Down", show=False),
-        Binding("k", "cursor_up", "Up", show=False),
+        Binding("j,down", "cursor_down", show=False, priority=True),
+        Binding("k,up", "cursor_up", show=False, priority=True),
         Binding("1", "mark_group1", "Group 1"),
         Binding("2", "mark_group2", "Group 2"),
         Binding("x", "mark_skipped", "Skip"),
@@ -104,7 +104,7 @@ class ReviewScreen(Screen):
         Binding("d", "duplicate_clip", "Duplicate"),
         Binding("r", "rename_title", "Rename"),
         Binding("ctrl+shift+x", "bulk_skip_above", "Skip above"),
-        Binding("space", "play_preview", "Play"),
+        Binding("space,enter", "play_preview", "Play"),
         Binding("[", "nudge_start_down", "Start -"),
         Binding("]", "nudge_start_up", "Start +"),
         Binding("o", "set_trim_offsets", "Trim offsets"),
@@ -112,6 +112,7 @@ class ReviewScreen(Screen):
         Binding("}", "nudge_end_up", "End +"),
         Binding("e", "export_clip", "Export"),
         Binding("f", "cycle_filter", "Filter"),
+        Binding("ctrl+shift+f", "cycle_filter_reverse", "Filter (back)", show=False),
         Binding("g", "generate_filter_waveforms", "Pregen waveforms"),
         Binding("h", "toggle_hide_skipped", "Hide skipped"),
         Binding("ctrl+s", "save_session", "Save"),
@@ -752,8 +753,16 @@ class ReviewScreen(Screen):
         self.notify(f"Skipped {count} unmarked clips (current and above)")
 
     def action_cycle_filter(self) -> None:
+        self._cycle_filter(direction=1)
+
+    def action_cycle_filter_reverse(self) -> None:
+        self._cycle_filter(direction=-1)
+
+    def _cycle_filter(self, *, direction: int) -> None:
         current_idx = FILTER_ORDER.index(self.filter_mode)
-        self.filter_mode = FILTER_ORDER[(current_idx + 1) % len(FILTER_ORDER)]
+        self.filter_mode = FILTER_ORDER[
+            (current_idx + direction) % len(FILTER_ORDER)
+        ]
         self._rebuild_list(select_first=True)
 
     def action_generate_filter_waveforms(self) -> None:
