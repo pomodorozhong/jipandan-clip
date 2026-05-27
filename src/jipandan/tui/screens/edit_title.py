@@ -11,6 +11,7 @@ class EditTitleModal(ModalScreen[str | None]):
     BINDINGS = [
         Binding("escape", "cancel", "Cancel", show=False),
         Binding("ctrl+l", "clear_input", "Clear", show=False),
+        Binding("ctrl+c", "copy_title", "Copy", show=False, priority=True),
     ]
 
     DEFAULT_CSS = """
@@ -53,7 +54,7 @@ class EditTitleModal(ModalScreen[str | None]):
             with Horizontal(id="edit-title-buttons"):
                 yield Button("Clear", id="edit-title-clear", variant="warning")
             yield Label(
-                "Enter = save  Esc = cancel  Ctrl+L = clear",
+                "Enter = save  Esc = cancel  Ctrl+L = clear  Ctrl+C = copy",
                 id="edit-title-hint",
             )
 
@@ -72,6 +73,14 @@ class EditTitleModal(ModalScreen[str | None]):
 
     def action_clear_input(self) -> None:
         self._clear_input()
+
+    def action_copy_title(self) -> None:
+        title = self.query_one("#edit-title-input", Input).value
+        if not title:
+            self.notify("Nothing to copy", severity="warning")
+            return
+        self.app.copy_to_clipboard(title)
+        self.notify("Title copied to clipboard")
 
     def _clear_input(self) -> None:
         input_widget = self.query_one("#edit-title-input", Input)
