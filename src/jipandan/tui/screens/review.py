@@ -994,22 +994,6 @@ class ReviewScreen(Screen):
         )
         self._persist()
         self.notify(f"Exported {output.name}")
-        self.run_play_exported(output, float(candidate.duration))
-
-    @work(thread=True, exclusive=True)
-    def run_play_exported(self, output: Path, duration: float) -> None:
-        self.app.call_from_thread(self._start_playback_status, duration)
-        process: subprocess.Popen | None = None
-        try:
-            process = ffmpeg.spawn_play_file(output)
-            self._playback_process = process
-            process.wait()
-        except Exception as exc:
-            self.app.call_from_thread(self.notify, f"mpv failed: {exc}", severity="error")
-        finally:
-            if self._playback_process is process:
-                self._playback_process = None
-            self.app.call_from_thread(self._clear_playback_status)
 
     @work(thread=True, exclusive=True, group="bulk-waveform")
     def _run_bulk_waveform_generation(
