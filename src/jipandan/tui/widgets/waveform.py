@@ -70,6 +70,8 @@ class WaveformWidget(Vertical, can_focus=True):
         self._viewport_duration: float | None = None
         self._marker_start: float | None = None
         self._marker_end: float | None = None
+        self._pending_placeholder: str | None = None
+        self._pending_image_apply = False
 
     def compose(self) -> ComposeResult:
         yield Static(
@@ -79,12 +81,38 @@ class WaveformWidget(Vertical, can_focus=True):
         )
         yield TerminalImage(id="waveform-image")
 
+    def on_mount(self) -> None:
+        self._flush_pending_display()
+
+    def _nodes_ready(self) -> bool:
+        return (
+            len(self.query("#waveform-placeholder")) > 0
+            and len(self.query("#waveform-image")) > 0
+        )
+
+    def _flush_pending_display(self) -> None:
+        if not self._nodes_ready():
+            return
+        if self._pending_placeholder is not None:
+            message = self._pending_placeholder
+            self._pending_placeholder = None
+            self.show_placeholder(message)
+            return
+        if self._pending_image_apply:
+            self._pending_image_apply = False
+            self._apply_image()
+
     def show_placeholder(self, message: str) -> None:
         self._base_image_path = None
         self._viewport_start = None
         self._viewport_duration = None
         self._marker_start = None
         self._marker_end = None
+        self._pending_image_apply = False
+        if not self._nodes_ready():
+            self._pending_placeholder = message
+            return
+        self._pending_placeholder = None
         placeholder = self.query_one("#waveform-placeholder", Static)
         image = self.query_one("#waveform-image", TerminalImage)
         placeholder.update(message)
@@ -106,6 +134,11 @@ class WaveformWidget(Vertical, can_focus=True):
         viewport_end = self._viewport_start + self._viewport_duration
         self._marker_start = self._viewport_start
         self._marker_end = viewport_end
+        if not self._nodes_ready():
+            self._pending_image_apply = True
+            self._pending_placeholder = None
+            return
+        self._pending_image_apply = False
         self._apply_image()
 
     def overlay_trim_bounds(self, clip_start: str, clip_end: str) -> None:
@@ -115,6 +148,11 @@ class WaveformWidget(Vertical, can_focus=True):
             return
         self._marker_start = _timestamp_seconds(clip_start)
         self._marker_end = _timestamp_seconds(clip_end)
+        if not self._nodes_ready():
+            self._pending_image_apply = True
+            self._pending_placeholder = None
+            return
+        self._pending_image_apply = False
         self._apply_image()
 
     def _markers_match_viewport(self) -> bool:
