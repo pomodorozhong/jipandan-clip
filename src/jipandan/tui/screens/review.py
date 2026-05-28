@@ -585,6 +585,7 @@ class ReviewScreen(Screen):
     def on_list_selected(self, event: ListView.Selected) -> None:
         item = event.item
         if isinstance(item, ClipListItem):
+            self._stop_playback()
             self._update_detail(item.candidate_id)
 
     def _refresh_list_item(self, candidate: ClipCandidate) -> None:
