@@ -4,7 +4,7 @@ from textual.app import App
 
 from jipandan.core.models import Session
 from jipandan.tui.screens.review import ReviewScreen
-from jipandan.tui.screens.transcribe import TranscribeScreen
+from jipandan.tui.screens.transcribe import TranscribeWizardScreen
 
 
 class JipandanApp(App):
@@ -39,7 +39,7 @@ class JipandanApp(App):
 
         if not self.srt_path.exists():
             self.push_screen(
-                TranscribeScreen(
+                TranscribeWizardScreen(
                     audio=self.audio,
                     srt_path=self.srt_path,
                     clip_dir=self.clip_dir,

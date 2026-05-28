@@ -27,6 +27,28 @@ except ImportError:
 import mlx_whisper
 
 
+def describe_transcribe_call(
+    *,
+    model_name: str,
+    language: str | None,
+    temperature: float,
+    max_context: int,
+    entropy_thold: float,
+) -> tuple[str, dict[str, object]]:
+    """Return (resolved_model_repo, kwargs) passed to mlx_whisper.transcribe()."""
+    transcribe_kwargs: dict[str, object] = {
+        "verbose": True,
+        "temperature": temperature,
+        "compression_ratio_threshold": entropy_thold,
+    }
+    if language:
+        transcribe_kwargs["language"] = language
+    if max_context <= 0:
+        transcribe_kwargs["condition_on_previous_text"] = False
+    model_repo = _resolve_model_name(model_name)
+    return model_repo, transcribe_kwargs
+
+
 def transcribe_to_text(
     input_audio: Path,
     output_text: Path,
@@ -37,18 +59,13 @@ def transcribe_to_text(
     entropy_thold: float = 3.0,
     output_format: str = "srt",
 ) -> None:
-    transcribe_kwargs = {
-        "temperature": temperature,
-        "compression_ratio_threshold": entropy_thold,
-    }
-    if language:
-        transcribe_kwargs["language"] = language
-    if max_context <= 0:
-        transcribe_kwargs["condition_on_previous_text"] = False
-
-    # mlx-whisper expects a local model path or HF repo.
-    # Keep short names like "large-v3" convenient by mapping to mlx-community.
-    model_repo = _resolve_model_name(model_name)
+    model_repo, transcribe_kwargs = describe_transcribe_call(
+        model_name=model_name,
+        language=language,
+        temperature=temperature,
+        max_context=max_context,
+        entropy_thold=entropy_thold,
+    )
     result = mlx_whisper.transcribe(
         str(input_audio),
         path_or_hf_repo=model_repo,
