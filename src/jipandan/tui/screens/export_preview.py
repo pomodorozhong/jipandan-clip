@@ -93,6 +93,8 @@ class ExportPreviewModal(ModalScreen[str | bool | None]):
         self._playback_process: subprocess.Popen | None = None
         self._playback_end: float | None = None
         self._playback_timer: Timer | None = None
+        # Guard UI callbacks from worker threads after the modal is dismissed.
+        self._is_active = False
 
     @staticmethod
     def _format_seconds(seconds: float | None) -> str:
@@ -142,6 +144,7 @@ class ExportPreviewModal(ModalScreen[str | bool | None]):
             )
 
     def on_mount(self) -> None:
+        self._is_active = True
         widget = self.query_one("#export-preview-waveform", WaveformWidget)
         widget.focus()
         widget.show_placeholder("Generating preview…")
@@ -151,6 +154,7 @@ class ExportPreviewModal(ModalScreen[str | bool | None]):
         self._build_preview()
 
     def on_unmount(self) -> None:
+        self._is_active = False
         self._stop_playback()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -205,6 +209,8 @@ class ExportPreviewModal(ModalScreen[str | bool | None]):
         as_is_seconds: float,
         preview_seconds: float,
     ) -> None:
+        if not self._is_active or not self.is_mounted:
+            return
         widget = self.query_one("#export-preview-waveform", WaveformWidget)
         widget.display_waveform(
             waveform_path,
@@ -217,6 +223,8 @@ class ExportPreviewModal(ModalScreen[str | bool | None]):
         self._start_playback()
 
     def _on_preview_failed(self, message: str) -> None:
+        if not self._is_active or not self.is_mounted:
+            return
         widget = self.query_one("#export-preview-waveform", WaveformWidget)
         widget.show_placeholder(f"Preview failed: {message}")
         self.query_one("#export-preview-info", Static).update(
