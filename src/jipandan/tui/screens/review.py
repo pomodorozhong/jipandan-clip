@@ -17,7 +17,6 @@ from jipandan.core.ffmpeg import ExportOptions
 from jipandan.tui.screens.edit_title import EditTitleModal
 from jipandan.tui.screens.export_mode import ExportModeModal
 from jipandan.tui.screens.export_preview import ExportPreviewModal
-from jipandan.tui.screens.export_title import ExportTitleModal
 from jipandan.tui.screens.start_offset import StartOffsetModal, TrimOffsets
 from jipandan.tui.widgets.waveform import WaveformWidget, format_playback_remaining
 
@@ -715,6 +714,7 @@ class ReviewScreen(Screen):
         if candidate.title == title:
             return
         candidate.title = title
+        candidate.last_export_title = title
         self._refresh_list_item(candidate)
         self._update_detail(candidate.clip_id)
         self._persist()
@@ -904,7 +904,16 @@ class ReviewScreen(Screen):
             return
         self._stop_playback()
         clip_id = candidate.clip_id
-        self._open_export_mode_modal(clip_id, None)
+        initial_options: ExportOptions | None = None
+        mode = candidate.last_export_mode
+        if mode in ("as_is", "trim_edges", "trim_all"):
+            kwargs: dict[str, object] = {"mode": mode}
+            if candidate.last_export_start_threshold_db is not None:
+                kwargs["start_threshold_db"] = candidate.last_export_start_threshold_db
+            if candidate.last_export_stop_threshold_db is not None:
+                kwargs["stop_threshold_db"] = candidate.last_export_stop_threshold_db
+            initial_options = ExportOptions(**kwargs)  # type: ignore[arg-type]
+        self._open_export_mode_modal(clip_id, initial_options)
 
     def _open_export_mode_modal(
         self, clip_id: str, initial_options: ExportOptions | None
@@ -924,18 +933,16 @@ class ReviewScreen(Screen):
             return
         self.app.push_screen(
             ExportPreviewModal(self.session.audio, candidate, options),
-            lambda confirmed: self._after_export_preview(
-                clip_id, options, confirmed
-            ),
+            lambda result: self._after_export_preview(clip_id, options, result),
         )
 
     def _after_export_preview(
         self,
         clip_id: str,
         options: ExportOptions,
-        confirmed: bool | None,
+        result: str | bool | None,
     ) -> None:
-        if not confirmed:
+        if result is False:
             # Esc on the preview reopens the export mode picker so the user
             # can tweak settings without restarting the export flow.
             candidate = self.session.get_candidate(clip_id)
@@ -943,13 +950,9 @@ class ReviewScreen(Screen):
                 return
             self._open_export_mode_modal(clip_id, options)
             return
-        candidate = self.session.get_candidate(clip_id)
-        if candidate is None:
+        if result is None:
             return
-        self.app.push_screen(
-            ExportTitleModal(candidate.title),
-            lambda title: self._start_export(clip_id, options, title),
-        )
+        self._start_export(clip_id, options, result)
 
     def _start_export(
         self,
@@ -963,6 +966,10 @@ class ReviewScreen(Screen):
         if candidate is None:
             return
         candidate.title = title
+        candidate.last_export_title = title
+        candidate.last_export_mode = export_options.mode
+        candidate.last_export_start_threshold_db = export_options.start_threshold_db
+        candidate.last_export_stop_threshold_db = export_options.stop_threshold_db
         self._refresh_list_item(candidate)
         self._update_detail(candidate.clip_id)
         self.run_export(candidate, title, export_options)

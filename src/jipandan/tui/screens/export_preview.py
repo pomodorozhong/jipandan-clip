@@ -8,7 +8,7 @@ from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.timer import Timer
-from textual.widgets import Label, Static
+from textual.widgets import Input, Label, Static
 
 from jipandan.core import ffmpeg
 from jipandan.core.ffmpeg import ExportOptions
@@ -24,18 +24,20 @@ _PREVIEW_TITLE = "preview"
 _AS_IS_TITLE = "preview-asis"
 
 
-class ExportPreviewModal(ModalScreen[bool]):
-    """Render the export-shaped audio, show its waveform, and play it back.
+class ExportPreviewModal(ModalScreen[str | bool | None]):
+    """Render export preview, collect the clip title, and start export on confirm.
 
     Dismissed value:
-      * ``True``  – user confirmed; the caller should continue to the title modal.
-      * ``False`` – user cancelled; the caller should abort the export.
+      * ``str``   – export with this title
+      * ``False`` – back to the export mode picker (Esc while title is not focused)
+      * ``None``  – abort export (Esc while editing the title)
     """
 
     BINDINGS = [
         Binding("escape", "cancel", "Back", show=False),
-        Binding("enter", "confirm", "Confirm", show=True),
+        Binding("enter", "focus_or_export", "Title / Export", show=True),
         Binding("space", "replay", "Replay", show=True),
+        Binding("ctrl+c", "copy_title", "Copy", show=False, priority=True),
     ]
 
     DEFAULT_CSS = """
@@ -53,6 +55,10 @@ class ExportPreviewModal(ModalScreen[bool]):
 
     #export-preview-waveform {
         height: 12;
+    }
+
+    #export-title-input {
+        margin-top: 1;
     }
 
     #export-preview-info {
@@ -112,12 +118,18 @@ class ExportPreviewModal(ModalScreen[bool]):
         return f"As is: {as_is}    Preview: {preview}    {delta}"
 
     def compose(self) -> ComposeResult:
+        default_title = (
+            self._candidate.last_export_title
+            if self._candidate.last_export_title is not None
+            else self._candidate.title
+        )
         with Vertical(id="export-preview-dialog"):
             yield Label(
                 f"Preview export ({self._options.mode})  #{self._candidate.clip_id}",
-                id="export-preview-title",
+                id="export-preview-header",
             )
             yield WaveformWidget(id="export-preview-waveform")
+            yield Input(default_title, id="export-title-input")
             yield Static(
                 self._format_info_line(None, None),
                 id="export-preview-info",
@@ -125,12 +137,13 @@ class ExportPreviewModal(ModalScreen[bool]):
             )
             yield Static("", id="export-preview-status", markup=False)
             yield Label(
-                "Enter = confirm  Space = replay  Esc = back",
+                "Enter = edit title / export  Space = replay  Esc = back  Ctrl+C = copy",
                 id="export-preview-hint",
             )
 
     def on_mount(self) -> None:
         widget = self.query_one("#export-preview-waveform", WaveformWidget)
+        widget.focus()
         widget.show_placeholder("Generating preview…")
         self.query_one("#export-preview-status", Static).update(
             "Rendering export audio…"
@@ -139,6 +152,10 @@ class ExportPreviewModal(ModalScreen[bool]):
 
     def on_unmount(self) -> None:
         self._stop_playback()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "export-title-input":
+            self._export()
 
     @work(thread=True, exclusive=True, group="export-preview")
     def _build_preview(self) -> None:
@@ -206,8 +223,14 @@ class ExportPreviewModal(ModalScreen[bool]):
             "As is: unavailable    Preview: unavailable"
         )
         self.query_one("#export-preview-status", Static).update(
-            "Preview unavailable. Enter to export anyway, Esc to go back."
+            "Preview unavailable. Enter to set title and export, Esc to go back."
         )
+
+    def _title_input(self) -> Input:
+        return self.query_one("#export-title-input", Input)
+
+    def _waveform_widget(self) -> WaveformWidget:
+        return self.query_one("#export-preview-waveform", WaveformWidget)
 
     def _start_playback(self) -> None:
         if self._preview_path is None:
@@ -270,10 +293,34 @@ class ExportPreviewModal(ModalScreen[bool]):
             return
         self._start_playback()
 
-    def action_confirm(self) -> None:
+    def action_focus_or_export(self) -> None:
+        title_input = self._title_input()
+        if title_input.has_focus:
+            # Enter is handled by ``on_input_submitted`` while the field is focused.
+            return
+        title_input.focus()
+        title_input.cursor_position = len(title_input.value)
+
+    def action_copy_title(self) -> None:
+        title = self._title_input().value
+        if not title:
+            self.notify("Nothing to copy", severity="warning")
+            return
+        self.app.copy_to_clipboard(title)
+        self.notify("Title copied to clipboard")
+
+    def _export(self) -> None:
+        value = self._title_input().value.strip()
+        if not value:
+            self.notify("Title cannot be empty", severity="warning")
+            return
         self._stop_playback()
-        self.dismiss(True)
+        self.dismiss(value)
 
     def action_cancel(self) -> None:
+        if self._title_input().has_focus:
+            # While editing the title, Esc should just exit editing.
+            self._waveform_widget().focus()
+            return
         self._stop_playback()
         self.dismiss(False)

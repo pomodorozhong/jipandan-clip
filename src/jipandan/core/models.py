@@ -12,7 +12,7 @@ from jipandan.core.srt import (
 )
 
 ClipStatus = Literal["pending", "group1", "group2", "exported", "skipped"]
-SESSION_VERSION = 1
+SESSION_VERSION = 2
 
 # When an operation collapses a clip to zero duration (start == end), the end is
 # pushed out by this many seconds so the clip remains usable.
@@ -30,6 +30,11 @@ class ClipCandidate:
     status: ClipStatus = "pending"
     # 0 for the original SRT-derived clip, 2+ for duplicates ("144-2", "144-3", ...).
     suffix: int = 0
+    # Persist the last export settings used for this clip (if any).
+    last_export_title: str | None = None
+    last_export_mode: str | None = None
+    last_export_start_threshold_db: float | None = None
+    last_export_stop_threshold_db: float | None = None
 
     @property
     def clip_id(self) -> str:
@@ -106,6 +111,9 @@ class Session:
     def load(cls, path: Path) -> "Session":
         data = json.loads(path.read_text(encoding="utf-8"))
         candidates = [ClipCandidate(**item) for item in data["candidates"]]
+        for candidate in candidates:
+            if candidate.last_export_title:
+                candidate.title = candidate.last_export_title
         return cls(
             audio=Path(data["audio"]),
             srt=Path(data["srt"]),
@@ -146,13 +154,17 @@ class Session:
                     merged.append(
                         ClipCandidate(
                             index=fresh_candidate.index,
-                            title=fresh_candidate.title,
+                            title=prior.title,
                             original_start=fresh_candidate.original_start,
                             original_end=fresh_candidate.original_end,
                             start=prior.start,
                             duration=prior.duration,
                             status=prior.status,
                             suffix=0,
+                            last_export_title=prior.last_export_title,
+                            last_export_mode=prior.last_export_mode,
+                            last_export_start_threshold_db=prior.last_export_start_threshold_db,
+                            last_export_stop_threshold_db=prior.last_export_stop_threshold_db,
                         )
                     )
                 else:
@@ -166,6 +178,10 @@ class Session:
                             duration=prior.duration,
                             status=prior.status,
                             suffix=prior.suffix,
+                            last_export_title=prior.last_export_title,
+                            last_export_mode=prior.last_export_mode,
+                            last_export_start_threshold_db=prior.last_export_start_threshold_db,
+                            last_export_stop_threshold_db=prior.last_export_stop_threshold_db,
                         )
                     )
 
@@ -224,6 +240,10 @@ class Session:
             duration=source.duration,
             status=duplicate_status,
             suffix=new_suffix,
+            last_export_title=source.last_export_title,
+            last_export_mode=source.last_export_mode,
+            last_export_start_threshold_db=source.last_export_start_threshold_db,
+            last_export_stop_threshold_db=source.last_export_stop_threshold_db,
         )
         last_sibling_position = position
         for offset in range(position + 1, len(self.candidates)):

@@ -38,12 +38,17 @@ def _time_to_pixel_x(
     return int(round(fraction * (image_width - 1)))
 
 
-class WaveformWidget(Vertical):
+class WaveformWidget(Vertical, can_focus=True):
     DEFAULT_CSS = """
     WaveformWidget {
         height: 1fr;
         min-height: 6;
         padding: 1 0 0 0;
+        border: tall transparent;
+    }
+
+    WaveformWidget:focus {
+        border: tall $primary;
     }
 
     #waveform-image {
