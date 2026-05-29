@@ -6,6 +6,7 @@ from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.timer import Timer
 from textual.widgets import Input, Label, Static
@@ -95,6 +96,7 @@ class ExportPreviewModal(ModalScreen[str | bool | None]):
         self._playback_timer: Timer | None = None
         # Guard UI callbacks from worker threads after the modal is dismissed.
         self._is_active = False
+        self._preview_generation = 0
 
     @staticmethod
     def _format_seconds(seconds: float | None) -> str:
@@ -143,8 +145,20 @@ class ExportPreviewModal(ModalScreen[str | bool | None]):
                 id="export-preview-hint",
             )
 
+    def _invalidate_preview_updates(self) -> None:
+        self._is_active = False
+        self._preview_generation += 1
+
+    def _preview_still_valid(self, generation: int) -> bool:
+        return self._is_active and generation == self._preview_generation
+
+    def _deactivate(self) -> None:
+        self._invalidate_preview_updates()
+        self._stop_playback()
+
     def on_mount(self) -> None:
         self._is_active = True
+        self._preview_generation = 1
         widget = self.query_one("#export-preview-waveform", WaveformWidget)
         widget.focus()
         widget.show_placeholder("Generating preview…")
@@ -154,8 +168,7 @@ class ExportPreviewModal(ModalScreen[str | bool | None]):
         self._build_preview()
 
     def on_unmount(self) -> None:
-        self._is_active = False
-        self._stop_playback()
+        self._deactivate()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "export-title-input":
@@ -163,6 +176,7 @@ class ExportPreviewModal(ModalScreen[str | bool | None]):
 
     @work(thread=True, exclusive=True, group="export-preview")
     def _build_preview(self) -> None:
+        generation = self._preview_generation
         try:
             _PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
             # Always render an "as is" baseline so both sides of the duration
@@ -191,7 +205,10 @@ class ExportPreviewModal(ModalScreen[str | bool | None]):
             waveform_path = preview_path.with_suffix(".png")
             ffmpeg.render_waveform(preview_path, waveform_path)
         except Exception as exc:
-            self.app.call_from_thread(self._on_preview_failed, str(exc))
+            if self._preview_still_valid(generation):
+                self.app.call_from_thread(self._on_preview_failed, str(exc))
+            return
+        if not self._preview_still_valid(generation):
             return
         self._preview_path = preview_path
         self._as_is_seconds = as_is_seconds
@@ -209,30 +226,40 @@ class ExportPreviewModal(ModalScreen[str | bool | None]):
         as_is_seconds: float,
         preview_seconds: float,
     ) -> None:
-        if not self._is_active or not self.is_mounted:
+        if not self._is_active:
             return
-        widget = self.query_one("#export-preview-waveform", WaveformWidget)
-        widget.display_waveform(
-            waveform_path,
-            "00:00:00.000",
-            self._candidate.duration,
-        )
-        self.query_one("#export-preview-info", Static).update(
-            self._format_info_line(as_is_seconds, preview_seconds)
-        )
-        self._start_playback()
+        try:
+            widget = self.query_one("#export-preview-waveform", WaveformWidget)
+            widget.display_waveform(
+                waveform_path,
+                "00:00:00.000",
+                self._candidate.duration,
+            )
+            if not self._is_active:
+                return
+            self.query_one("#export-preview-info", Static).update(
+                self._format_info_line(as_is_seconds, preview_seconds)
+            )
+            if not self._is_active:
+                return
+            self._start_playback()
+        except NoMatches:
+            return
 
     def _on_preview_failed(self, message: str) -> None:
-        if not self._is_active or not self.is_mounted:
+        if not self._is_active:
             return
-        widget = self.query_one("#export-preview-waveform", WaveformWidget)
-        widget.show_placeholder(f"Preview failed: {message}")
-        self.query_one("#export-preview-info", Static).update(
-            "As is: unavailable    Preview: unavailable"
-        )
-        self.query_one("#export-preview-status", Static).update(
-            "Preview unavailable. Enter to set title and export, Esc to go back."
-        )
+        try:
+            widget = self.query_one("#export-preview-waveform", WaveformWidget)
+            widget.show_placeholder(f"Preview failed: {message}")
+            self.query_one("#export-preview-info", Static).update(
+                "As is: unavailable    Preview: unavailable"
+            )
+            self.query_one("#export-preview-status", Static).update(
+                "Preview unavailable. Enter to set title and export, Esc to go back."
+            )
+        except NoMatches:
+            return
 
     def _title_input(self) -> Input:
         return self.query_one("#export-title-input", Input)
@@ -277,6 +304,9 @@ class ExportPreviewModal(ModalScreen[str | bool | None]):
             pass
 
     def _update_playback_status(self) -> None:
+        if not self._is_active:
+            self._stop_playback()
+            return
         process = self._playback_process
         if process is None:
             return
@@ -286,15 +316,16 @@ class ExportPreviewModal(ModalScreen[str | bool | None]):
         if self._playback_end is None:
             return
         remaining = self._playback_end - time.monotonic()
+        try:
+            status = self.query_one("#export-preview-status", Static)
+        except NoMatches:
+            self._stop_playback()
+            return
         if remaining <= 0:
             # mpv may still be flushing; let the next tick check process.poll().
-            self.query_one("#export-preview-status", Static).update(
-                format_playback_remaining(0.0)
-            )
+            status.update(format_playback_remaining(0.0))
             return
-        self.query_one("#export-preview-status", Static).update(
-            format_playback_remaining(remaining)
-        )
+        status.update(format_playback_remaining(remaining))
 
     def action_replay(self) -> None:
         if self._preview_path is None:
@@ -322,7 +353,7 @@ class ExportPreviewModal(ModalScreen[str | bool | None]):
         if not value:
             self.notify("Title cannot be empty", severity="warning")
             return
-        self._stop_playback()
+        self._deactivate()
         self.dismiss(value)
 
     def action_cancel(self) -> None:
@@ -330,5 +361,5 @@ class ExportPreviewModal(ModalScreen[str | bool | None]):
             # While editing the title, Esc should just exit editing.
             self._waveform_widget().focus()
             return
-        self._stop_playback()
+        self._deactivate()
         self.dismiss(False)
