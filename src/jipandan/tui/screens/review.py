@@ -637,6 +637,11 @@ class ReviewScreen(Screen):
             return
         next_dom = self._next_visible_dom_index(list_view, list_view.index)
         if next_dom is None:
+            for index, item in enumerate(list_view.children):
+                if self._is_visible_item(item):
+                    next_dom = index
+                    break
+        if next_dom is None:
             return
         list_view.index = next_dom
         item = list_view.children[next_dom]
@@ -651,6 +656,11 @@ class ReviewScreen(Screen):
         next_dom = self._next_visible_dom_index(
             list_view, list_view.index, forward=False
         )
+        if next_dom is None:
+            for index in range(len(list_view.children) - 1, -1, -1):
+                if self._is_visible_item(list_view.children[index]):
+                    next_dom = index
+                    break
         if next_dom is None:
             return
         list_view.index = next_dom
