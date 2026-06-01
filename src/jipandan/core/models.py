@@ -1,5 +1,5 @@
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Literal
 
@@ -64,6 +64,16 @@ class ClipCandidate:
         )
 
 
+_CLIP_CANDIDATE_FIELD_NAMES = {f.name for f in fields(ClipCandidate)}
+
+
+def _clip_candidate_from_dict(item: dict) -> ClipCandidate:
+    """Build a candidate from session JSON, ignoring unknown legacy keys."""
+    return ClipCandidate(
+        **{key: value for key, value in item.items() if key in _CLIP_CANDIDATE_FIELD_NAMES}
+    )
+
+
 @dataclass
 class Session:
     audio: Path
@@ -110,7 +120,7 @@ class Session:
     @classmethod
     def load(cls, path: Path) -> "Session":
         data = json.loads(path.read_text(encoding="utf-8"))
-        candidates = [ClipCandidate(**item) for item in data["candidates"]]
+        candidates = [_clip_candidate_from_dict(item) for item in data["candidates"]]
         for candidate in candidates:
             if candidate.last_export_title:
                 candidate.title = candidate.last_export_title
