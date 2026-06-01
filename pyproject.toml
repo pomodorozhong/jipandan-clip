@@ -14,6 +14,7 @@ dependencies = [
 transcribe = "jipandan.cli.transcribe:main"
 generate-commands = "jipandan.cli.generate_commands:main"
 jipandan = "jipandan.cli.main:main"
+jipandan-serve = "jipandan.cli.serve:main"
 
 [build-system]
 requires = ["setuptools>=69", "wheel"]
@@ -25,8 +26,13 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"jipandan.cli" = ["serve_templates/*.html"]
+
 [dependency-groups]
 dev = [
     "ipykernel>=7.2.0",
     "pip>=26.0.1",
+    "textual-dev>=1.8.0",
+    "textual-serve-asgi[server]>=0.2.1",
 ]

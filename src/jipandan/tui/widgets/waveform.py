@@ -4,9 +4,10 @@ from PIL import Image, ImageDraw
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Static
-from textual_image.widget import Image as TerminalImage
+from textual_image.widget._base import Image as BaseWaveformImage
 
 from jipandan.core.ffmpeg import WAVEFORM_PIXEL_SIZE
+from jipandan.tui.widgets.waveform_renderers import waveform_image_class
 from jipandan.core.srt import srt_time_to_seconds
 
 _MARKER_EPSILON_SECONDS = 0.001
@@ -79,9 +80,11 @@ class WaveformWidget(Vertical, can_focus=True):
             id="waveform-placeholder",
             markup=False,
         )
-        yield TerminalImage(id="waveform-image")
 
     def on_mount(self) -> None:
+        image = waveform_image_class(is_web=self.app.is_web)(id="waveform-image")
+        image.display = False
+        self.mount(image)
         self._flush_pending_display()
 
     def _nodes_ready(self) -> bool:
@@ -114,7 +117,7 @@ class WaveformWidget(Vertical, can_focus=True):
             return
         self._pending_placeholder = None
         placeholder = self.query_one("#waveform-placeholder", Static)
-        image = self.query_one("#waveform-image", TerminalImage)
+        image = self.query_one("#waveform-image", BaseWaveformImage)
         placeholder.update(message)
         placeholder.display = True
         image.display = False
@@ -220,7 +223,7 @@ class WaveformWidget(Vertical, can_focus=True):
 
     def _apply_image(self) -> None:
         placeholder = self.query_one("#waveform-placeholder", Static)
-        image = self.query_one("#waveform-image", TerminalImage)
+        image = self.query_one("#waveform-image", BaseWaveformImage)
         try:
             image.image = self._render_image()
         except OSError as exc:

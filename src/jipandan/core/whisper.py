@@ -10,21 +10,29 @@ from pathlib import Path
 # background worker thread.
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
-try:
-    import tqdm
+_PROGRESS_BARS_CONFIGURED = False
 
-    tqdm.tqdm.set_lock(threading.RLock())
-except ImportError:
-    pass
 
-try:
-    from huggingface_hub.utils import tqdm as hf_tqdm
+def configure_progress_bars() -> None:
+    """Configure tqdm locks before mlx/Hugging Face run in a TUI subprocess."""
+    global _PROGRESS_BARS_CONFIGURED
+    if _PROGRESS_BARS_CONFIGURED:
+        return
+    _PROGRESS_BARS_CONFIGURED = True
 
-    hf_tqdm.set_lock(threading.RLock())
-except ImportError:
-    pass
+    try:
+        import tqdm
 
-import mlx_whisper
+        tqdm.tqdm.set_lock(threading.RLock())
+    except ImportError:
+        pass
+
+    try:
+        from huggingface_hub.utils import tqdm as hf_tqdm
+
+        hf_tqdm.set_lock(threading.RLock())
+    except ImportError:
+        pass
 
 
 def describe_transcribe_call(
@@ -59,6 +67,9 @@ def transcribe_to_text(
     entropy_thold: float = 3.0,
     output_format: str = "srt",
 ) -> None:
+    configure_progress_bars()
+    import mlx_whisper
+
     model_repo, transcribe_kwargs = describe_transcribe_call(
         model_name=model_name,
         language=language,

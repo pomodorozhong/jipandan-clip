@@ -1,9 +1,14 @@
 import argparse
+import os
 from pathlib import Path
 
-# Configure tqdm/Hugging Face before Textual starts (stderr has no real fd in TUIs).
-import jipandan.core.whisper  # noqa: F401
+# textual-image probes cell size at import time; set defaults for textual serve.
+if os.environ.get("TEXTUAL_DRIVER") == "textual.drivers.web_driver:WebDriver":
+    os.environ.setdefault("TEXTUAL_CELL_WIDTH", "8")
+    os.environ.setdefault("TEXTUAL_CELL_HEIGHT", "16")
 
+# Configure tqdm/Hugging Face before Textual starts (stderr has no real fd in TUIs).
+from jipandan.core.whisper import configure_progress_bars
 from jipandan.tui.app import JipandanApp
 
 
@@ -61,6 +66,8 @@ def main() -> None:
         help="Entropy threshold for fallback decoding (default: 3.0).",
     )
     args = parser.parse_args()
+
+    configure_progress_bars()
 
     app = JipandanApp(
         audio=args.audio,

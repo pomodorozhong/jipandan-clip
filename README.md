@@ -38,6 +38,23 @@ uv run jipandan raw.mp3 --resume
 
 Use iTerm2, Ghostty, or another terminal with inline image support for waveforms.
 
+### Browser (textual-serve-asgi)
+
+Serve the TUI in a browser with high-quality waveform images (Sixel via an updated xterm.js):
+
+```bash
+uv sync --group dev
+uv run jipandan-serve raw.mp3
+```
+
+When the terminal shows `Serving ... on http://localhost:8000`, open that URL in your browser. The page splash clears once the WebSocket delivers terminal output (you should also see a `GET /ws` line in the server log). If you previously ran `textual serve` on the same port, do a hard refresh (Cmd+Shift+R) once so the browser loads the correct `textual.js`. Optional server flags: `-H`, `-p`, `--dev`. Pass `--` before jipandan args if needed:
+
+```bash
+uv run jipandan-serve -p 8080 -- raw.mp3 --resume
+```
+
+You can also use the upstream CLI: `uv run textual-serve -c jipandan raw.mp3`.
+
 ### CLI (legacy)
 
 ```bash

@@ -19,3 +19,6 @@ clip/*
 !clip/.gitkeep
 tmp/*
 !tmp/.gitkeep
+
+# Textual
+textual.log
