@@ -17,6 +17,7 @@ from jipandan.core.ffmpeg import ExportOptions
 from jipandan.tui.screens.edit_title import EditTitleModal
 from jipandan.tui.screens.export_mode import ExportModeModal
 from jipandan.tui.screens.export_preview import ExportPreviewModal
+from jipandan.tui.screens.jump_to_index import JumpToIndexModal
 from jipandan.tui.screens.start_offset import StartOffsetModal, TrimOffsets
 from jipandan.tui.widgets.waveform import WaveformWidget, format_playback_remaining
 
@@ -112,7 +113,8 @@ class ReviewScreen(Screen):
         Binding("e", "export_clip", "Export"),
         Binding("f", "cycle_filter", "Filter"),
         Binding("ctrl+shift+f", "cycle_filter_reverse", "Filter (back)", show=False),
-        Binding("g", "generate_filter_waveforms", "Pregen waveforms"),
+        Binding("g", "jump_to_index_prompt", "Jump index"),
+        Binding("ctrl+g", "generate_filter_waveforms", "Pregen waveforms"),
         Binding("h", "toggle_hide_skipped", "Hide skipped"),
         Binding("ctrl+s", "save_session", "Save"),
         Binding("q", "app.quit", "Quit"),
@@ -768,6 +770,76 @@ class ReviewScreen(Screen):
 
     def action_cycle_filter_reverse(self) -> None:
         self._cycle_filter(direction=-1)
+
+    @staticmethod
+    def _parse_clip_index(clip_id: str) -> int | None:
+        try:
+            return int(clip_id)
+        except ValueError:
+            return None
+
+    def _find_target_clip_id(self, requested_index: int) -> tuple[str, bool] | None:
+        if not self.filtered_clip_ids:
+            return None
+        parsed: list[tuple[str, int]] = []
+        for clip_id in self.filtered_clip_ids:
+            parsed_index = self._parse_clip_index(clip_id)
+            if parsed_index is None:
+                continue
+            parsed.append((clip_id, parsed_index))
+        if not parsed:
+            return None
+        for clip_id, value in parsed:
+            if value == requested_index:
+                return clip_id, True
+        nearest_clip_id, _nearest_value = min(
+            parsed,
+            key=lambda pair: (abs(pair[1] - requested_index), pair[1]),
+        )
+        return nearest_clip_id, False
+
+    def _jump_to_clip_id(self, clip_id: str) -> bool:
+        list_view = self.query_one("#clip-list", ListView)
+        for index, item in enumerate(list_view.children):
+            if isinstance(item, ClipListItem) and item.candidate_id == clip_id:
+                list_view.index = index
+                self._stop_playback()
+                self._update_detail(clip_id)
+                return True
+        return False
+
+    def _handle_jump_to_index(self, index_value: str | None) -> None:
+        if index_value is None:
+            return
+        value = index_value.strip()
+        if not value:
+            self.notify("Index cannot be empty", severity="warning")
+            return
+        try:
+            requested_index = int(value)
+        except ValueError:
+            self.notify("Index must be an integer", severity="warning")
+            return
+        target = self._find_target_clip_id(requested_index)
+        if target is None:
+            self.notify("No clips available in current filter", severity="warning")
+            return
+        target_clip_id, exact = target
+        if not self._jump_to_clip_id(target_clip_id):
+            self.notify("Could not jump to the requested clip", severity="error")
+            return
+        if exact:
+            self.notify(f"Jumped to #{target_clip_id}")
+        else:
+            self.notify(
+                f"No #{requested_index} in current filter; jumped to nearest #{target_clip_id}"
+            )
+
+    def action_jump_to_index_prompt(self) -> None:
+        self.app.push_screen(
+            JumpToIndexModal(),
+            self._handle_jump_to_index,
+        )
 
     def _cycle_filter(self, *, direction: int) -> None:
         current_idx = FILTER_ORDER.index(self.filter_mode)
