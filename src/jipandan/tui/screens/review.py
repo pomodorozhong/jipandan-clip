@@ -9,7 +9,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.timer import Timer
-from textual.widgets import Footer, Header, Label, ListItem, ListView, Static
+from textual.widgets import Footer, Header, Label, ListItem, ListView, Static, Tab, Tabs
 
 from jipandan.core import ffmpeg
 from jipandan.core.models import ClipCandidate, ClipStatus, Session
@@ -36,6 +36,10 @@ STATUS_BADGE: dict[ClipStatus, str] = {
 
 SKIPPED_HIDDEN_CLASS = "skipped-hidden"
 WAVEFORM_DEBOUNCE_SECONDS = 0.4
+
+
+class FilterTabs(Tabs, can_focus=False):
+    """Clip filter tabs; non-focusable so j/k navigation stays on the list."""
 
 
 class ClipListItem(ListItem):
@@ -121,16 +125,8 @@ class ReviewScreen(Screen):
         layout: vertical;
     }
 
-    #filter-bar {
-        height: 1;
-        padding: 0 1;
-        background: $surface;
-    }
-
-    #status-bar {
-        height: 1;
-        padding: 0 1;
-        background: $surface;
+    #filter-tabs {
+        width: 100%;
     }
 
     #main-pane {
@@ -202,12 +198,14 @@ class ReviewScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Static(
-            self._filter_bar_text(include_position=False),
-            id="filter-bar",
-            markup=False,
+        yield FilterTabs(
+            *(
+                Tab(FILTER_BAR_LABELS[mode], id=mode)
+                for mode in FILTER_ORDER
+            ),
+            id="filter-tabs",
+            active=self.filter_mode,
         )
-        yield Static(self._status_bar_text(), id="status-bar", markup=False)
         with Horizontal(id="main-pane"):
             yield ListView(id="clip-list")
             with Vertical(id="detail-panel"):
@@ -220,33 +218,40 @@ class ReviewScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
+        self._refresh_status_bars()
         self._rebuild_list(select_first=True)
 
-    def _filter_bar_text(self, include_position: bool = True) -> str:
+    def _header_title_text(self) -> str:
         total = len(self.session.candidates)
         position = ""
-        if include_position:
-            current = self._current_candidate()
-            if current is not None:
-                try:
-                    pos = self.filtered_clip_ids.index(current.clip_id) + 1
-                    position = f"  {pos}/{len(self.filtered_clip_ids)}"
-                except ValueError:
-                    pass
-        filters = " | ".join(
-            f"({FILTER_BAR_LABELS[mode]})" if mode == self.filter_mode else FILTER_BAR_LABELS[mode]
-            for mode in FILTER_ORDER
-        )
-        return (
-            f"{self.session.audio.name}  Filter: {filters}{position}  ({total} clips)"
-        )
+        current = self._current_candidate()
+        if current is not None:
+            try:
+                pos = self.filtered_clip_ids.index(current.clip_id) + 1
+                position = f"  {pos}/{len(self.filtered_clip_ids)}"
+            except ValueError:
+                pass
+        return f"{self.session.audio.name}{position}  ({total} clips)"
 
-    def _status_bar_text(self) -> str:
+    def _header_sub_title_text(self) -> str:
         hide_label = "on" if self.hide_skipped else "off"
         parts = [f"Hide skipped: {hide_label}"]
         if self._waveform_bulk_progress is not None:
             parts.append(self._waveform_bulk_progress)
         return "  ".join(parts)
+
+    def _sync_filter_tabs(self) -> None:
+        tabs = self.query_one("#filter-tabs", Tabs)
+        if tabs.active != self.filter_mode:
+            tabs.active = self.filter_mode
+
+    @on(Tabs.TabActivated, "#filter-tabs")
+    def on_filter_tab_activated(self, event: Tabs.TabActivated) -> None:
+        mode = event.tab.id
+        if mode is None or mode not in FILTER_ORDER or mode == self.filter_mode:
+            return
+        self.filter_mode = mode
+        self._rebuild_list(select_first=True)
 
     @staticmethod
     def _clip_status_text(candidate: ClipCandidate) -> str:
@@ -256,8 +261,8 @@ class ReviewScreen(Screen):
         )
 
     def _refresh_status_bars(self) -> None:
-        self.query_one("#filter-bar", Static).update(self._filter_bar_text())
-        self.query_one("#status-bar", Static).update(self._status_bar_text())
+        self.title = self._header_title_text()
+        self.sub_title = self._header_sub_title_text()
 
     def _help_text(self) -> str:
         return (
@@ -826,6 +831,7 @@ class ReviewScreen(Screen):
         if filter_mode is None or filter_mode == self.filter_mode:
             return
         self.filter_mode = filter_mode
+        self._sync_filter_tabs()
         self._rebuild_list(select_first=True)
 
     @staticmethod
@@ -903,6 +909,7 @@ class ReviewScreen(Screen):
         self.filter_mode = FILTER_ORDER[
             (current_idx + direction) % len(FILTER_ORDER)
         ]
+        self._sync_filter_tabs()
         self._rebuild_list(select_first=True)
 
     def action_generate_filter_waveforms(self) -> None:
