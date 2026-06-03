@@ -84,6 +84,8 @@ class WaveformWidget(Vertical, can_focus=True):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._base_image_path: Path | None = None
+        self._cached_base_path: Path | None = None
+        self._cached_base_image: Image.Image | None = None
         self._viewport_start: float | None = None
         self._viewport_duration: float | None = None
         self._media_duration: float | None = None
@@ -111,6 +113,24 @@ class WaveformWidget(Vertical, can_focus=True):
             and len(self.query("#waveform-image")) > 0
         )
 
+    def _clear_base_image_cache(self) -> None:
+        self._cached_base_path = None
+        self._cached_base_image = None
+
+    def _load_base_image(self) -> Image.Image:
+        if self._base_image_path is None:
+            raise ValueError("No waveform image loaded")
+        path = self._base_image_path
+        if (
+            self._cached_base_image is not None
+            and self._cached_base_path == path
+        ):
+            return self._cached_base_image
+        loaded = Image.open(path).convert("RGBA")
+        self._cached_base_path = path
+        self._cached_base_image = loaded
+        return loaded
+
     def _flush_pending_display(self) -> None:
         if not self._nodes_ready():
             return
@@ -125,6 +145,7 @@ class WaveformWidget(Vertical, can_focus=True):
 
     def show_placeholder(self, message: str) -> None:
         self._base_image_path = None
+        self._clear_base_image_cache()
         self._viewport_start = None
         self._viewport_duration = None
         self._media_duration = None
@@ -152,6 +173,8 @@ class WaveformWidget(Vertical, can_focus=True):
         if not path.exists():
             self.show_placeholder(f"Waveform not found: {path}")
             return
+        if path != self._base_image_path:
+            self._clear_base_image_cache()
         self._base_image_path = path
         self._viewport_start = _timestamp_seconds(viewport_start)
         self._viewport_duration = float(viewport_duration)
@@ -207,11 +230,9 @@ class WaveformWidget(Vertical, can_focus=True):
         return image_start, image_duration, image_start + image_duration
 
     def _render_image(self) -> Image.Image:
-        if self._base_image_path is None:
-            raise ValueError("No waveform image loaded")
-        base = Image.open(self._base_image_path).convert("RGBA")
+        base = self._load_base_image()
         if self._markers_match_viewport():
-            return base
+            return base.copy()
 
         image_start, image_duration, image_end = self._image_time_range()
         marker_start = self._marker_start
@@ -243,7 +264,7 @@ class WaveformWidget(Vertical, can_focus=True):
             canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
             canvas.paste(crop, (dst_left, 0))
         else:
-            canvas = base
+            canvas = base.copy()
 
         start_x = _time_to_pixel_x(
             marker_start, render_start, render_duration, width
