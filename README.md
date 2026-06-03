@@ -28,7 +28,7 @@ If no SRT exists, transcription runs first. Then review clips in the TUI:
 
 1. Skim waveforms and press `1` to mark Group 1 candidates.
 2. Press `Space` to preview in `mpv`, then press `2` for Group 2.
-3. Use `[`/`]` to nudge the start and `{`/`}` to nudge the end.
+3. Use `[`/`]` to nudge the start and `{`/`}` to nudge the end. Press `,` for fine start nudge or `.` for fine end nudge (10ms steps); `Esc` or `j`/`k` returns to basic mode.
 4. Press `Ctrl+Shift+X` to skip the current clip and all clips above it.
 5. Press `e` to export the current clip to `clip/`.
 

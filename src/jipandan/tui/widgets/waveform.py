@@ -189,6 +189,7 @@ class WaveformWidget(Vertical, can_focus=True):
         if not self._nodes_ready():
             self._pending_image_apply = True
             self._pending_placeholder = None
+            self.call_after_refresh(self._flush_pending_display)
             return
         self._pending_image_apply = False
         self._apply_image()
@@ -203,6 +204,7 @@ class WaveformWidget(Vertical, can_focus=True):
         if not self._nodes_ready():
             self._pending_image_apply = True
             self._pending_placeholder = None
+            self.call_after_refresh(self._flush_pending_display)
             return
         self._pending_image_apply = False
         self._apply_image()
@@ -229,6 +231,16 @@ class WaveformWidget(Vertical, can_focus=True):
         assert image_duration is not None
         return image_start, image_duration, image_start + image_duration
 
+    def _render_time_range(self) -> tuple[float, float]:
+        image_start, image_duration, image_end = self._image_time_range()
+        marker_start = self._marker_start
+        marker_end = self._marker_end
+        assert marker_start is not None and marker_end is not None
+        render_start = min(image_start, marker_start)
+        render_end = max(image_end, marker_end)
+        render_duration = max(render_end - render_start, _MARKER_EPSILON_SECONDS)
+        return render_start, render_duration
+
     def _render_image(self) -> Image.Image:
         base = self._load_base_image()
         if self._markers_match_viewport():
@@ -239,9 +251,7 @@ class WaveformWidget(Vertical, can_focus=True):
         marker_end = self._marker_end
         assert marker_start is not None and marker_end is not None
 
-        render_start = min(image_start, marker_start)
-        render_end = max(image_end, marker_end)
-        render_duration = max(render_end - render_start, _MARKER_EPSILON_SECONDS)
+        render_start, render_duration = self._render_time_range()
 
         width, height = base.size
         if render_duration > image_duration + _MARKER_EPSILON_SECONDS:

@@ -1,15 +1,11 @@
-import hashlib
-import subprocess
-import time
 from pathlib import Path
 
 from textual import on, work
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal
 from textual.screen import Screen
-from textual.timer import Timer
-from textual.widgets import Footer, Header, Label, ListItem, ListView, Static, Tab, Tabs
+from textual.widgets import Footer, Header, Label, ListItem, ListView, Tab, Tabs
 
 from jipandan.core import ffmpeg
 from jipandan.core.models import ClipCandidate, ClipStatus, Session
@@ -24,7 +20,11 @@ from jipandan.tui.screens.filter_selection import (
 )
 from jipandan.tui.screens.jump_to_index import JumpToIndexModal
 from jipandan.tui.screens.start_offset import StartOffsetModal, TrimOffsets
-from jipandan.tui.widgets.waveform import WaveformWidget, format_playback_remaining
+from jipandan.tui.widgets.detail_panel import (
+    ClipDetailPanel,
+    FINE_NUDGE_COARSE,
+    FINE_NUDGE_FINE,
+)
 
 STATUS_BADGE: dict[ClipStatus, str] = {
     "pending": "  ",
@@ -35,7 +35,6 @@ STATUS_BADGE: dict[ClipStatus, str] = {
 }
 
 SKIPPED_HIDDEN_CLASS = "skipped-hidden"
-WAVEFORM_DEBOUNCE_SECONDS = 0.4
 
 
 class FilterTabs(Tabs, can_focus=False):
@@ -118,6 +117,9 @@ class ReviewScreen(Screen):
         Binding("h", "toggle_hide_skipped", "Hide skipped"),
         Binding("ctrl+s", "save_session", "Save"),
         Binding("q", "app.quit", "Quit"),
+        Binding("comma,left", "open_fine_start_tab", show=False),
+        Binding(".,right", "open_fine_end_tab", show=False),
+        Binding("escape", "close_fine_tab", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -142,34 +144,6 @@ class ReviewScreen(Screen):
         display: none;
     }
 
-    #detail-panel {
-        width: 1fr;
-        height: 1fr;
-        padding: 1 2;
-    }
-
-    #playback-status {
-        height: 1;
-        width: 100%;
-    }
-
-    #clip-title {
-        height: auto;
-        padding-bottom: 1;
-    }
-
-    #waveform-hints {
-        height: 1;
-        width: 100%;
-        color: $text-muted;
-        padding-bottom: 1;
-    }
-
-    #clip-times, #clip-status {
-        height: auto;
-        padding-top: 1;
-    }
-
     #help-bar {
         height: 1;
         padding: 0 1;
@@ -183,17 +157,10 @@ class ReviewScreen(Screen):
         self.filter_mode = "all"
         self.hide_skipped = False
         self.filtered_clip_ids: list[str] = []
-        self._waveform_generation = 0
         self._waveform_cache_dir = (
             Path("tmp") / "waveform" / session.audio.stem
         )
         self._skip_undo_stack: list[tuple[str, ClipStatus]] = []
-        self._playback_end: float | None = None
-        self._playback_timer: Timer | None = None
-        self._playback_process: subprocess.Popen | None = None
-        self._waveform_debounce_timer: Timer | None = None
-        self._pending_waveform_id: str | None = None
-        self._displayed_waveform_viewport: tuple[str, str] | None = None
         self._waveform_bulk_progress: str | None = None
 
     def compose(self) -> ComposeResult:
@@ -208,12 +175,12 @@ class ReviewScreen(Screen):
         )
         with Horizontal(id="main-pane"):
             yield ListView(id="clip-list")
-            with Vertical(id="detail-panel"):
-                yield Static("", id="playback-status", markup=False)
-                yield Static("", id="clip-title", markup=False)
-                yield WaveformWidget(id="waveform")
-                yield Static("", id="clip-times", markup=False)
-                yield Static("", id="clip-status", markup=False)
+            yield ClipDetailPanel(
+                self.session,
+                self._waveform_cache_dir,
+                id="detail-panel",
+                on_detail_updated=self._refresh_status_bars,
+            )
         # yield Static(self._help_text(), id="help-bar")
         yield Footer()
 
@@ -253,22 +220,43 @@ class ReviewScreen(Screen):
         self.filter_mode = mode
         self._rebuild_list(select_first=True)
 
-    @staticmethod
-    def _clip_status_text(candidate: ClipCandidate) -> str:
-        return (
-            f"Status: {candidate.status}\n"
-            f"Original: {candidate.original_start} → {candidate.original_end}"
+    def _detail_panel(self) -> ClipDetailPanel:
+        return self.query_one("#detail-panel", ClipDetailPanel)
+
+    def action_open_fine_start_tab(self) -> None:
+        candidate = self._current_candidate()
+        if candidate is not None:
+            self._detail_panel().open_fine_start_tab(candidate)
+
+    def action_close_fine_tab(self) -> None:
+        self._detail_panel().close_fine_tab(self._current_candidate())
+
+    def action_open_fine_end_tab(self) -> None:
+        candidate = self._current_candidate()
+        if candidate is not None:
+            self._detail_panel().open_fine_end_tab(candidate)
+
+    def _update_detail(self, clip_id: str, *, debounce_waveform: bool = False) -> None:
+        candidate = self.session.get_candidate(clip_id)
+        if candidate is None:
+            self._detail_panel().clear_detail()
+            return
+        self._detail_panel().update_detail(
+            candidate, debounce_waveform=debounce_waveform
         )
 
-    def _refresh_status_bars(self) -> None:
-        self.title = self._header_title_text()
-        self.sub_title = self._header_sub_title_text()
+    def _clear_detail(self) -> None:
+        self._detail_panel().clear_detail()
 
     def _help_text(self) -> str:
         return (
             "j/k nav  1/2 group  x skip  u undo skip  Ctrl+Shift+X skip above  "
             "f filter  Ctrl+Shift+F filter picker  h hide skipped  Ctrl+S save  q quit"
         )
+
+    def _refresh_status_bars(self) -> None:
+        self.title = self._header_title_text()
+        self.sub_title = self._header_sub_title_text()
 
     def _candidate_matches_filter(self, candidate: ClipCandidate) -> bool:
         if self.filter_mode == "unsorted":
@@ -494,155 +482,13 @@ class ReviewScreen(Screen):
             return None
         return self.session.get_candidate(item.candidate_id)
 
-    def _clear_playback_status(self) -> None:
-        self._playback_end = None
-        if self._playback_timer is not None:
-            self._playback_timer.stop()
-            self._playback_timer = None
-        self.query_one("#playback-status", Static).update("")
-
-    def _start_playback_status(self, duration_seconds: float) -> None:
-        self._playback_end = time.monotonic() + duration_seconds
-        self._update_playback_status()
-        if self._playback_timer is not None:
-            self._playback_timer.stop()
-        self._playback_timer = self.set_interval(0.2, self._update_playback_status)
-
-    def _update_playback_status(self) -> None:
-        if self._playback_end is None:
-            return
-        remaining = self._playback_end - time.monotonic()
-        if remaining <= 0:
-            self._clear_playback_status()
-            return
-        self.query_one("#playback-status", Static).update(
-            format_playback_remaining(remaining)
-        )
-
-    def _clear_detail(self) -> None:
-        self._displayed_waveform_viewport = None
-        self.query_one("#clip-title", Static).update("No clips in current filter.")
-        self.query_one("#waveform", WaveformWidget).show_placeholder("No waveform.")
-        self.query_one("#clip-times", Static).update("")
-        self.query_one("#clip-status", Static).update("")
-
-    def _cancel_waveform_debounce(self) -> None:
-        if self._waveform_debounce_timer is not None:
-            self._waveform_debounce_timer.stop()
-            self._waveform_debounce_timer = None
-        self._pending_waveform_id = None
-
-    def _schedule_waveform_refresh(self, clip_id: str) -> None:
-        self._waveform_generation += 1
-        self._cancel_waveform_debounce()
-        self._pending_waveform_id = clip_id
-
-        def refresh_waveform() -> None:
-            self._waveform_debounce_timer = None
-            if self._pending_waveform_id != clip_id:
-                return
-            candidate = self.session.get_candidate(clip_id)
-            if candidate is None:
-                return
-            self._show_waveform(candidate, keep_previous=True)
-
-        self._waveform_debounce_timer = self.set_timer(
-            WAVEFORM_DEBOUNCE_SECONDS,
-            refresh_waveform,
-            name="waveform-debounce",
-        )
-
-    def _update_detail(self, clip_id: str, *, debounce_waveform: bool = False) -> None:
-        candidate = self.session.get_candidate(clip_id)
-        if candidate is None:
-            self._clear_detail()
-            return
-
-        start_offset = candidate.start_offset_seconds()
-        end_offset = candidate.end_offset_seconds()
-        self.query_one("#clip-title", Static).update(
-            f"#{candidate.clip_id}  {candidate.title}"
-        )
-        self.query_one("#clip-times", Static).update(
-            f"Start: {candidate.start}  ({start_offset:+.3f}s from original)\n"
-            f"End: {candidate.end}  ({end_offset:+.3f}s from original)  "
-            f"Duration: {candidate.duration}s"
-        )
-        self.query_one("#clip-status", Static).update(
-            self._clip_status_text(candidate)
-        )
-        self._refresh_status_bars()
-        if debounce_waveform:
-            self._schedule_waveform_refresh(clip_id)
-            self._refresh_waveform_markers(candidate)
-        else:
-            self._cancel_waveform_debounce()
-            self._show_waveform(candidate)
-
-    @staticmethod
-    def _waveform_key_digest(candidate: ClipCandidate) -> str:
-        key = f"{candidate.start}|{candidate.duration}"
-        return hashlib.md5(key.encode("utf-8")).hexdigest()[:10]
-
-    def _waveform_cache_path(
-        self, candidate: ClipCandidate, *, suffix: str
-    ) -> Path:
-        digest = self._waveform_key_digest(candidate)
-        return self._waveform_cache_dir / f"{candidate.filename_token}_{digest}{suffix}"
-
-    def _present_waveform(
-        self,
-        path: Path,
-        viewport_start: str,
-        viewport_duration: str,
-        *,
-        media_duration: float | None = None,
-    ) -> None:
-        self._displayed_waveform_viewport = (viewport_start, viewport_duration)
-        self.query_one("#waveform", WaveformWidget).display_waveform(
-            path,
-            viewport_start,
-            viewport_duration,
-            media_duration=media_duration,
-        )
-
-    @staticmethod
-    def _waveform_media_duration(png_path: Path) -> float | None:
-        mp3_path = png_path.with_suffix(".mp3")
-        if not mp3_path.exists():
-            return None
-        try:
-            return ffmpeg.probe_duration_seconds(mp3_path)
-        except (OSError, subprocess.CalledProcessError, ValueError):
-            return None
-
-    def _refresh_waveform_markers(self, candidate: ClipCandidate) -> None:
-        if self._displayed_waveform_viewport is None:
-            return
-        self.query_one("#waveform", WaveformWidget).overlay_trim_bounds(
-            candidate.start,
-            candidate.end,
-        )
-
-    def _show_waveform(
-        self, candidate: ClipCandidate, *, keep_previous: bool = False
-    ) -> None:
-        cached = self._waveform_cache_path(candidate, suffix=".png")
-        if cached.exists():
-            self._present_waveform(
-                cached,
-                candidate.start,
-                candidate.duration,
-                media_duration=self._waveform_media_duration(cached),
-            )
-            return
-        self._generate_waveform(candidate, keep_previous=keep_previous)
-
     @on(ListView.Selected)
     def on_list_selected(self, event: ListView.Selected) -> None:
         item = event.item
         if isinstance(item, ClipListItem):
-            self._stop_playback()
+            panel = self._detail_panel()
+            panel.stop_playback()
+            panel.switch_to_basic_tab()
             self._update_detail(item.candidate_id)
 
     def _refresh_list_item(self, candidate: ClipCandidate) -> None:
@@ -684,13 +530,15 @@ class ReviewScreen(Screen):
                     self._select_after_hide(list_view, dom_index, preserve)
             return
         self._refresh_list_item(candidate)
-        self.query_one("#clip-status", Static).update(
-            self._clip_status_text(candidate)
+        self._detail_panel().update_clip_status(
+            ClipDetailPanel.clip_status_text(candidate)
         )
         self._persist()
 
     def action_cursor_down(self) -> None:
-        self._stop_playback()
+        panel = self._detail_panel()
+        panel.stop_playback()
+        panel.switch_to_basic_tab()
         list_view = self.query_one("#clip-list", ListView)
         if list_view.index is None:
             return
@@ -708,7 +556,9 @@ class ReviewScreen(Screen):
             self._update_detail(item.candidate_id)
 
     def action_cursor_up(self) -> None:
-        self._stop_playback()
+        panel = self._detail_panel()
+        panel.stop_playback()
+        panel.switch_to_basic_tab()
         list_view = self.query_one("#clip-list", ListView)
         if list_view.index is None:
             return
@@ -813,8 +663,8 @@ class ReviewScreen(Screen):
                     self._refresh_list_item(candidate)
             current = self._current_candidate()
             if current is not None:
-                self.query_one("#clip-status", Static).update(
-                    self._clip_status_text(current)
+                self._detail_panel().update_clip_status(
+                    ClipDetailPanel.clip_status_text(current)
                 )
         self.notify(f"Skipped {count} unmarked clips (current and above)")
 
@@ -866,7 +716,9 @@ class ReviewScreen(Screen):
         for index, item in enumerate(list_view.children):
             if isinstance(item, ClipListItem) and item.candidate_id == clip_id:
                 list_view.index = index
-                self._stop_playback()
+                panel = self._detail_panel()
+                panel.stop_playback()
+                panel.switch_to_basic_tab()
                 self._update_detail(clip_id)
                 return True
         return False
@@ -923,7 +775,9 @@ class ReviewScreen(Screen):
         pending = [
             candidate
             for candidate in candidates
-            if not self._waveform_cache_path(candidate, suffix=".png").exists()
+            if not self._detail_panel()
+            .waveform_cache_path(candidate, suffix=".png")
+            .exists()
         ]
         cached = len(candidates) - len(pending)
         if not pending:
@@ -950,10 +804,22 @@ class ReviewScreen(Screen):
         self.notify("Session saved.")
 
     def action_nudge_start_down(self) -> None:
-        self._nudge_start(-0.1)
+        panel = self._detail_panel()
+        if panel.is_fine_end_tab():
+            self._nudge_end(-FINE_NUDGE_FINE)
+        elif panel.is_fine_start_tab():
+            self._nudge_start(-FINE_NUDGE_FINE)
+        else:
+            self._nudge_start(-FINE_NUDGE_COARSE)
 
     def action_nudge_start_up(self) -> None:
-        self._nudge_start(0.1)
+        panel = self._detail_panel()
+        if panel.is_fine_end_tab():
+            self._nudge_end(FINE_NUDGE_FINE)
+        elif panel.is_fine_start_tab():
+            self._nudge_start(FINE_NUDGE_FINE)
+        else:
+            self._nudge_start(FINE_NUDGE_COARSE)
 
     def action_set_trim_offsets(self) -> None:
         candidate = self._current_candidate()
@@ -986,10 +852,22 @@ class ReviewScreen(Screen):
         )
 
     def action_nudge_end_down(self) -> None:
-        self._nudge_end(-0.1)
+        panel = self._detail_panel()
+        if panel.is_fine_start_tab():
+            self._nudge_start(-FINE_NUDGE_COARSE)
+        elif panel.is_fine_end_tab():
+            self._nudge_end(-FINE_NUDGE_COARSE)
+        else:
+            self._nudge_end(-FINE_NUDGE_COARSE)
 
     def action_nudge_end_up(self) -> None:
-        self._nudge_end(0.1)
+        panel = self._detail_panel()
+        if panel.is_fine_start_tab():
+            self._nudge_start(FINE_NUDGE_COARSE)
+        elif panel.is_fine_end_tab():
+            self._nudge_end(FINE_NUDGE_COARSE)
+        else:
+            self._nudge_end(FINE_NUDGE_COARSE)
 
     def _nudge_start(self, delta: float) -> None:
         candidate = self._current_candidate()
@@ -1008,48 +886,20 @@ class ReviewScreen(Screen):
         self._persist()
 
     def action_play_preview(self) -> None:
-        if self._is_playing():
-            self._stop_playback()
+        panel = self._detail_panel()
+        if panel.is_playing():
+            panel.stop_playback()
             return
         candidate = self._current_candidate()
         if candidate is None:
             return
-        self.run_play_preview(candidate)
-
-    def _is_playing(self) -> bool:
-        process = self._playback_process
-        return process is not None and process.poll() is None
-
-    def _stop_playback(self) -> None:
-        process = self._playback_process
-        if process is None:
-            return
-        if process.poll() is None:
-            process.terminate()
-
-    @work(thread=True, exclusive=True)
-    def run_play_preview(self, candidate: ClipCandidate) -> None:
-        duration = float(candidate.duration)
-        self.app.call_from_thread(self._start_playback_status, duration)
-        process: subprocess.Popen | None = None
-        try:
-            process = ffmpeg.spawn_play_preview(
-                self.session.audio, candidate.start, candidate.duration
-            )
-            self._playback_process = process
-            process.wait()
-        except Exception as exc:
-            self.app.call_from_thread(self.notify, f"mpv failed: {exc}", severity="error")
-        finally:
-            if self._playback_process is process:
-                self._playback_process = None
-            self.app.call_from_thread(self._clear_playback_status)
+        panel.play_preview(candidate)
 
     def action_export_clip(self) -> None:
         candidate = self._current_candidate()
         if candidate is None:
             return
-        self._stop_playback()
+        self._detail_panel().stop_playback()
         clip_id = candidate.clip_id
         initial_options: ExportOptions | None = None
         mode = candidate.last_export_mode
@@ -1143,8 +993,8 @@ class ReviewScreen(Screen):
 
     def _after_export(self, candidate: ClipCandidate, output: Path) -> None:
         self._refresh_list_item(candidate)
-        self.query_one("#clip-status", Static).update(
-            f"{self._clip_status_text(candidate)}\nSaved: {output}"
+        self._detail_panel().update_clip_status(
+            f"{ClipDetailPanel.clip_status_text(candidate)}\nSaved: {output}"
         )
         self._persist()
         self.notify(f"Exported {output.name}")
@@ -1157,14 +1007,15 @@ class ReviewScreen(Screen):
         generated = 0
         cached = 0
         failed = 0
+        panel = self._detail_panel()
         try:
             for index, candidate in enumerate(candidates, 1):
-                target = self._waveform_cache_path(candidate, suffix=".png")
+                target = panel.waveform_cache_path(candidate, suffix=".png")
                 if target.exists():
                     cached += 1
                 else:
                     try:
-                        self._generate_waveform_file(candidate)
+                        panel.generate_waveform_file(candidate)
                         generated += 1
                     except Exception:
                         failed += 1
@@ -1180,54 +1031,3 @@ class ReviewScreen(Screen):
             f"Waveform pre-generation done: "
             f"{generated} generated, {cached} cached, {failed} failed.",
         )
-
-    def _generate_waveform_file(self, candidate: ClipCandidate) -> tuple[Path, float]:
-        """Generate (or reuse) the cached waveform PNG for ``candidate``.
-
-        Safe to call from a worker thread; performs no UI work.
-        Returns the PNG path and the probed duration of its source MP3.
-        """
-        target_png = self._waveform_cache_path(candidate, suffix=".png")
-        target_mp3 = self._waveform_cache_path(candidate, suffix=".mp3")
-        if target_png.exists() and target_mp3.exists():
-            return target_png, ffmpeg.probe_duration_seconds(target_mp3)
-        target_png.parent.mkdir(parents=True, exist_ok=True)
-        ffmpeg.extract_preview(
-            self.session.audio,
-            candidate.start,
-            candidate.duration,
-            target_mp3,
-        )
-        media_duration = ffmpeg.probe_duration_seconds(target_mp3)
-        ffmpeg.render_waveform(target_mp3, target_png)
-        return target_png, media_duration
-
-    @work(thread=True, exclusive=True)
-    def _generate_waveform(
-        self, candidate: ClipCandidate, *, keep_previous: bool = False
-    ) -> None:
-        generation = self._waveform_generation + 1
-        self._waveform_generation = generation
-        if not (keep_previous and self._displayed_waveform_viewport is not None):
-            self.app.call_from_thread(
-                self.query_one("#waveform", WaveformWidget).show_placeholder,
-                "Generating waveform…",
-            )
-        try:
-            target_png, media_duration = self._generate_waveform_file(candidate)
-            if generation != self._waveform_generation:
-                return
-            self.app.call_from_thread(
-                self._present_waveform,
-                target_png,
-                candidate.start,
-                candidate.duration,
-                media_duration=media_duration,
-            )
-        except Exception as exc:
-            if generation != self._waveform_generation:
-                return
-            self.app.call_from_thread(
-                self.query_one("#waveform", WaveformWidget).show_placeholder,
-                f"Waveform failed: {exc}",
-            )
