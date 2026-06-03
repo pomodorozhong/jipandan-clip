@@ -17,6 +17,11 @@ from jipandan.core.ffmpeg import ExportOptions
 from jipandan.tui.screens.edit_title import EditTitleModal
 from jipandan.tui.screens.export_mode import ExportModeModal
 from jipandan.tui.screens.export_preview import ExportPreviewModal
+from jipandan.tui.screens.filter_selection import (
+    FILTER_BAR_LABELS,
+    FILTER_ORDER,
+    FilterSelectionModal,
+)
 from jipandan.tui.screens.jump_to_index import JumpToIndexModal
 from jipandan.tui.screens.start_offset import StartOffsetModal, TrimOffsets
 from jipandan.tui.widgets.waveform import WaveformWidget, format_playback_remaining
@@ -27,15 +32,6 @@ STATUS_BADGE: dict[ClipStatus, str] = {
     "group2": "G2",
     "exported": "EX",
     "skipped": "--",
-}
-
-FILTER_ORDER = ["all", "unsorted", "group1", "group2", "exported"]
-FILTER_LABELS = {
-    "all": "All",
-    "unsorted": "Unsorted",
-    "group1": "G1",
-    "group2": "G2",
-    "exported": "Exported",
 }
 
 SKIPPED_HIDDEN_CLASS = "skipped-hidden"
@@ -111,8 +107,8 @@ class ReviewScreen(Screen):
         Binding("{", "nudge_end_down", "End -"),
         Binding("}", "nudge_end_up", "End +"),
         Binding("e", "export_clip", "Export"),
-        Binding("f", "cycle_filter", "Filter"),
-        Binding("ctrl+shift+f", "cycle_filter_reverse", "Filter (back)", show=False),
+        # Binding("f", "cycle_filter", "Filter"),
+        Binding("f", "open_filter_modal", "Filter picker"),
         Binding("g", "jump_to_index_prompt", "Jump index"),
         Binding("ctrl+g", "generate_filter_waveforms", "Pregen waveforms"),
         Binding("h", "toggle_hide_skipped", "Hide skipped"),
@@ -238,7 +234,7 @@ class ReviewScreen(Screen):
                 except ValueError:
                     pass
         filters = " | ".join(
-            f"({FILTER_LABELS[mode]})" if mode == self.filter_mode else FILTER_LABELS[mode]
+            f"({FILTER_BAR_LABELS[mode]})" if mode == self.filter_mode else FILTER_BAR_LABELS[mode]
             for mode in FILTER_ORDER
         )
         return (
@@ -266,7 +262,7 @@ class ReviewScreen(Screen):
     def _help_text(self) -> str:
         return (
             "j/k nav  1/2 group  x skip  u undo skip  Ctrl+Shift+X skip above  "
-            "f filter  h hide skipped  Ctrl+S save  q quit"
+            "f filter  Ctrl+Shift+F filter picker  h hide skipped  Ctrl+S save  q quit"
         )
 
     def _visible_candidates(self) -> list[ClipCandidate]:
@@ -768,8 +764,17 @@ class ReviewScreen(Screen):
     def action_cycle_filter(self) -> None:
         self._cycle_filter(direction=1)
 
-    def action_cycle_filter_reverse(self) -> None:
-        self._cycle_filter(direction=-1)
+    def action_open_filter_modal(self) -> None:
+        self.app.push_screen(
+            FilterSelectionModal(self.filter_mode),
+            self._handle_filter_selection,
+        )
+
+    def _handle_filter_selection(self, filter_mode: str | None) -> None:
+        if filter_mode is None or filter_mode == self.filter_mode:
+            return
+        self.filter_mode = filter_mode
+        self._rebuild_list(select_first=True)
 
     @staticmethod
     def _parse_clip_index(clip_id: str) -> int | None:
