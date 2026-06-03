@@ -28,15 +28,32 @@ def _timestamp_seconds(value: str) -> float:
 
 def _time_to_pixel_x(
     time_seconds: float,
-    viewport_start: float,
-    viewport_duration: float,
+    range_start: float,
+    range_duration: float,
     image_width: int,
 ) -> int:
-    if viewport_duration <= 0 or image_width <= 1:
+    """Map a timestamp to an inclusive x coordinate in [0, image_width - 1]."""
+    if range_duration <= 0 or image_width <= 1:
         return 0
-    fraction = (time_seconds - viewport_start) / viewport_duration
+    fraction = (time_seconds - range_start) / range_duration
     fraction = max(0.0, min(1.0, fraction))
-    return int(round(fraction * (image_width - 1)))
+    return min(image_width - 1, int(round(fraction * (image_width - 1))))
+
+
+def _time_to_pixel_x_exclusive(
+    time_seconds: float,
+    range_start: float,
+    range_duration: float,
+    image_width: int,
+) -> int:
+    """Map a timestamp to an exclusive right edge for cropping (0..image_width)."""
+    if range_duration <= 0 or image_width <= 1:
+        return 0
+    fraction = (time_seconds - range_start) / range_duration
+    fraction = max(0.0, min(1.0, fraction))
+    if fraction >= 1.0:
+        return image_width
+    return min(image_width, int(round(fraction * image_width)))
 
 
 class WaveformWidget(Vertical, can_focus=True):
@@ -69,6 +86,7 @@ class WaveformWidget(Vertical, can_focus=True):
         self._base_image_path: Path | None = None
         self._viewport_start: float | None = None
         self._viewport_duration: float | None = None
+        self._media_duration: float | None = None
         self._marker_start: float | None = None
         self._marker_end: float | None = None
         self._pending_placeholder: str | None = None
@@ -109,6 +127,7 @@ class WaveformWidget(Vertical, can_focus=True):
         self._base_image_path = None
         self._viewport_start = None
         self._viewport_duration = None
+        self._media_duration = None
         self._marker_start = None
         self._marker_end = None
         self._pending_image_apply = False
@@ -127,6 +146,8 @@ class WaveformWidget(Vertical, can_focus=True):
         path: Path,
         viewport_start: str,
         viewport_duration: str,
+        *,
+        media_duration: float | None = None,
     ) -> None:
         if not path.exists():
             self.show_placeholder(f"Waveform not found: {path}")
@@ -134,6 +155,11 @@ class WaveformWidget(Vertical, can_focus=True):
         self._base_image_path = path
         self._viewport_start = _timestamp_seconds(viewport_start)
         self._viewport_duration = float(viewport_duration)
+        self._media_duration = (
+            media_duration
+            if media_duration is not None
+            else self._viewport_duration
+        )
         viewport_end = self._viewport_start + self._viewport_duration
         self._marker_start = self._viewport_start
         self._marker_end = viewport_end
@@ -166,11 +192,19 @@ class WaveformWidget(Vertical, can_focus=True):
             or self._marker_end is None
         ):
             return True
-        viewport_end = self._viewport_start + self._viewport_duration
+        marker_duration = self._marker_end - self._marker_start
         return (
             abs(self._marker_start - self._viewport_start) < _MARKER_EPSILON_SECONDS
-            and abs(self._marker_end - viewport_end) < _MARKER_EPSILON_SECONDS
+            and abs(marker_duration - self._viewport_duration)
+            < _MARKER_EPSILON_SECONDS
         )
+
+    def _image_time_range(self) -> tuple[float, float, float]:
+        image_start = self._viewport_start
+        assert image_start is not None
+        image_duration = self._media_duration or self._viewport_duration
+        assert image_duration is not None
+        return image_start, image_duration, image_start + image_duration
 
     def _render_image(self) -> Image.Image:
         if self._base_image_path is None:
@@ -179,11 +213,10 @@ class WaveformWidget(Vertical, can_focus=True):
         if self._markers_match_viewport():
             return base
 
-        image_start = self._viewport_start
-        image_duration = self._viewport_duration
-        image_end = image_start + image_duration
+        image_start, image_duration, image_end = self._image_time_range()
         marker_start = self._marker_start
         marker_end = self._marker_end
+        assert marker_start is not None and marker_end is not None
 
         render_start = min(image_start, marker_start)
         render_end = max(image_end, marker_end)
@@ -191,20 +224,24 @@ class WaveformWidget(Vertical, can_focus=True):
 
         width, height = base.size
         if render_duration > image_duration + _MARKER_EPSILON_SECONDS:
-            image_left_px = max(
-                0,
-                int(round((image_start - render_start) / render_duration * width)),
+            src_left = _time_to_pixel_x(
+                image_start, image_start, image_duration, width
             )
-            image_right_px = min(
-                width,
-                int(round((image_end - render_start) / render_duration * width)),
+            src_right = _time_to_pixel_x_exclusive(
+                image_end, image_start, image_duration, width
             )
-            new_image_width = max(1, image_right_px - image_left_px)
-            resized = base.resize(
-                (new_image_width, height), Image.Resampling.LANCZOS
+            crop = base.crop((src_left, 0, src_right, height))
+            dst_left = _time_to_pixel_x(
+                image_start, render_start, render_duration, width
             )
+            dst_right = _time_to_pixel_x_exclusive(
+                image_end, render_start, render_duration, width
+            )
+            target_width = max(1, dst_right - dst_left)
+            if crop.width != target_width:
+                crop = crop.resize((target_width, height), Image.Resampling.LANCZOS)
             canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-            canvas.paste(resized, (image_left_px, 0))
+            canvas.paste(crop, (dst_left, 0))
         else:
             canvas = base
 

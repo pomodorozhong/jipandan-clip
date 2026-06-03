@@ -96,6 +96,7 @@ def extract_preview(
     duration: str,
     out_mp3: Path,
 ) -> None:
+    """Extract a preview MP3 slice with sample-accurate seek (re-encoded)."""
     out_mp3.parent.mkdir(parents=True, exist_ok=True)
     _run(
         [
@@ -109,8 +110,8 @@ def extract_preview(
             start,
             "-t",
             duration,
-            "-c",
-            "copy",
+            "-q:a",
+            "2",
             str(out_mp3),
         ]
     )

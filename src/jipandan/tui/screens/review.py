@@ -590,13 +590,26 @@ class ReviewScreen(Screen):
         path: Path,
         viewport_start: str,
         viewport_duration: str,
+        *,
+        media_duration: float | None = None,
     ) -> None:
         self._displayed_waveform_viewport = (viewport_start, viewport_duration)
         self.query_one("#waveform", WaveformWidget).display_waveform(
             path,
             viewport_start,
             viewport_duration,
+            media_duration=media_duration,
         )
+
+    @staticmethod
+    def _waveform_media_duration(png_path: Path) -> float | None:
+        mp3_path = png_path.with_suffix(".mp3")
+        if not mp3_path.exists():
+            return None
+        try:
+            return ffmpeg.probe_duration_seconds(mp3_path)
+        except (OSError, subprocess.CalledProcessError, ValueError):
+            return None
 
     def _refresh_waveform_markers(self, candidate: ClipCandidate) -> None:
         if self._displayed_waveform_viewport is None:
@@ -611,7 +624,12 @@ class ReviewScreen(Screen):
     ) -> None:
         cached = self._waveform_cache_path(candidate, suffix=".png")
         if cached.exists():
-            self._present_waveform(cached, candidate.start, candidate.duration)
+            self._present_waveform(
+                cached,
+                candidate.start,
+                candidate.duration,
+                media_duration=self._waveform_media_duration(cached),
+            )
             return
         self._generate_waveform(candidate, keep_previous=keep_previous)
 
@@ -1156,15 +1174,16 @@ class ReviewScreen(Screen):
             f"{generated} generated, {cached} cached, {failed} failed.",
         )
 
-    def _generate_waveform_file(self, candidate: ClipCandidate) -> Path:
+    def _generate_waveform_file(self, candidate: ClipCandidate) -> tuple[Path, float]:
         """Generate (or reuse) the cached waveform PNG for ``candidate``.
 
         Safe to call from a worker thread; performs no UI work.
+        Returns the PNG path and the probed duration of its source MP3.
         """
         target_png = self._waveform_cache_path(candidate, suffix=".png")
-        if target_png.exists():
-            return target_png
         target_mp3 = self._waveform_cache_path(candidate, suffix=".mp3")
+        if target_png.exists() and target_mp3.exists():
+            return target_png, ffmpeg.probe_duration_seconds(target_mp3)
         target_png.parent.mkdir(parents=True, exist_ok=True)
         ffmpeg.extract_preview(
             self.session.audio,
@@ -1172,8 +1191,9 @@ class ReviewScreen(Screen):
             candidate.duration,
             target_mp3,
         )
+        media_duration = ffmpeg.probe_duration_seconds(target_mp3)
         ffmpeg.render_waveform(target_mp3, target_png)
-        return target_png
+        return target_png, media_duration
 
     @work(thread=True, exclusive=True)
     def _generate_waveform(
@@ -1187,7 +1207,7 @@ class ReviewScreen(Screen):
                 "Generating waveform…",
             )
         try:
-            target_png = self._generate_waveform_file(candidate)
+            target_png, media_duration = self._generate_waveform_file(candidate)
             if generation != self._waveform_generation:
                 return
             self.app.call_from_thread(
@@ -1195,6 +1215,7 @@ class ReviewScreen(Screen):
                 target_png,
                 candidate.start,
                 candidate.duration,
+                media_duration=media_duration,
             )
         except Exception as exc:
             if generation != self._waveform_generation:
