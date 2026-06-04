@@ -15,6 +15,7 @@ from jipandan.core import ffmpeg
 from jipandan.core.ffmpeg import ExportOptions
 from jipandan.core.models import ClipCandidate
 from jipandan.tui.widgets.waveform import (
+    GENERATING_PREVIEW_PLACEHOLDER,
     WaveformWidget,
     format_playback_remaining,
 )
@@ -161,7 +162,7 @@ class ExportPreviewModal(ModalScreen[str | bool | None]):
         self._preview_generation = 1
         widget = self.query_one("#export-preview-waveform", WaveformWidget)
         widget.focus()
-        widget.show_placeholder("Generating preview…")
+        widget.show_placeholder(GENERATING_PREVIEW_PLACEHOLDER)
         self.query_one("#export-preview-status", Static).update(
             "Rendering export audio…"
         )

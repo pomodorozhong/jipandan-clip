@@ -14,7 +14,11 @@ from textual.widgets import Static, TabbedContent, TabPane
 from jipandan.core import ffmpeg
 from jipandan.core.models import ClipCandidate, Session
 from jipandan.core.srt import seconds_to_ffmpeg_timestamp, srt_time_to_seconds
-from jipandan.tui.widgets.waveform import WaveformWidget, format_playback_remaining
+from jipandan.tui.widgets.waveform import (
+    GENERATING_WAVEFORM_PLACEHOLDER,
+    WaveformWidget,
+    format_playback_remaining,
+)
 
 WAVEFORM_DEBOUNCE_SECONDS = 0.4
 FINE_VIEW_SECONDS = 0.5
@@ -717,7 +721,7 @@ class ClipDetailPanel(Vertical):
         generation = getattr(self, generation_attr) + 1
         setattr(self, generation_attr, generation)
         if not keep_previous:
-            set_placeholder("Generating waveform…")
+            set_placeholder(GENERATING_WAVEFORM_PLACEHOLDER)
 
         app = self.app
 
@@ -937,7 +941,7 @@ class ClipDetailPanel(Vertical):
         if not (keep_previous and self._displayed_waveform_viewport is not None):
             self.app.call_from_thread(
                 self._set_full_waveform_placeholder,
-                "Generating waveform…",
+                GENERATING_WAVEFORM_PLACEHOLDER,
             )
         try:
             target_png, media_duration = self.generate_waveform_file(candidate)

@@ -2,8 +2,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 from textual.app import ComposeResult
-from textual.containers import Vertical
-from textual.widgets import Static
+from textual.containers import Center, Vertical
+from textual.widgets import LoadingIndicator, Static
 from textual_image.widget._base import Image as BaseWaveformImage
 
 from jipandan.core.ffmpeg import WAVEFORM_PIXEL_SIZE
@@ -14,6 +14,12 @@ _MARKER_EPSILON_SECONDS = 0.001
 _START_MARKER_COLOR = (255, 200, 0, 255)
 _END_MARKER_COLOR = (255, 80, 200, 255)
 _MARKER_WIDTH_PX = 2
+
+GENERATING_WAVEFORM_PLACEHOLDER = "Generating waveform…"
+GENERATING_PREVIEW_PLACEHOLDER = "Generating preview…"
+_LOADING_PLACEHOLDERS = frozenset(
+    {GENERATING_WAVEFORM_PLACEHOLDER, GENERATING_PREVIEW_PLACEHOLDER}
+)
 
 
 def format_playback_remaining(seconds: float) -> str:
@@ -75,8 +81,31 @@ class WaveformWidget(Vertical, can_focus=True):
         display: none;
     }
 
-    #waveform-placeholder {
+    #waveform-placeholder-panel {
         height: 1fr;
+        width: 100%;
+        align: center middle;
+    }
+
+    #waveform-loading-row {
+        height: auto;
+        width: 100%;
+        margin-bottom: 1;
+    }
+
+    #waveform-placeholder-row {
+        height: auto;
+        width: 100%;
+    }
+
+    #waveform-loading {
+        height: auto;
+        width: auto;
+    }
+
+    #waveform-placeholder {
+        height: auto;
+        width: auto;
         content-align: center middle;
     }
     """
@@ -95,11 +124,15 @@ class WaveformWidget(Vertical, can_focus=True):
         self._pending_image_apply = False
 
     def compose(self) -> ComposeResult:
-        yield Static(
-            "Generating waveform…",
-            id="waveform-placeholder",
-            markup=False,
-        )
+        with Vertical(id="waveform-placeholder-panel"):
+            with Center(id="waveform-loading-row"):
+                yield LoadingIndicator(id="waveform-loading")
+            with Center(id="waveform-placeholder-row"):
+                yield Static(
+                    GENERATING_WAVEFORM_PLACEHOLDER,
+                    id="waveform-placeholder",
+                    markup=False,
+                )
 
     def on_mount(self) -> None:
         image = waveform_image_class(is_web=self.app.is_web)(id="waveform-image")
@@ -109,9 +142,14 @@ class WaveformWidget(Vertical, can_focus=True):
 
     def _nodes_ready(self) -> bool:
         return (
-            len(self.query("#waveform-placeholder")) > 0
+            len(self.query("#waveform-placeholder-panel")) > 0
+            and len(self.query("#waveform-placeholder")) > 0
             and len(self.query("#waveform-image")) > 0
         )
+
+    @staticmethod
+    def _shows_loading_indicator(message: str) -> bool:
+        return message in _LOADING_PLACEHOLDERS
 
     def _clear_base_image_cache(self) -> None:
         self._cached_base_path = None
@@ -156,10 +194,13 @@ class WaveformWidget(Vertical, can_focus=True):
             self._pending_placeholder = message
             return
         self._pending_placeholder = None
+        panel = self.query_one("#waveform-placeholder-panel", Vertical)
+        loading = self.query_one("#waveform-loading", LoadingIndicator)
         placeholder = self.query_one("#waveform-placeholder", Static)
         image = self.query_one("#waveform-image", BaseWaveformImage)
         placeholder.update(message)
-        placeholder.display = True
+        loading.display = self._shows_loading_indicator(message)
+        panel.display = True
         image.display = False
 
     def display_waveform(
@@ -290,14 +331,14 @@ class WaveformWidget(Vertical, can_focus=True):
         return canvas
 
     def _apply_image(self) -> None:
-        placeholder = self.query_one("#waveform-placeholder", Static)
+        panel = self.query_one("#waveform-placeholder-panel", Vertical)
         image = self.query_one("#waveform-image", BaseWaveformImage)
         try:
             image.image = self._render_image()
         except OSError as exc:
             self.show_placeholder(f"Waveform failed: {exc}")
             return
-        placeholder.display = False
+        panel.display = False
         image.display = True
         image.refresh()
 
