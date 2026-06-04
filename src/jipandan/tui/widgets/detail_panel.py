@@ -60,7 +60,7 @@ class ClipDetailPanel(Vertical):
         height: 1fr;
     }
 
-    #clip-times, #clip-status, #clip-times-fine, #clip-times-fine-end {
+    #clip-times, #clip-status, #clip-times-fine {
         height: auto;
         padding-top: 1;
     }
@@ -193,7 +193,6 @@ class ClipDetailPanel(Vertical):
         self.stop_playback()
         self._cancel_fine_debounce()
         self._active_candidate = candidate
-        self._update_fine_end_tab_labels(candidate)
         self._detail_tab = DETAIL_TAB_FINE_END
         self._sync_detail_tabs()
 
@@ -230,19 +229,12 @@ class ClipDetailPanel(Vertical):
         )
         self.query_one("#clip-times", Static).update("")
         self.query_one("#clip-times-fine", Static).update("")
-        self.query_one("#clip-times-fine-end", Static).update("")
         self.query_one("#clip-status", Static).update("")
 
     def _update_fine_start_tab_labels(self, candidate: ClipCandidate) -> None:
         start_offset = candidate.start_offset_seconds()
         self.query_one("#clip-times-fine", Static).update(
             f"Start: {candidate.start}  ({start_offset:+.3f}s from original)"
-        )
-
-    def _update_fine_end_tab_labels(self, candidate: ClipCandidate) -> None:
-        end_offset = candidate.end_offset_seconds()
-        self.query_one("#clip-times-fine-end", Static).update(
-            f"End: {candidate.end}  ({end_offset:+.3f}s from original)"
         )
 
     def update_detail(
@@ -261,7 +253,6 @@ class ClipDetailPanel(Vertical):
         )
         self.query_one("#clip-times", Static).update(times_text)
         self._update_fine_start_tab_labels(candidate)
-        self._update_fine_end_tab_labels(candidate)
         self.query_one("#clip-status", Static).update(
             self.clip_status_text(candidate)
         )
