@@ -63,6 +63,10 @@ class ExportPreviewModal(ModalScreen[str | bool | None]):
         margin-top: 1;
     }
 
+    #export-preview-times {
+        color: $text-muted;
+    }
+
     #export-preview-info {
         height: 1;
         color: $text-muted;
@@ -100,6 +104,10 @@ class ExportPreviewModal(ModalScreen[str | bool | None]):
         self._preview_generation = 0
 
     @staticmethod
+    def _format_times_line(candidate: ClipCandidate) -> str:
+        return f"Start: {candidate.start}    End: {candidate.end}"
+
+    @staticmethod
     def _format_seconds(seconds: float | None) -> str:
         if seconds is None:
             return "rendering…"
@@ -132,6 +140,11 @@ class ExportPreviewModal(ModalScreen[str | bool | None]):
             yield Label(
                 f"Preview export ({self._options.mode})  #{self._candidate.clip_id}",
                 id="export-preview-header",
+            )
+            yield Static(
+                self._format_times_line(self._candidate),
+                id="export-preview-times",
+                markup=False,
             )
             yield WaveformWidget(id="export-preview-waveform")
             yield Input(default_title, id="export-title-input")
@@ -231,10 +244,12 @@ class ExportPreviewModal(ModalScreen[str | bool | None]):
             return
         try:
             widget = self.query_one("#export-preview-waveform", WaveformWidget)
+            preview_duration = f"{preview_seconds:.3f}"
             widget.display_waveform(
                 waveform_path,
                 "00:00:00.000",
-                self._candidate.duration,
+                preview_duration,
+                media_duration=preview_seconds,
             )
             if not self._is_active:
                 return

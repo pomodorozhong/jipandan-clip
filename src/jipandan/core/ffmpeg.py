@@ -90,6 +90,36 @@ def probe_duration_seconds(audio: Path) -> float:
     return float(result.stdout.strip())
 
 
+def _extract_audio_slice(
+    input_audio: Path,
+    start: str,
+    duration: str,
+    out_mp3: Path,
+    *,
+    metadata: tuple[tuple[str, str], ...] = (),
+) -> None:
+    """Extract an MP3 slice with sample-accurate seek (re-encoded)."""
+    out_mp3.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-loglevel",
+        "quiet",
+        "-i",
+        str(input_audio),
+        "-ss",
+        start,
+        "-t",
+        duration,
+        "-q:a",
+        "2",
+    ]
+    for key, value in metadata:
+        cmd.extend(["-metadata", f"{key}={value}"])
+    cmd.append(str(out_mp3))
+    _run(cmd)
+
+
 def extract_preview(
     input_audio: Path,
     start: str,
@@ -97,24 +127,7 @@ def extract_preview(
     out_mp3: Path,
 ) -> None:
     """Extract a preview MP3 slice with sample-accurate seek (re-encoded)."""
-    out_mp3.parent.mkdir(parents=True, exist_ok=True)
-    _run(
-        [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            "quiet",
-            "-i",
-            str(input_audio),
-            "-ss",
-            start,
-            "-t",
-            duration,
-            "-q:a",
-            "2",
-            str(out_mp3),
-        ]
-    )
+    _extract_audio_slice(input_audio, start, duration, out_mp3)
 
 
 WAVEFORM_PIXEL_SIZE = (800, 200)
@@ -193,26 +206,15 @@ def export_clip(
     tmp_clip = tmp_root / f"{basename}.mp3"
     final_clip = clip_dir / f"{basename}.mp3"
 
-    _run(
-        [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            "quiet",
-            "-i",
-            str(input_audio),
-            "-ss",
-            candidate.start,
-            "-t",
-            candidate.duration,
-            "-c",
-            "copy",
-            "-metadata",
-            f"title={title}",
-            "-metadata",
-            f"TXXX:ORIGINAL_START_TIME={candidate.original_start}",
-            str(tmp_clip),
-        ]
+    _extract_audio_slice(
+        input_audio,
+        candidate.start,
+        candidate.duration,
+        tmp_clip,
+        metadata=(
+            ("title", title),
+            ("TXXX:ORIGINAL_START_TIME", candidate.original_start),
+        ),
     )
     options = export_options or ExportOptions(mode="trim_edges")
     audio_filter = _audio_filter_for_options(options)
