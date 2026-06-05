@@ -17,6 +17,7 @@ SESSION_VERSION = 2
 # When an operation collapses a clip to zero duration (start == end), the end is
 # pushed out by this many seconds so the clip remains usable.
 ZERO_DURATION_BUMP_SECONDS = 1.0
+MIN_CLIP_DURATION_SECONDS = 0.01
 
 
 @dataclass
@@ -296,7 +297,9 @@ class Session:
             return
         start_seconds = srt_time_to_seconds(candidate.start.replace(".", ","))
         end_seconds = start_seconds + float(candidate.duration)
-        nudged_start = min(end_seconds, start_seconds + delta_seconds)
+        latest_start = max(0.0, end_seconds - MIN_CLIP_DURATION_SECONDS)
+        nudged_start = start_seconds + delta_seconds
+        nudged_start = max(0.0, min(latest_start, nudged_start))
         candidate.start = seconds_to_ffmpeg_timestamp(nudged_start)
         candidate.duration = f"{max(0.0, end_seconds - nudged_start):.3f}"
         self._ensure_nonzero_duration(candidate)
@@ -305,7 +308,10 @@ class Session:
         candidate = self.get_candidate(clip_id)
         if candidate is None:
             return
-        duration = max(0.0, float(candidate.duration) + delta_seconds)
+        duration = max(
+            MIN_CLIP_DURATION_SECONDS,
+            float(candidate.duration) + delta_seconds,
+        )
         candidate.duration = f"{duration:.3f}"
         self._ensure_nonzero_duration(candidate)
 

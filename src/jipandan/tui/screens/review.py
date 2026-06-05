@@ -5,6 +5,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
+from textual.timer import Timer
 from textual.widgets import Footer, Header, Label, ListItem, ListView, Tab, Tabs
 
 from jipandan.core import ffmpeg
@@ -104,11 +105,31 @@ class ReviewScreen(Screen):
         Binding("r", "rename_title", "Rename"),
         Binding("ctrl+shift+x", "bulk_skip_above", "Skip above"),
         Binding("space,enter", "play_preview", "Play"),
-        Binding("[", "nudge_start_down", "Start -"),
-        Binding("]", "nudge_start_up", "Start +"),
+        Binding(
+            "left_square_bracket,[",
+            "nudge_start_down",
+            "Start -",
+            priority=True,
+        ),
+        Binding(
+            "right_square_bracket,]",
+            "nudge_start_up",
+            "Start +",
+            priority=True,
+        ),
         Binding("o", "set_trim_offsets", "Trim offsets"),
-        Binding("{", "nudge_end_down", "End -"),
-        Binding("}", "nudge_end_up", "End +"),
+        Binding(
+            "left_curly_bracket,{",
+            "nudge_end_down",
+            "End -",
+            priority=True,
+        ),
+        Binding(
+            "right_curly_bracket,}",
+            "nudge_end_up",
+            "End +",
+            priority=True,
+        ),
         Binding("e", "export_clip", "Export"),
         # Binding("f", "cycle_filter", "Filter"),
         Binding("f", "open_filter_modal", "Filter picker"),
@@ -117,8 +138,8 @@ class ReviewScreen(Screen):
         Binding("h", "toggle_hide_skipped", "Hide skipped"),
         Binding("ctrl+s", "save_session", "Save"),
         Binding("q", "app.quit", "Quit"),
-        Binding("comma,left", "open_fine_start_tab", show=False),
-        Binding(".,right", "open_fine_end_tab", show=False),
+        Binding("comma", "open_fine_start_tab", show=False, priority=True),
+        Binding("period,full_stop", "open_fine_end_tab", show=False, priority=True),
         Binding("escape", "close_fine_tab", show=False),
     ]
 
@@ -162,6 +183,7 @@ class ReviewScreen(Screen):
         )
         self._skip_undo_stack: list[tuple[str, ClipStatus]] = []
         self._waveform_bulk_progress: str | None = None
+        self._persist_debounce_timer: Timer | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -236,13 +258,23 @@ class ReviewScreen(Screen):
         if candidate is not None:
             self._detail_panel().open_fine_end_tab(candidate)
 
-    def _update_detail(self, clip_id: str, *, debounce_waveform: bool = False) -> None:
+    def _update_detail(
+        self,
+        clip_id: str,
+        *,
+        debounce_waveform: bool = False,
+        waveform_regen_on_debounce: bool = True,
+        force_waveform_regen: bool = False,
+    ) -> None:
         candidate = self.session.get_candidate(clip_id)
         if candidate is None:
             self._detail_panel().clear_detail()
             return
         self._detail_panel().update_detail(
-            candidate, debounce_waveform=debounce_waveform
+            candidate,
+            debounce_waveform=debounce_waveform,
+            waveform_regen_on_debounce=waveform_regen_on_debounce,
+            force_waveform_regen=force_waveform_regen,
         )
 
     def _clear_detail(self) -> None:
@@ -500,6 +532,28 @@ class ReviewScreen(Screen):
 
     def _persist(self) -> None:
         self.session.save()
+
+    def _persist_debounced(self, *, delay_seconds: float = 0.5) -> None:
+        if self._persist_debounce_timer is not None:
+            self._persist_debounce_timer.stop()
+            self._persist_debounce_timer = None
+
+        def save_session() -> None:
+            self._persist_debounce_timer = None
+            self._persist()
+
+        self._persist_debounce_timer = self.set_timer(
+            delay_seconds,
+            save_session,
+            name="persist-debounce",
+        )
+
+    def _restore_list_index_if_drifted(self, pinned_index: int | None) -> None:
+        if pinned_index is None:
+            return
+        list_view = self.query_one("#clip-list", ListView)
+        if list_view.index != pinned_index:
+            list_view.index = pinned_index
 
     def _set_status(self, status: ClipStatus) -> None:
         candidate = self._current_candidate()
@@ -845,7 +899,11 @@ class ReviewScreen(Screen):
         self.session.set_trim_offsets(
             clip_id, offsets.start, offsets.end
         )
-        self._update_detail(clip_id, debounce_waveform=True)
+        self._update_detail(
+            clip_id,
+            debounce_waveform=True,
+            force_waveform_regen=True,
+        )
         self._persist()
         self.notify(
             f"Offsets set: start {offsets.start:+.3f}s, end {offsets.end:+.3f}s from original"
@@ -873,17 +931,31 @@ class ReviewScreen(Screen):
         candidate = self._current_candidate()
         if candidate is None:
             return
-        self.session.nudge_start(candidate.clip_id, delta)
-        self._update_detail(candidate.clip_id, debounce_waveform=True)
-        self._persist()
+        clip_id = candidate.clip_id
+        list_view = self.query_one("#clip-list", ListView)
+        pinned_index = list_view.index
+        self.session.nudge_start(clip_id, delta)
+        candidate = self.session.get_candidate(clip_id)
+        if candidate is None:
+            return
+        self._detail_panel().update_after_nudge(candidate)
+        self.call_after_refresh(self._restore_list_index_if_drifted, pinned_index)
+        self._persist_debounced()
 
     def _nudge_end(self, delta: float) -> None:
         candidate = self._current_candidate()
         if candidate is None:
             return
-        self.session.nudge_end(candidate.clip_id, delta)
-        self._update_detail(candidate.clip_id, debounce_waveform=True)
-        self._persist()
+        clip_id = candidate.clip_id
+        list_view = self.query_one("#clip-list", ListView)
+        pinned_index = list_view.index
+        self.session.nudge_end(clip_id, delta)
+        candidate = self.session.get_candidate(clip_id)
+        if candidate is None:
+            return
+        self._detail_panel().update_after_nudge(candidate)
+        self.call_after_refresh(self._restore_list_index_if_drifted, pinned_index)
+        self._persist_debounced()
 
     def action_play_preview(self) -> None:
         panel = self._detail_panel()

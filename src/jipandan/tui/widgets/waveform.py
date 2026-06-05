@@ -240,8 +240,17 @@ class WaveformWidget(Vertical, can_focus=True):
             return
         if self._viewport_duration is None:
             return
-        self._marker_start = _timestamp_seconds(clip_start)
-        self._marker_end = _timestamp_seconds(clip_end)
+        marker_start = _timestamp_seconds(clip_start)
+        marker_end = _timestamp_seconds(clip_end)
+        if (
+            self._marker_start is not None
+            and self._marker_end is not None
+            and abs(self._marker_start - marker_start) < _MARKER_EPSILON_SECONDS
+            and abs(self._marker_end - marker_end) < _MARKER_EPSILON_SECONDS
+        ):
+            return
+        self._marker_start = marker_start
+        self._marker_end = marker_end
         if not self._nodes_ready():
             self._pending_image_apply = True
             self._pending_placeholder = None
@@ -272,56 +281,33 @@ class WaveformWidget(Vertical, can_focus=True):
         assert image_duration is not None
         return image_start, image_duration, image_start + image_duration
 
-    def _render_time_range(self) -> tuple[float, float]:
+    def _marker_draw_range(self) -> tuple[float, float, float, float, float]:
+        """Return image bounds and marker times clamped to the loaded waveform."""
         image_start, image_duration, image_end = self._image_time_range()
         marker_start = self._marker_start
         marker_end = self._marker_end
         assert marker_start is not None and marker_end is not None
-        render_start = min(image_start, marker_start)
-        render_end = max(image_end, marker_end)
-        render_duration = max(render_end - render_start, _MARKER_EPSILON_SECONDS)
-        return render_start, render_duration
+        draw_start = max(image_start, min(marker_start, image_end))
+        draw_end = max(draw_start, min(marker_end, image_end))
+        return image_start, image_duration, image_end, draw_start, draw_end
 
     def _render_image(self) -> Image.Image:
         base = self._load_base_image()
         if self._markers_match_viewport():
             return base.copy()
 
-        image_start, image_duration, image_end = self._image_time_range()
-        marker_start = self._marker_start
-        marker_end = self._marker_end
-        assert marker_start is not None and marker_end is not None
-
-        render_start, render_duration = self._render_time_range()
+        image_start, image_duration, image_end, draw_start, draw_end = (
+            self._marker_draw_range()
+        )
 
         width, height = base.size
-        if render_duration > image_duration + _MARKER_EPSILON_SECONDS:
-            src_left = _time_to_pixel_x(
-                image_start, image_start, image_duration, width
-            )
-            src_right = _time_to_pixel_x_exclusive(
-                image_end, image_start, image_duration, width
-            )
-            crop = base.crop((src_left, 0, src_right, height))
-            dst_left = _time_to_pixel_x(
-                image_start, render_start, render_duration, width
-            )
-            dst_right = _time_to_pixel_x_exclusive(
-                image_end, render_start, render_duration, width
-            )
-            target_width = max(1, dst_right - dst_left)
-            if crop.width != target_width:
-                crop = crop.resize((target_width, height), Image.Resampling.LANCZOS)
-            canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-            canvas.paste(crop, (dst_left, 0))
-        else:
-            canvas = base.copy()
+        canvas = base.copy()
 
         start_x = _time_to_pixel_x(
-            marker_start, render_start, render_duration, width
+            draw_start, image_start, image_duration, width
         )
         end_x = _time_to_pixel_x(
-            marker_end, render_start, render_duration, width
+            draw_end, image_start, image_duration, width
         )
         draw = ImageDraw.Draw(canvas)
         for x, color in ((start_x, _START_MARKER_COLOR), (end_x, _END_MARKER_COLOR)):
