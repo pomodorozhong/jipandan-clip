@@ -31,6 +31,7 @@ FINE_PADDING_SECONDS = 0.3
 FINE_REGEN_PADDING_SECONDS = 0.1
 FINE_EXTRACT_SECONDS = FINE_PADDING_SECONDS + FINE_CLIP_SECONDS
 FINE_EXTRACT_DURATION = f"{FINE_EXTRACT_SECONDS:.3f}"
+FINE_PREGEN_DELAY_SECONDS = 1.0
 FINE_NUDGE_FINE = 0.01
 FINE_NUDGE_COARSE = 0.1
 FINE_START_NUDGE_FINE = FINE_NUDGE_FINE
@@ -125,6 +126,9 @@ class ClipDetailPanel(Vertical):
         self._waveform_debounce_timer: Timer | None = None
         self._fine_debounce_timer: Timer | None = None
         self._fine_end_debounce_timer: Timer | None = None
+        self._fine_pregen_timer: Timer | None = None
+        self._pending_fine_pregen_clip_id: str | None = None
+        self._fine_pregen_generation = 0
         self._pending_waveform_id: str | None = None
         self._pending_fine_clip_id: str | None = None
         self._pending_fine_end_clip_id: str | None = None
@@ -253,6 +257,7 @@ class ClipDetailPanel(Vertical):
         self._clip_waveform_states.clear()
         self._clip_fine_start_waveform_states.clear()
         self._clip_fine_end_waveform_states.clear()
+        self._cancel_fine_waveform_pregen()
         self.query_one("#clip-title", Static).update("No clips in current filter.")
         self.query_one("#waveform", WaveformWidget).show_placeholder("No waveform.")
         self.query_one("#waveform-fine", WaveformWidget).show_placeholder("No waveform.")
@@ -356,6 +361,7 @@ class ClipDetailPanel(Vertical):
                 self._waveform_debounce_timer = None
                 self._pending_waveform_id = None
                 self._waveform_debounce_started_at = None
+        self._schedule_fine_waveform_pregen(candidate.clip_id)
 
     def update_detail(
         self,
@@ -390,6 +396,102 @@ class ClipDetailPanel(Vertical):
                 self._show_fine_end_waveform(candidate)
             else:
                 self._show_waveform(candidate)
+        self._schedule_fine_waveform_pregen(candidate.clip_id)
+
+    def _fine_waveforms_cached_in_memory(self, candidate: ClipCandidate) -> bool:
+        start = self._clip_fine_start_waveform_states.get(candidate.clip_id)
+        end = self._clip_fine_end_waveform_states.get(candidate.clip_id)
+        if start is None or end is None:
+            return False
+        if not start.path.exists() or not end.path.exists():
+            return False
+        if self._fine_start_padding_insufficient(candidate, start.extract_start):
+            return False
+        if self._fine_end_padding_insufficient(candidate, end.extract_start):
+            return False
+        return True
+
+    def _cancel_fine_waveform_pregen(self) -> None:
+        if self._fine_pregen_timer is not None:
+            self._fine_pregen_timer.stop()
+            self._fine_pregen_timer = None
+        self._pending_fine_pregen_clip_id = None
+        self._fine_pregen_generation += 1
+
+    def _schedule_fine_waveform_pregen(self, clip_id: str) -> None:
+        if self._fine_pregen_timer is not None:
+            self._fine_pregen_timer.stop()
+            self._fine_pregen_timer = None
+        self._pending_fine_pregen_clip_id = clip_id
+
+        def start_pregen() -> None:
+            self._fine_pregen_timer = None
+            pending_id = self._pending_fine_pregen_clip_id
+            self._pending_fine_pregen_clip_id = None
+            if pending_id is None:
+                return
+            if (
+                self._active_candidate is None
+                or self._active_candidate.clip_id != pending_id
+            ):
+                return
+            candidate = self.session.get_candidate(pending_id)
+            if candidate is None or self._fine_waveforms_cached_in_memory(candidate):
+                return
+            self._fine_pregen_generation += 1
+            generation = self._fine_pregen_generation
+            self._run_fine_waveform_pregen(pending_id, generation)
+
+        self._fine_pregen_timer = self.set_timer(
+            FINE_PREGEN_DELAY_SECONDS,
+            start_pregen,
+            name="fine-pregen",
+        )
+
+    def _store_fine_waveform_pregen(
+        self,
+        clip_id: str,
+        *,
+        generation: int,
+        start_state: _FineWaveformState,
+        end_state: _FineWaveformState,
+    ) -> None:
+        if generation != self._fine_pregen_generation:
+            return
+        self._clip_fine_start_waveform_states[clip_id] = start_state
+        self._clip_fine_end_waveform_states[clip_id] = end_state
+
+    @work(thread=True, exclusive=True, group="fine-pregen")
+    def _run_fine_waveform_pregen(self, clip_id: str, generation: int) -> None:
+        candidate = self.session.get_candidate(clip_id)
+        if candidate is None:
+            return
+        try:
+            start_png, start_duration = self._generate_fine_start_waveform_file(
+                candidate
+            )
+            end_png, end_duration = self._generate_fine_end_waveform_file(candidate)
+        except Exception:
+            return
+        if generation != self._fine_pregen_generation:
+            return
+        start_state = _FineWaveformState(
+            path=start_png,
+            extract_start=self._fine_start_extract_start(candidate),
+            media_duration=start_duration,
+        )
+        end_state = _FineWaveformState(
+            path=end_png,
+            extract_start=self._fine_end_extract_start(candidate),
+            media_duration=end_duration,
+        )
+        self.app.call_from_thread(
+            self._store_fine_waveform_pregen,
+            clip_id,
+            generation=generation,
+            start_state=start_state,
+            end_state=end_state,
+        )
 
     def is_playing(self) -> bool:
         process = self._playback_process
