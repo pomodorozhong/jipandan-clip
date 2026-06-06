@@ -1,5 +1,6 @@
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,11 +24,74 @@ from jipandan.tui.widgets.waveform import (
 
 _PREVIEW_DIR = Path("tmp") / "preview"
 
+DEFAULT_PRELOAD_EXPORT_OPTIONS = ExportOptions(mode="trim_edges")
+
+
+@dataclass(frozen=True)
+class ExportPreviewArtifacts:
+    preview_path: Path
+    waveform_path: Path
+    preview_seconds: float
+    as_is_seconds: float
+
 
 @dataclass(frozen=True)
 class ExportConfirm:
     title: str
     preview_path: Path | None
+
+
+def default_export_title(candidate: ClipCandidate) -> str:
+    if candidate.last_export_title is not None:
+        return candidate.last_export_title
+    return candidate.title
+
+
+def export_preview_key(
+    candidate: ClipCandidate,
+    options: ExportOptions,
+    preview_title: str,
+) -> tuple[object, ...]:
+    return (
+        candidate.clip_id,
+        candidate.start,
+        candidate.duration,
+        options.mode,
+        options.start_threshold_db,
+        options.stop_threshold_db,
+        preview_title,
+    )
+
+
+def build_export_preview_artifacts(
+    audio: Path,
+    candidate: ClipCandidate,
+    options: ExportOptions,
+    *,
+    preview_dir: Path = _PREVIEW_DIR,
+) -> ExportPreviewArtifacts:
+    preview_title = default_export_title(candidate)
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    preview_path = ffmpeg.export_clip(
+        audio,
+        candidate,
+        preview_dir,
+        export_title=preview_title,
+        export_options=options,
+    )
+    preview_seconds = ffmpeg.probe_duration_seconds(preview_path)
+    if options.mode == "as_is":
+        as_is_seconds = preview_seconds
+    else:
+        as_is_seconds = float(candidate.duration)
+    waveform_path = preview_path.with_suffix(".png")
+    ffmpeg.render_waveform(preview_path, waveform_path)
+    return ExportPreviewArtifacts(
+        preview_path=preview_path,
+        waveform_path=waveform_path,
+        preview_seconds=preview_seconds,
+        as_is_seconds=as_is_seconds,
+    )
 
 
 class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
@@ -92,11 +156,14 @@ class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
         audio: Path,
         candidate: ClipCandidate,
         options: ExportOptions,
+        *,
+        try_preloaded: Callable[[], ExportPreviewArtifacts | None] | None = None,
     ) -> None:
         super().__init__()
         self._audio = audio
         self._candidate = candidate
         self._options = options
+        self._try_preloaded = try_preloaded
         self._preview_path: Path | None = None
         self._as_is_seconds: float | None = None
         self._preview_seconds: float | None = None
@@ -106,12 +173,6 @@ class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
         # Guard UI callbacks from worker threads after the modal is dismissed.
         self._is_active = False
         self._preview_generation = 0
-
-    @staticmethod
-    def _default_export_title(candidate: ClipCandidate) -> str:
-        if candidate.last_export_title is not None:
-            return candidate.last_export_title
-        return candidate.title
 
     @staticmethod
     def _format_times_line(candidate: ClipCandidate) -> str:
@@ -141,7 +202,7 @@ class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
         return f"As is: {as_is}    Preview: {preview}    {delta}"
 
     def compose(self) -> ComposeResult:
-        default_title = self._default_export_title(self._candidate)
+        default_title = default_export_title(self._candidate)
         with Vertical(id="export-preview-dialog"):
             yield Label(
                 f"Preview export ({self._options.mode})  #{self._candidate.clip_id}",
@@ -197,38 +258,30 @@ class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
     @work(thread=True, exclusive=True, group="export-preview")
     def _build_preview(self) -> None:
         generation = self._preview_generation
-        preview_title = self._default_export_title(self._candidate)
         try:
-            _PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
-            preview_path = ffmpeg.export_clip(
-                self._audio,
-                self._candidate,
-                _PREVIEW_DIR,
-                export_title=preview_title,
-                export_options=self._options,
-            )
-            preview_seconds = ffmpeg.probe_duration_seconds(preview_path)
-            if self._options.mode == "as_is":
-                as_is_seconds = preview_seconds
-            else:
-                # Nominal slice duration; avoids a second ffmpeg pass for the baseline.
-                as_is_seconds = float(self._candidate.duration)
-            waveform_path = preview_path.with_suffix(".png")
-            ffmpeg.render_waveform(preview_path, waveform_path)
+            artifacts: ExportPreviewArtifacts | None = None
+            if self._try_preloaded is not None:
+                artifacts = self._try_preloaded()
+            if artifacts is None:
+                artifacts = build_export_preview_artifacts(
+                    self._audio,
+                    self._candidate,
+                    self._options,
+                )
         except Exception as exc:
             if self._preview_still_valid(generation):
                 self.app.call_from_thread(self._on_preview_failed, str(exc))
             return
         if not self._preview_still_valid(generation):
             return
-        self._preview_path = preview_path
-        self._as_is_seconds = as_is_seconds
-        self._preview_seconds = preview_seconds
+        self._preview_path = artifacts.preview_path
+        self._as_is_seconds = artifacts.as_is_seconds
+        self._preview_seconds = artifacts.preview_seconds
         self.app.call_from_thread(
             self._on_preview_ready,
-            waveform_path,
-            as_is_seconds,
-            preview_seconds,
+            artifacts.waveform_path,
+            artifacts.as_is_seconds,
+            artifacts.preview_seconds,
         )
 
     def _on_preview_ready(

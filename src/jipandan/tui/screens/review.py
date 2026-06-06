@@ -1,3 +1,4 @@
+import threading
 from pathlib import Path
 
 from textual import on, work
@@ -13,7 +14,15 @@ from jipandan.core.models import ClipCandidate, ClipStatus, Session
 from jipandan.core.ffmpeg import ExportOptions
 from jipandan.tui.screens.edit_title import EditTitleModal
 from jipandan.tui.screens.export_mode import ExportModeModal
-from jipandan.tui.screens.export_preview import ExportConfirm, ExportPreviewModal
+from jipandan.tui.screens.export_preview import (
+    DEFAULT_PRELOAD_EXPORT_OPTIONS,
+    ExportConfirm,
+    ExportPreviewArtifacts,
+    ExportPreviewModal,
+    build_export_preview_artifacts,
+    default_export_title,
+    export_preview_key,
+)
 from jipandan.tui.screens.filter_selection import (
     FILTER_BAR_LABELS,
     FILTER_ORDER,
@@ -184,6 +193,11 @@ class ReviewScreen(Screen):
         self._skip_undo_stack: list[tuple[str, ClipStatus]] = []
         self._waveform_bulk_progress: str | None = None
         self._persist_debounce_timer: Timer | None = None
+        self._export_preview_preload_generation = 0
+        self._export_preview_preload_key: tuple[object, ...] | None = None
+        self._export_preview_preload: ExportPreviewArtifacts | None = None
+        self._export_preview_preload_error: str | None = None
+        self._export_preview_preload_ready = threading.Event()
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -984,9 +998,71 @@ class ReviewScreen(Screen):
             initial_options = ExportOptions(**kwargs)  # type: ignore[arg-type]
         self._open_export_mode_modal(clip_id, initial_options)
 
+    def _invalidate_export_preview_preload(self) -> None:
+        self._export_preview_preload_generation += 1
+        self._export_preview_preload_key = None
+        self._export_preview_preload = None
+        self._export_preview_preload_error = None
+        self._export_preview_preload_ready.clear()
+
+    def _start_export_preview_preload(self, clip_id: str) -> None:
+        candidate = self.session.get_candidate(clip_id)
+        if candidate is None:
+            return
+        options = DEFAULT_PRELOAD_EXPORT_OPTIONS
+        preview_title = default_export_title(candidate)
+        generation = self._export_preview_preload_generation + 1
+        self._export_preview_preload_generation = generation
+        self._export_preview_preload_key = export_preview_key(
+            candidate, options, preview_title
+        )
+        self._export_preview_preload = None
+        self._export_preview_preload_error = None
+        self._export_preview_preload_ready.clear()
+        self._run_export_preview_preload(clip_id, generation)
+
+    @work(thread=True, exclusive=True, group="export-preview-preload")
+    def _run_export_preview_preload(self, clip_id: str, generation: int) -> None:
+        candidate = self.session.get_candidate(clip_id)
+        if candidate is None:
+            return
+        try:
+            artifacts = build_export_preview_artifacts(
+                self.session.audio,
+                candidate,
+                DEFAULT_PRELOAD_EXPORT_OPTIONS,
+            )
+        except Exception as exc:
+            if generation != self._export_preview_preload_generation:
+                return
+            self._export_preview_preload_error = str(exc)
+            self._export_preview_preload_ready.set()
+            return
+        if generation != self._export_preview_preload_generation:
+            return
+        self._export_preview_preload = artifacts
+        self._export_preview_preload_ready.set()
+
+    def _consume_export_preview_preload(
+        self,
+        candidate: ClipCandidate,
+        options: ExportOptions,
+    ) -> ExportPreviewArtifacts | None:
+        preview_title = default_export_title(candidate)
+        key = export_preview_key(candidate, options, preview_title)
+        if self._export_preview_preload_key != key:
+            return None
+        self._export_preview_preload_ready.wait()
+        if self._export_preview_preload_key != key:
+            return None
+        if self._export_preview_preload_error is not None:
+            return None
+        return self._export_preview_preload
+
     def _open_export_mode_modal(
         self, clip_id: str, initial_options: ExportOptions | None
     ) -> None:
+        self._start_export_preview_preload(clip_id)
         self.app.push_screen(
             ExportModeModal(initial_options=initial_options),
             lambda options: self._after_export_mode(clip_id, options),
@@ -996,12 +1072,20 @@ class ReviewScreen(Screen):
         self, clip_id: str, options: ExportOptions | None
     ) -> None:
         if options is None:
+            self._invalidate_export_preview_preload()
             return
         candidate = self.session.get_candidate(clip_id)
         if candidate is None:
             return
         self.app.push_screen(
-            ExportPreviewModal(self.session.audio, candidate, options),
+            ExportPreviewModal(
+                self.session.audio,
+                candidate,
+                options,
+                try_preloaded=lambda: self._consume_export_preview_preload(
+                    candidate, options
+                ),
+            ),
             lambda result: self._after_export_preview(clip_id, options, result),
         )
 
