@@ -189,6 +189,39 @@ def _audio_filter_for_options(options: ExportOptions) -> str | None:
     )
 
 
+def publish_prebuilt_clip(
+    source: Path,
+    input_audio: Path,
+    candidate: ClipCandidate,
+    clip_dir: Path,
+    export_title: str,
+) -> Path:
+    """Copy a preview-rendered clip into ``clip_dir`` with final metadata."""
+    clip_dir.mkdir(parents=True, exist_ok=True)
+    basename = export_basename(input_audio, candidate.filename_token, export_title)
+    final_clip = clip_dir / f"{basename}.mp3"
+    if source.resolve() == final_clip.resolve():
+        return final_clip
+    _run(
+        [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "quiet",
+            "-i",
+            str(source),
+            "-c",
+            "copy",
+            "-metadata",
+            f"title={export_title}",
+            "-metadata",
+            f"TXXX:ORIGINAL_START_TIME={candidate.original_start}",
+            str(final_clip),
+        ]
+    )
+    return final_clip
+
+
 def export_clip(
     input_audio: Path,
     candidate: ClipCandidate,

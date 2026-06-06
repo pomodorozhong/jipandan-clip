@@ -1,5 +1,6 @@
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from textual import work
@@ -21,18 +22,21 @@ from jipandan.tui.widgets.waveform import (
 )
 
 _PREVIEW_DIR = Path("tmp") / "preview"
-# Titles baked into the preview files; only ever read by the user from the tmp dir.
-_PREVIEW_TITLE = "preview"
-_AS_IS_TITLE = "preview-asis"
 
 
-class ExportPreviewModal(ModalScreen[str | bool | None]):
+@dataclass(frozen=True)
+class ExportConfirm:
+    title: str
+    preview_path: Path | None
+
+
+class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
     """Render export preview, collect the clip title, and start export on confirm.
 
     Dismissed value:
-      * ``str``   – export with this title
-      * ``False`` – back to the export mode picker (Esc while title is not focused)
-      * ``None``  – abort export (Esc while editing the title)
+      * ``ExportConfirm`` – export with this title (and optional preview artifact)
+      * ``False``         – back to the export mode picker (Esc while title is not focused)
+      * ``None``          – abort export (Esc while editing the title)
     """
 
     BINDINGS = [
@@ -104,6 +108,12 @@ class ExportPreviewModal(ModalScreen[str | bool | None]):
         self._preview_generation = 0
 
     @staticmethod
+    def _default_export_title(candidate: ClipCandidate) -> str:
+        if candidate.last_export_title is not None:
+            return candidate.last_export_title
+        return candidate.title
+
+    @staticmethod
     def _format_times_line(candidate: ClipCandidate) -> str:
         return f"Start: {candidate.start}    End: {candidate.end}"
 
@@ -131,11 +141,7 @@ class ExportPreviewModal(ModalScreen[str | bool | None]):
         return f"As is: {as_is}    Preview: {preview}    {delta}"
 
     def compose(self) -> ComposeResult:
-        default_title = (
-            self._candidate.last_export_title
-            if self._candidate.last_export_title is not None
-            else self._candidate.title
-        )
+        default_title = self._default_export_title(self._candidate)
         with Vertical(id="export-preview-dialog"):
             yield Label(
                 f"Preview export ({self._options.mode})  #{self._candidate.clip_id}",
@@ -191,31 +197,22 @@ class ExportPreviewModal(ModalScreen[str | bool | None]):
     @work(thread=True, exclusive=True, group="export-preview")
     def _build_preview(self) -> None:
         generation = self._preview_generation
+        preview_title = self._default_export_title(self._candidate)
         try:
             _PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
-            # Always render an "as is" baseline so both sides of the duration
-            # comparison come from real ffmpeg output; this cancels out mp3
-            # frame-alignment noise that would otherwise leak into the delta.
-            as_is_path = ffmpeg.export_clip(
+            preview_path = ffmpeg.export_clip(
                 self._audio,
                 self._candidate,
                 _PREVIEW_DIR,
-                export_title=_AS_IS_TITLE,
-                export_options=ExportOptions(mode="as_is"),
+                export_title=preview_title,
+                export_options=self._options,
             )
-            as_is_seconds = ffmpeg.probe_duration_seconds(as_is_path)
+            preview_seconds = ffmpeg.probe_duration_seconds(preview_path)
             if self._options.mode == "as_is":
-                preview_path = as_is_path
-                preview_seconds = as_is_seconds
+                as_is_seconds = preview_seconds
             else:
-                preview_path = ffmpeg.export_clip(
-                    self._audio,
-                    self._candidate,
-                    _PREVIEW_DIR,
-                    export_title=_PREVIEW_TITLE,
-                    export_options=self._options,
-                )
-                preview_seconds = ffmpeg.probe_duration_seconds(preview_path)
+                # Nominal slice duration; avoids a second ffmpeg pass for the baseline.
+                as_is_seconds = float(self._candidate.duration)
             waveform_path = preview_path.with_suffix(".png")
             ffmpeg.render_waveform(preview_path, waveform_path)
         except Exception as exc:
@@ -370,7 +367,9 @@ class ExportPreviewModal(ModalScreen[str | bool | None]):
             self.notify("Title cannot be empty", severity="warning")
             return
         self._deactivate()
-        self.dismiss(value)
+        self.dismiss(
+            ExportConfirm(title=value, preview_path=self._preview_path)
+        )
 
     def action_cancel(self) -> None:
         if self._title_input().has_focus:

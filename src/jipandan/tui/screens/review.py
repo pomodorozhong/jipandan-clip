@@ -13,7 +13,7 @@ from jipandan.core.models import ClipCandidate, ClipStatus, Session
 from jipandan.core.ffmpeg import ExportOptions
 from jipandan.tui.screens.edit_title import EditTitleModal
 from jipandan.tui.screens.export_mode import ExportModeModal
-from jipandan.tui.screens.export_preview import ExportPreviewModal
+from jipandan.tui.screens.export_preview import ExportConfirm, ExportPreviewModal
 from jipandan.tui.screens.filter_selection import (
     FILTER_BAR_LABELS,
     FILTER_ORDER,
@@ -1009,7 +1009,7 @@ class ReviewScreen(Screen):
         self,
         clip_id: str,
         options: ExportOptions,
-        result: str | bool | None,
+        result: ExportConfirm | bool | None,
     ) -> None:
         if result is False:
             # Esc on the preview reopens the export mode picker so the user
@@ -1027,13 +1027,12 @@ class ReviewScreen(Screen):
         self,
         clip_id: str,
         export_options: ExportOptions,
-        title: str | None,
+        confirm: ExportConfirm,
     ) -> None:
-        if title is None:
-            return
         candidate = self.session.get_candidate(clip_id)
         if candidate is None:
             return
+        title = confirm.title
         candidate.title = title
         candidate.last_export_title = title
         candidate.last_export_mode = export_options.mode
@@ -1041,7 +1040,7 @@ class ReviewScreen(Screen):
         candidate.last_export_stop_threshold_db = export_options.stop_threshold_db
         self._refresh_list_item(candidate)
         self._update_detail(candidate.clip_id)
-        self.run_export(candidate, title, export_options)
+        self.run_export(candidate, title, export_options, confirm.preview_path)
 
     @work(thread=True, exclusive=True)
     def run_export(
@@ -1049,15 +1048,25 @@ class ReviewScreen(Screen):
         candidate: ClipCandidate,
         export_title: str,
         export_options: ExportOptions,
+        preview_path: Path | None = None,
     ) -> None:
         try:
-            output = ffmpeg.export_clip(
-                self.session.audio,
-                candidate,
-                self.session.clip_dir,
-                export_title=export_title,
-                export_options=export_options,
-            )
+            if preview_path is not None and preview_path.exists():
+                output = ffmpeg.publish_prebuilt_clip(
+                    preview_path,
+                    self.session.audio,
+                    candidate,
+                    self.session.clip_dir,
+                    export_title,
+                )
+            else:
+                output = ffmpeg.export_clip(
+                    self.session.audio,
+                    candidate,
+                    self.session.clip_dir,
+                    export_title=export_title,
+                    export_options=export_options,
+                )
             candidate.status = "exported"
             self.app.call_from_thread(self._after_export, candidate, output)
         except Exception as exc:
