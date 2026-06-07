@@ -186,7 +186,7 @@ class ReviewScreen(Screen):
     def __init__(self, session: Session) -> None:
         super().__init__()
         self.session = session
-        self.filter_mode = "all"
+        self.filter_mode = "unsorted"
         self.hide_skipped = False
         self.filtered_clip_ids: list[str] = []
         self._waveform_cache_dir = (
