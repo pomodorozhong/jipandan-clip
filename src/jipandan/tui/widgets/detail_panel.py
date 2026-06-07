@@ -1222,7 +1222,7 @@ class ClipDetailPanel(Vertical):
             return target_png, ffmpeg.probe_duration_seconds(target_mp3)
         target_png.parent.mkdir(parents=True, exist_ok=True)
         extract_start, extract_duration = self._waveform_extract_range(candidate)
-        ffmpeg.extract_preview(
+        ffmpeg.extract_preview_fast(
             self.session.audio,
             extract_start,
             extract_duration,
@@ -1241,7 +1241,7 @@ class ClipDetailPanel(Vertical):
             return target_png, ffmpeg.probe_duration_seconds(target_mp3)
         target_png.parent.mkdir(parents=True, exist_ok=True)
         extract_start = self._fine_start_extract_start(candidate)
-        ffmpeg.extract_preview(
+        ffmpeg.extract_preview_fast(
             self.session.audio,
             seconds_to_ffmpeg_timestamp(extract_start),
             FINE_EXTRACT_DURATION,
@@ -1260,7 +1260,7 @@ class ClipDetailPanel(Vertical):
             return target_png, ffmpeg.probe_duration_seconds(target_mp3)
         extract_start = self._fine_end_extract_start(candidate)
         target_png.parent.mkdir(parents=True, exist_ok=True)
-        ffmpeg.extract_preview(
+        ffmpeg.extract_preview_fast(
             self.session.audio,
             seconds_to_ffmpeg_timestamp(extract_start),
             FINE_EXTRACT_DURATION,

@@ -120,6 +120,37 @@ def _extract_audio_slice(
     _run(cmd)
 
 
+def _extract_audio_slice_fast(
+    input_audio: Path,
+    start: str,
+    duration: str,
+    out_mp3: Path,
+) -> None:
+    """Extract an MP3 slice with fast input-side seek (re-encoded).
+
+    Places ``-ss`` before ``-i`` so ffmpeg can jump into long files quickly.
+    Boundaries may be slightly less accurate than :func:`_extract_audio_slice`.
+    """
+    out_mp3.parent.mkdir(parents=True, exist_ok=True)
+    _run(
+        [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "quiet",
+            "-ss",
+            start,
+            "-i",
+            str(input_audio),
+            "-t",
+            duration,
+            "-q:a",
+            "2",
+            str(out_mp3),
+        ]
+    )
+
+
 def extract_preview(
     input_audio: Path,
     start: str,
@@ -128,6 +159,16 @@ def extract_preview(
 ) -> None:
     """Extract a preview MP3 slice with sample-accurate seek (re-encoded)."""
     _extract_audio_slice(input_audio, start, duration, out_mp3)
+
+
+def extract_preview_fast(
+    input_audio: Path,
+    start: str,
+    duration: str,
+    out_mp3: Path,
+) -> None:
+    """Extract a preview MP3 slice optimized for waveform rendering."""
+    _extract_audio_slice_fast(input_audio, start, duration, out_mp3)
 
 
 WAVEFORM_PIXEL_SIZE = (800, 200)
