@@ -1,4 +1,5 @@
 import subprocess
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -39,6 +40,7 @@ class ExportPreviewArtifacts:
 class ExportConfirm:
     title: str
     preview_path: Path | None
+    wait_for_preview_path: Callable[[], Path | None] | None = None
 
 
 def default_export_title(candidate: ClipCandidate) -> str:
@@ -173,6 +175,9 @@ class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
         # Guard UI callbacks from worker threads after the modal is dismissed.
         self._is_active = False
         self._preview_generation = 0
+        self._handoff_ready = threading.Event()
+        self._handoff_artifacts: ExportPreviewArtifacts | None = None
+        self._handoff_error: str | None = None
 
     @staticmethod
     def _format_times_line(candidate: ClipCandidate) -> str:
@@ -226,20 +231,31 @@ class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
                 id="export-preview-hint",
             )
 
-    def _invalidate_preview_updates(self) -> None:
-        self._is_active = False
-        self._preview_generation += 1
-
     def _preview_still_valid(self, generation: int) -> bool:
         return self._is_active and generation == self._preview_generation
 
-    def _deactivate(self) -> None:
-        self._invalidate_preview_updates()
+    def _deactivate(self, *, cancel_build: bool = False) -> None:
+        self._is_active = False
         self._stop_playback()
+        if cancel_build:
+            self._preview_generation += 1
+
+    def _wait_for_preview_path(self) -> Path | None:
+        if self._preview_path is not None:
+            return self._preview_path
+        self._handoff_ready.wait()
+        if self._handoff_error is not None:
+            return None
+        if self._handoff_artifacts is not None:
+            return self._handoff_artifacts.preview_path
+        return None
 
     def on_mount(self) -> None:
         self._is_active = True
         self._preview_generation = 1
+        self._handoff_ready.clear()
+        self._handoff_artifacts = None
+        self._handoff_error = None
         widget = self.query_one("#export-preview-waveform", WaveformWidget)
         widget.focus()
         widget.show_placeholder(GENERATING_PREVIEW_PLACEHOLDER)
@@ -249,7 +265,8 @@ class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
         self._build_preview()
 
     def on_unmount(self) -> None:
-        self._deactivate()
+        self._is_active = False
+        self._stop_playback()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "export-title-input":
@@ -269,20 +286,26 @@ class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
                     self._options,
                 )
         except Exception as exc:
+            if generation == self._preview_generation:
+                self._handoff_error = str(exc)
+                self._handoff_ready.set()
             if self._preview_still_valid(generation):
                 self.app.call_from_thread(self._on_preview_failed, str(exc))
             return
-        if not self._preview_still_valid(generation):
+        if generation != self._preview_generation:
             return
+        self._handoff_artifacts = artifacts
+        self._handoff_ready.set()
         self._preview_path = artifacts.preview_path
         self._as_is_seconds = artifacts.as_is_seconds
         self._preview_seconds = artifacts.preview_seconds
-        self.app.call_from_thread(
-            self._on_preview_ready,
-            artifacts.waveform_path,
-            artifacts.as_is_seconds,
-            artifacts.preview_seconds,
-        )
+        if self._preview_still_valid(generation):
+            self.app.call_from_thread(
+                self._on_preview_ready,
+                artifacts.waveform_path,
+                artifacts.as_is_seconds,
+                artifacts.preview_seconds,
+            )
 
     def _on_preview_ready(
         self,
@@ -419,9 +442,16 @@ class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
         if not value:
             self.notify("Title cannot be empty", severity="warning")
             return
+        wait_for_preview_path = None
+        if self._preview_path is None:
+            wait_for_preview_path = self._wait_for_preview_path
         self._deactivate()
         self.dismiss(
-            ExportConfirm(title=value, preview_path=self._preview_path)
+            ExportConfirm(
+                title=value,
+                preview_path=self._preview_path,
+                wait_for_preview_path=wait_for_preview_path,
+            )
         )
 
     def action_cancel(self) -> None:
@@ -429,5 +459,5 @@ class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
             # While editing the title, Esc should just exit editing.
             self._waveform_widget().focus()
             return
-        self._deactivate()
+        self._deactivate(cancel_build=True)
         self.dismiss(False)

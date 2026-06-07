@@ -1,4 +1,5 @@
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 from textual import on, work
@@ -1206,7 +1207,13 @@ class ReviewScreen(Screen):
         candidate.last_export_stop_threshold_db = export_options.stop_threshold_db
         self._refresh_list_item(candidate)
         self._update_detail(candidate.clip_id)
-        self.run_export(candidate, title, export_options, confirm.preview_path)
+        self.run_export(
+            candidate,
+            title,
+            export_options,
+            confirm.preview_path,
+            confirm.wait_for_preview_path,
+        )
 
     @work(thread=True, exclusive=True)
     def run_export(
@@ -1215,8 +1222,16 @@ class ReviewScreen(Screen):
         export_title: str,
         export_options: ExportOptions,
         preview_path: Path | None = None,
+        wait_for_preview_path: Callable[[], Path | None] | None = None,
     ) -> None:
         try:
+            if preview_path is None and wait_for_preview_path is not None:
+                self.app.call_from_thread(
+                    self.notify,
+                    "Finishing preview…",
+                    severity="information",
+                )
+                preview_path = wait_for_preview_path()
             if preview_path is not None and preview_path.exists():
                 output = ffmpeg.publish_prebuilt_clip(
                     preview_path,
