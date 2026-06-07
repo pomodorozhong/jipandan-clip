@@ -1,3 +1,4 @@
+from functools import partial
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -108,6 +109,20 @@ class WaveformWidget(Vertical, can_focus=True):
         width: auto;
         content-align: center middle;
     }
+
+    #waveform-update-overlay {
+        layer: overlay;
+        width: 100%;
+        height: 1fr;
+        align: center middle;
+        background: $surface 50%;
+        display: none;
+    }
+
+    #waveform-update-loading {
+        height: auto;
+        width: auto;
+    }
     """
 
     def __init__(self, *args, **kwargs) -> None:
@@ -122,6 +137,8 @@ class WaveformWidget(Vertical, can_focus=True):
         self._marker_end: float | None = None
         self._pending_placeholder: str | None = None
         self._pending_image_apply = False
+        self._image_update_in_progress = False
+        self._image_update_token = 0
 
     def compose(self) -> ComposeResult:
         with Vertical(id="waveform-placeholder-panel"):
@@ -138,7 +155,18 @@ class WaveformWidget(Vertical, can_focus=True):
         image = waveform_image_class(is_web=self.app.is_web)(id="waveform-image")
         image.display = False
         self.mount(image)
+        overlay = Center(
+            LoadingIndicator(id="waveform-update-loading"),
+            id="waveform-update-overlay",
+        )
+        overlay.display = False
+        self.mount(overlay)
+        if self._image_update_in_progress:
+            overlay.display = True
         self._flush_pending_display()
+
+    def is_image_update_in_progress(self) -> bool:
+        return self._image_update_in_progress
 
     def _nodes_ready(self) -> bool:
         return (
@@ -146,6 +174,46 @@ class WaveformWidget(Vertical, can_focus=True):
             and len(self.query("#waveform-placeholder")) > 0
             and len(self.query("#waveform-image")) > 0
         )
+
+    def _update_overlay_ready(self) -> bool:
+        return len(self.query("#waveform-update-overlay")) > 0
+
+    def _show_update_overlay(self) -> None:
+        if not self._update_overlay_ready():
+            return
+        self.query_one("#waveform-update-overlay", Center).display = True
+
+    def _hide_update_overlay(self) -> None:
+        if not self._update_overlay_ready():
+            return
+        self.query_one("#waveform-update-overlay", Center).display = False
+
+    def _begin_image_update(self) -> int:
+        self._image_update_token += 1
+        self._image_update_in_progress = True
+        self._show_update_overlay()
+        return self._image_update_token
+
+    def _cancel_image_update(self, token: int | None = None) -> None:
+        if token is not None and token != self._image_update_token:
+            return
+        self._image_update_in_progress = False
+        self._hide_update_overlay()
+
+    def _finish_image_update(self, token: int) -> None:
+        if token != self._image_update_token:
+            return
+
+        def after_layout() -> None:
+            if token != self._image_update_token:
+                return
+
+            def after_sixel_mount() -> None:
+                self._cancel_image_update(token)
+
+            self.call_after_refresh(after_sixel_mount)
+
+        self.call_after_refresh(after_layout)
 
     @staticmethod
     def _shows_loading_indicator(message: str) -> bool:
@@ -182,6 +250,7 @@ class WaveformWidget(Vertical, can_focus=True):
             self._apply_image()
 
     def show_placeholder(self, message: str) -> None:
+        self._cancel_image_update()
         self._base_image_path = None
         self._clear_base_image_cache()
         self._viewport_start = None
@@ -317,16 +386,19 @@ class WaveformWidget(Vertical, can_focus=True):
         return canvas
 
     def _apply_image(self) -> None:
+        token = self._begin_image_update()
         panel = self.query_one("#waveform-placeholder-panel", Vertical)
         image = self.query_one("#waveform-image", BaseWaveformImage)
         try:
             image.image = self._render_image()
         except OSError as exc:
+            self._cancel_image_update(token)
             self.show_placeholder(f"Waveform failed: {exc}")
             return
         panel.display = False
         image.display = True
         image.refresh()
+        self.call_after_refresh(partial(self._finish_image_update, token))
 
     @staticmethod
     def expected_pixel_size() -> tuple[int, int]:

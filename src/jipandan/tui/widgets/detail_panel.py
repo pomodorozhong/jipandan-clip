@@ -181,6 +181,16 @@ class ClipDetailPanel(Vertical):
     def is_fine_tab(self) -> bool:
         return self._detail_tab in (DETAIL_TAB_FINE_START, DETAIL_TAB_FINE_END)
 
+    def is_waveform_image_updating(self) -> bool:
+        return self._active_waveform_widget().is_image_update_in_progress()
+
+    def _active_waveform_widget(self) -> WaveformWidget:
+        if self.is_fine_start_tab():
+            return self._fine_start_waveform_widget()
+        if self.is_fine_end_tab():
+            return self._fine_end_waveform_widget()
+        return self.query_one("#waveform", WaveformWidget)
+
     def _sync_detail_tabs(self) -> None:
         tabs = self.query_one("#detail-tabs", DetailTabs)
         if tabs.active != self._detail_tab:

@@ -942,6 +942,8 @@ class ReviewScreen(Screen):
             self._nudge_end(FINE_NUDGE_COARSE)
 
     def _nudge_start(self, delta: float) -> None:
+        if self._detail_panel().is_waveform_image_updating():
+            return
         candidate = self._current_candidate()
         if candidate is None:
             return
@@ -957,6 +959,8 @@ class ReviewScreen(Screen):
         self._persist_debounced()
 
     def _nudge_end(self, delta: float) -> None:
+        if self._detail_panel().is_waveform_image_updating():
+            return
         candidate = self._current_candidate()
         if candidate is None:
             return
