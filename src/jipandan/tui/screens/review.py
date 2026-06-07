@@ -45,7 +45,7 @@ STATUS_BADGE: dict[ClipStatus, str] = {
     "skipped": "--",
 }
 
-SKIPPED_HIDDEN_CLASS = "skipped-hidden"
+PROCESSED_HIDDEN_CLASS = "processed-hidden"
 FILTER_HIDDEN_CLASS = "filter-hidden"
 
 
@@ -146,7 +146,7 @@ class ReviewScreen(Screen):
         Binding("f", "open_filter_modal", "Filter picker"),
         Binding("g", "jump_to_index_prompt", "Jump index"),
         Binding("ctrl+g", "generate_filter_waveforms", "Pregen waveforms"),
-        Binding("h", "toggle_hide_skipped", "Hide skipped"),
+        Binding("h", "toggle_hide_processed", "Hide processed"),
         Binding("ctrl+s", "save_session", "Save"),
         Binding("q", "app.quit", "Quit"),
         Binding("comma", "open_fine_start_tab", show=False, priority=True),
@@ -172,7 +172,7 @@ class ReviewScreen(Screen):
         border: solid $primary;
     }
 
-    #clip-list ListItem.skipped-hidden,
+    #clip-list ListItem.processed-hidden,
     #clip-list ListItem.filter-hidden {
         display: none;
     }
@@ -188,7 +188,9 @@ class ReviewScreen(Screen):
         super().__init__()
         self.session = session
         self.filter_mode = "unsorted"
-        self.hide_skipped = False
+        self.hide_processed = False
+        self._pinned_processed_visible: set[str] = set()
+        self._processed_hidden: set[str] = set()
         self.filtered_clip_ids: list[str] = []
         self._waveform_cache_dir = (
             Path("tmp") / "waveform" / session.audio.stem
@@ -240,8 +242,8 @@ class ReviewScreen(Screen):
         return f"{self.session.audio.name}{position}  ({total} clips)"
 
     def _header_sub_title_text(self) -> str:
-        hide_label = "on" if self.hide_skipped else "off"
-        parts = [f"Hide skipped: {hide_label}"]
+        hide_label = "on" if self.hide_processed else "off"
+        parts = [f"Hide processed: {hide_label}"]
         if self._waveform_bulk_progress is not None:
             parts.append(self._waveform_bulk_progress)
         return "  ".join(parts)
@@ -257,7 +259,12 @@ class ReviewScreen(Screen):
         if mode is None or mode not in FILTER_ORDER or mode == self.filter_mode:
             return
         self.filter_mode = mode
+        self._reset_processed_visibility_state()
         self._apply_filter_to_items(select_first=True)
+
+    def _reset_processed_visibility_state(self) -> None:
+        self._pinned_processed_visible.clear()
+        self._processed_hidden.clear()
 
     def _detail_panel(self) -> ClipDetailPanel:
         return self.query_one("#detail-panel", ClipDetailPanel)
@@ -300,7 +307,7 @@ class ReviewScreen(Screen):
     def _help_text(self) -> str:
         return (
             "j/k nav  1/2 group  x skip  u undo skip  Ctrl+Shift+X skip above  "
-            "f filter  Ctrl+Shift+F filter picker  h hide skipped  Ctrl+S save  q quit"
+            "f filter  Ctrl+Shift+F filter picker  h hide processed  Ctrl+S save  q quit"
         )
 
     def _refresh_status_bars(self) -> None:
@@ -313,15 +320,20 @@ class ReviewScreen(Screen):
                 return False
         elif self.filter_mode != "all" and candidate.status != self.filter_mode:
             return False
-        if self.hide_skipped and candidate.status == "skipped":
-            return False
         return True
+
+    def _item_would_be_visible(self, candidate: ClipCandidate) -> bool:
+        if candidate.clip_id in self._processed_hidden:
+            return False
+        if candidate.clip_id in self._pinned_processed_visible:
+            return True
+        return self._candidate_matches_filter(candidate)
 
     def _visible_candidates(self) -> list[ClipCandidate]:
         return [
             candidate
             for candidate in self.session.candidates
-            if self._candidate_matches_filter(candidate)
+            if self._item_would_be_visible(candidate)
         ]
 
     def _clip_id_after_removing(self, visible_index: int) -> str | None:
@@ -336,15 +348,21 @@ class ReviewScreen(Screen):
         return (
             isinstance(item, ClipListItem)
             and FILTER_HIDDEN_CLASS not in item.classes
-            and SKIPPED_HIDDEN_CLASS not in item.classes
+            and PROCESSED_HIDDEN_CLASS not in item.classes
         )
 
-    def _sync_item_filter_visibility(self, item: ClipListItem) -> None:
+    def _sync_item_visibility(self, item: ClipListItem) -> None:
         candidate = self.session.get_candidate(item.candidate_id)
-        if candidate is not None and self._candidate_matches_filter(candidate):
+        visible = candidate is not None and self._item_would_be_visible(candidate)
+        if visible:
             item.remove_class(FILTER_HIDDEN_CLASS)
+            item.remove_class(PROCESSED_HIDDEN_CLASS)
         else:
             item.add_class(FILTER_HIDDEN_CLASS)
+            if candidate is not None and candidate.clip_id in self._processed_hidden:
+                item.add_class(PROCESSED_HIDDEN_CLASS)
+            else:
+                item.remove_class(PROCESSED_HIDDEN_CLASS)
 
     def _first_visible_dom_index(self, list_view: ListView) -> int | None:
         for index, item in enumerate(list_view.children):
@@ -361,7 +379,7 @@ class ReviewScreen(Screen):
         list_view = self.query_one("#clip-list", ListView)
         for item in list_view.children:
             if isinstance(item, ClipListItem):
-                self._sync_item_filter_visibility(item)
+                self._sync_item_visibility(item)
         self._sync_filtered_clip_ids(list_view)
         self._refresh_status_bars()
 
@@ -468,44 +486,81 @@ class ReviewScreen(Screen):
         item = self._find_list_item(clip_id)
         if item is None:
             return
-        item.remove_class(SKIPPED_HIDDEN_CLASS)
+        item.remove_class(PROCESSED_HIDDEN_CLASS)
+        self._pinned_processed_visible.discard(clip_id)
+        self._processed_hidden.discard(clip_id)
         item.refresh_candidate(candidate)
-        self._sync_item_filter_visibility(item)
+        self._sync_item_visibility(item)
         self._sync_filtered_clip_ids(list_view)
         list_view.index = list_view.children.index(item)
         self._update_detail(clip_id)
 
-    def _hide_skipped_at(
-        self,
-        list_view: ListView,
-        dom_index: int,
-        next_clip_id: str | None,
-    ) -> None:
-        item = list_view.children[dom_index]
-        if isinstance(item, ClipListItem):
-            item.add_class(SKIPPED_HIDDEN_CLASS)
-        visible_index = self._visible_position(list_view, dom_index)
-        del self.filtered_clip_ids[visible_index]
-        self._select_after_hide(list_view, dom_index, next_clip_id)
-
-    def _hide_skipped_bulk(
+    def _hide_processed_bulk(
         self,
         list_view: ListView,
         clip_ids: list[str],
         next_clip_id: str | None,
     ) -> None:
-        clip_id_set = set(clip_ids)
         hidden_dom_index = list_view.index or 0
-        for item in list_view.children:
-            if not isinstance(item, ClipListItem):
-                continue
-            if item.candidate_id not in clip_id_set:
-                continue
-            candidate = self.session.get_candidate(item.candidate_id)
-            if candidate is not None and candidate.status == "skipped":
-                item.add_class(SKIPPED_HIDDEN_CLASS)
-        self._sync_filtered_clip_ids(list_view)
+        for clip_id in clip_ids:
+            self._processed_hidden.add(clip_id)
+            candidate = self.session.get_candidate(clip_id)
+            if candidate is not None:
+                self._refresh_list_item(candidate)
         self._select_after_hide(list_view, hidden_dom_index, next_clip_id)
+
+    def _preserve_after_status_change(
+        self,
+        list_view: ListView,
+        dom_index: int | None,
+    ) -> str | None:
+        if dom_index is None:
+            return None
+        try:
+            visible_index = self._visible_position(list_view, dom_index)
+        except IndexError:
+            return None
+        return self._clip_id_after_removing(visible_index)
+
+    def _apply_status_change_visibility(
+        self,
+        candidate: ClipCandidate,
+        list_view: ListView,
+        *,
+        dom_index: int | None,
+        preserve_clip_id: str | None,
+        move_selection: bool = True,
+    ) -> None:
+        clip_id = candidate.clip_id
+        if preserve_clip_id is None:
+            preserve_clip_id = self._preserve_after_status_change(
+                list_view, dom_index
+            )
+
+        if self.hide_processed:
+            self._pinned_processed_visible.discard(clip_id)
+            self._processed_hidden.add(clip_id)
+        else:
+            self._pinned_processed_visible.add(clip_id)
+            self._processed_hidden.discard(clip_id)
+
+        self._refresh_list_item(candidate)
+
+        if not move_selection:
+            return
+
+        if dom_index is None:
+            item = self._find_list_item(clip_id)
+            if item is None:
+                return
+            dom_index = list_view.children.index(item)
+
+        if preserve_clip_id is None:
+            preserve_clip_id = self._preserve_after_status_change(
+                list_view, dom_index
+            )
+
+        self._select_after_hide(list_view, dom_index, preserve_clip_id)
 
     @work(exclusive=True)
     async def _rebuild_list(
@@ -549,7 +604,7 @@ class ReviewScreen(Screen):
             insert_after = self._find_list_item(source_clip_id)
 
         new_item = ClipListItem(duplicate)
-        self._sync_item_filter_visibility(new_item)
+        self._sync_item_visibility(new_item)
         if insert_after is not None:
             await list_view.mount(new_item, after=insert_after)
         else:
@@ -589,7 +644,7 @@ class ReviewScreen(Screen):
         for item in list_view.children:
             if isinstance(item, ClipListItem) and item.candidate_id == candidate.clip_id:
                 item.refresh_candidate(candidate)
-                self._sync_item_filter_visibility(item)
+                self._sync_item_visibility(item)
                 self._sync_filtered_clip_ids(list_view)
                 self._refresh_status_bars()
                 break
@@ -625,45 +680,18 @@ class ReviewScreen(Screen):
             return
         list_view = self.query_one("#clip-list", ListView)
         dom_index = list_view.index
-        visible_index = (
-            self._visible_position(list_view, dom_index)
-            if dom_index is not None
-            else None
-        )
-        preserve = (
-            self._clip_id_after_removing(visible_index)
-            if visible_index is not None
-            else None
-        )
+        preserve = self._preserve_after_status_change(list_view, dom_index)
         previous_status = candidate.status
-        candidate.status = status
+        if status == previous_status:
+            return
         if status == "skipped":
             self._skip_undo_stack.append((candidate.clip_id, previous_status))
-            self._refresh_list_item(candidate)
-            self._persist()
-            if dom_index is not None:
-                if self.hide_skipped:
-                    self._hide_skipped_at(list_view, dom_index, preserve)
-                else:
-                    self._select_after_hide(list_view, dom_index, preserve)
-            return
-        self._refresh_list_item(candidate)
-        item = self._find_list_item(candidate.clip_id)
-        if (
-            item is not None
-            and dom_index is not None
-            and not self._is_visible_item(item)
-        ):
-            preserve = (
-                self._clip_id_after_removing(visible_index)
-                if visible_index is not None
-                else None
-            )
-            self._select_after_hide(list_view, dom_index, preserve)
-            self._persist()
-            return
-        self._detail_panel().update_clip_status(
-            ClipDetailPanel.clip_status_text(candidate)
+        candidate.status = status
+        self._apply_status_change_visibility(
+            candidate,
+            list_view,
+            dom_index=dom_index,
+            preserve_clip_id=preserve,
         )
         self._persist()
 
@@ -786,18 +814,24 @@ class ReviewScreen(Screen):
         for entry in restored_before_skip:
             self._skip_undo_stack.append(entry)
         self._persist()
-        if self.hide_skipped and count > 0:
-            self._hide_skipped_bulk(list_view, clip_ids_to_skip, preserve)
+        if self.hide_processed and count > 0:
+            self._hide_processed_bulk(list_view, clip_ids_to_skip, preserve)
         else:
             for clip_id in clip_ids_to_skip:
                 candidate = self.session.get_candidate(clip_id)
-                if candidate is not None:
-                    self._refresh_list_item(candidate)
-            current = self._current_candidate()
-            if current is not None:
-                self._detail_panel().update_clip_status(
-                    ClipDetailPanel.clip_status_text(current)
-                )
+                if candidate is None:
+                    continue
+                self._pinned_processed_visible.add(clip_id)
+                self._refresh_list_item(candidate)
+            preserve = self._preserve_after_status_change(list_view, dom_index)
+            if preserve is not None:
+                self._select_after_hide(list_view, dom_index, preserve)
+            else:
+                current = self._current_candidate()
+                if current is not None:
+                    self._detail_panel().update_clip_status(
+                        ClipDetailPanel.clip_status_text(current)
+                    )
         self.notify(f"Skipped {count} unmarked clips (current and above)")
 
     def action_cycle_filter(self) -> None:
@@ -813,6 +847,7 @@ class ReviewScreen(Screen):
         if filter_mode is None or filter_mode == self.filter_mode:
             return
         self.filter_mode = filter_mode
+        self._reset_processed_visibility_state()
         self._sync_filter_tabs()
         self._apply_filter_to_items(select_first=True)
 
@@ -897,6 +932,7 @@ class ReviewScreen(Screen):
         self.filter_mode = FILTER_ORDER[
             (current_idx + direction) % len(FILTER_ORDER)
         ]
+        self._reset_processed_visibility_state()
         self._sync_filter_tabs()
         self._apply_filter_to_items(select_first=True)
 
@@ -927,24 +963,17 @@ class ReviewScreen(Screen):
         )
         self._run_bulk_waveform_generation(candidates)
 
-    def action_toggle_hide_skipped(self) -> None:
-        self.hide_skipped = not self.hide_skipped
-        list_view = self.query_one("#clip-list", ListView)
-        for item in list_view.children:
-            if not isinstance(item, ClipListItem):
-                continue
-            candidate = self.session.get_candidate(item.candidate_id)
-            if candidate is None or candidate.status != "skipped":
-                continue
-            if self.hide_skipped:
-                item.add_class(SKIPPED_HIDDEN_CLASS)
-            else:
-                item.remove_class(SKIPPED_HIDDEN_CLASS)
+    def action_toggle_hide_processed(self) -> None:
+        self.hide_processed = not self.hide_processed
+        if self.hide_processed:
+            self._pinned_processed_visible.clear()
+        else:
+            self._processed_hidden.clear()
         current = self._current_candidate()
         preserve = current.clip_id if current is not None else None
         self._apply_filter_to_items(preserve_clip_id=preserve)
-        state = "hidden" if self.hide_skipped else "shown"
-        self.notify(f"Skipped clips {state}")
+        state = "hidden" if self.hide_processed else "shown"
+        self.notify(f"Processed clips {state}")
 
     def action_save_session(self) -> None:
         self._persist()
@@ -1254,7 +1283,25 @@ class ReviewScreen(Screen):
             self.app.call_from_thread(self.notify, f"Export failed: {exc}", severity="error")
 
     def _after_export(self, candidate: ClipCandidate, output: Path) -> None:
-        self._refresh_list_item(candidate)
+        list_view = self.query_one("#clip-list", ListView)
+        item = self._find_list_item(candidate.clip_id)
+        dom_index = (
+            list_view.children.index(item)
+            if item is not None
+            else None
+        )
+        preserve = (
+            self._preserve_after_status_change(list_view, dom_index)
+            if self.hide_processed
+            else None
+        )
+        self._apply_status_change_visibility(
+            candidate,
+            list_view,
+            dom_index=dom_index,
+            preserve_clip_id=preserve,
+            move_selection=self.hide_processed,
+        )
         self._detail_panel().update_clip_status(
             f"{ClipDetailPanel.clip_status_text(candidate)}\nSaved: {output}"
         )
