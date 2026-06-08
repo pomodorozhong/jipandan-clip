@@ -368,6 +368,9 @@ class WaveformWidget(Vertical, can_focus=True):
     def _sync_nudge_bar(self) -> None:
         if self._nudge_bar is None:
             return
+        if self._nudge_handler is None:
+            self._nudge_bar.clear()
+            return
         if self._base_image_path is None or self._marker_start is None:
             self._nudge_bar.clear()
             return
