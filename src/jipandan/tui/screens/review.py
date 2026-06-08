@@ -258,13 +258,27 @@ class ReviewScreen(Screen):
         mode = event.tab.id
         if mode is None or mode not in FILTER_ORDER or mode == self.filter_mode:
             return
-        self.filter_mode = mode
-        self._reset_processed_visibility_state()
-        self._apply_filter_to_items(select_first=True)
+        self._set_filter_mode(mode)
 
     def _reset_processed_visibility_state(self) -> None:
         self._pinned_processed_visible.clear()
         self._processed_hidden.clear()
+
+    def _set_filter_mode(self, mode: str) -> None:
+        if mode == self.filter_mode:
+            return
+        previous_mode = self.filter_mode
+        current = self._current_candidate()
+        preserve_clip_id: str | None = None
+        if mode == "all" and previous_mode != "all" and current is not None:
+            preserve_clip_id = current.clip_id
+        self.filter_mode = mode
+        self._reset_processed_visibility_state()
+        self._sync_filter_tabs()
+        if preserve_clip_id is not None:
+            self._apply_filter_to_items(preserve_clip_id=preserve_clip_id)
+        else:
+            self._apply_filter_to_items(select_first=True)
 
     def _detail_panel(self) -> ClipDetailPanel:
         return self.query_one("#detail-panel", ClipDetailPanel)
@@ -846,10 +860,7 @@ class ReviewScreen(Screen):
     def _handle_filter_selection(self, filter_mode: str | None) -> None:
         if filter_mode is None or filter_mode == self.filter_mode:
             return
-        self.filter_mode = filter_mode
-        self._reset_processed_visibility_state()
-        self._sync_filter_tabs()
-        self._apply_filter_to_items(select_first=True)
+        self._set_filter_mode(filter_mode)
 
     @staticmethod
     def _parse_clip_index(clip_id: str) -> int | None:
@@ -929,12 +940,9 @@ class ReviewScreen(Screen):
 
     def _cycle_filter(self, *, direction: int) -> None:
         current_idx = FILTER_ORDER.index(self.filter_mode)
-        self.filter_mode = FILTER_ORDER[
-            (current_idx + direction) % len(FILTER_ORDER)
-        ]
-        self._reset_processed_visibility_state()
-        self._sync_filter_tabs()
-        self._apply_filter_to_items(select_first=True)
+        self._set_filter_mode(
+            FILTER_ORDER[(current_idx + direction) % len(FILTER_ORDER)]
+        )
 
     def action_generate_filter_waveforms(self) -> None:
         if self._waveform_bulk_progress is not None:
