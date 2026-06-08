@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import logging
 import shlex
 import sys
 from importlib.metadata import version
@@ -13,6 +15,9 @@ import aiohttp_jinja2
 from aiohttp import web
 
 from textual_serve.server import Server, to_int
+from textual_serve_asgi.app_service import AppService as WebAppService
+
+log = logging.getLogger(__name__)
 
 
 def _resolve_jipandan_args(jipandan_args: list[str]) -> list[str]:
@@ -69,6 +74,49 @@ class JipandanServer(Server):
                 "name": self.title,
             },
         }
+
+    async def handle_websocket(self, request: web.Request) -> web.WebSocketResponse:
+        """Start the app with xterm.js cell dimensions for correct Sixel scaling."""
+        websocket = web.WebSocketResponse(heartbeat=15)
+
+        width = to_int(request.query.get("width", "80"), 80)
+        height = to_int(request.query.get("height", "24"), 24)
+        cell_width = to_int(request.query.get("cellWidth", "0"), 0)
+        cell_height = to_int(request.query.get("cellHeight", "0"), 0)
+
+        app_service: WebAppService | None = None
+        try:
+            await websocket.prepare(request)
+            app_service = WebAppService(
+                self.command,
+                write_bytes=websocket.send_bytes,
+                write_str=websocket.send_str,
+                close=websocket.close,
+                download_manager=self.download_manager,
+                debug=self.debug,
+            )
+            await app_service.start(
+                width,
+                height,
+                cell_width=cell_width,
+                cell_height=cell_height,
+            )
+            try:
+                await self._process_messages(websocket, app_service)
+            finally:
+                await app_service.stop()
+
+        except asyncio.CancelledError:
+            await websocket.close()
+
+        except Exception as error:
+            log.exception(error)
+
+        finally:
+            if app_service is not None:
+                await app_service.stop()
+
+        return websocket
 
 
 def main() -> None:

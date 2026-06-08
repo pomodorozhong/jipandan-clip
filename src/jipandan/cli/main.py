@@ -2,10 +2,13 @@ import argparse
 import os
 from pathlib import Path
 
-# textual-image probes cell size at import time; set defaults for textual serve.
+# Fallback only when the web driver is not launched via `jipandan serve`
+# (which injects exact xterm CSS cell dimensions for Sixel scaling).
 if os.environ.get("TEXTUAL_DRIVER") == "textual.drivers.web_driver:WebDriver":
-    os.environ.setdefault("TEXTUAL_CELL_WIDTH", "8")
-    os.environ.setdefault("TEXTUAL_CELL_HEIGHT", "16")
+    if "TEXTUAL_CELL_WIDTH" not in os.environ:
+        os.environ["TEXTUAL_CELL_WIDTH"] = "8"
+    if "TEXTUAL_CELL_HEIGHT" not in os.environ:
+        os.environ["TEXTUAL_CELL_HEIGHT"] = "16"
 
 # Configure tqdm/Hugging Face before Textual starts (stderr has no real fd in TUIs).
 from jipandan.core.whisper import configure_progress_bars
