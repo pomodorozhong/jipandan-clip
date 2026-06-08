@@ -56,6 +56,8 @@ def _time_to_pixel_x_exclusive(
 
 
 class WaveformWidget(Vertical, can_focus=True):
+    ALLOW_SELECT = False
+
     DEFAULT_CSS = """
     WaveformWidget {
         height: 1fr;
@@ -115,11 +117,6 @@ class WaveformWidget(Vertical, can_focus=True):
         height: auto;
         width: auto;
     }
-
-    #waveform-nudge-bar {
-        height: 1;
-        width: 100%;
-    }
     """
 
     def __init__(self, *args, **kwargs) -> None:
@@ -154,6 +151,7 @@ class WaveformWidget(Vertical, can_focus=True):
 
     def on_mount(self) -> None:
         image = waveform_image_class(is_web=self.app.is_web)(id="waveform-image")
+        image.ALLOW_SELECT = False
         image.display = False
         self.mount(image)
         overlay = Center(

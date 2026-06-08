@@ -15,8 +15,7 @@ if TYPE_CHECKING:
 MARKER_EPSILON_SECONDS = 0.001
 _START_HANDLE_STYLE = "rgb(255,200,0)"
 _END_HANDLE_STYLE = "rgb(255,80,200)"
-_NUDGE_TRACK_STYLE = "rgb(90,90,122)"
-_NUDGE_HANDLE_GRAB_RADIUS = 1
+_NUDGE_HANDLE_GRAB_RADIUS = 4
 _NUDGE_DRAG_DEBOUNCE_SECONDS = 0.4
 _NUDGE_DRAG_DEBOUNCE_MAX_SECONDS = 1.0
 _NUDGE_MIN_SCHEDULE_DELAY_SECONDS = 0.001
@@ -50,13 +49,16 @@ def pixel_x_to_time(
 
 
 class WaveformNudgeBar(Widget):
-    """Draggable trim handles rendered under the waveform image."""
+    """Draggable trim handles shown in a single row below the waveform image."""
+
+    ALLOW_SELECT = False
 
     DEFAULT_CSS = """
     WaveformNudgeBar {
         height: 1;
         width: 100%;
         display: none;
+        background: transparent;
     }
     """
 
@@ -280,9 +282,15 @@ class WaveformNudgeBar(Widget):
         start_x, end_x = self._handle_x_positions(width)
         if start_x is None or end_x is None:
             return None
-        if abs(x - start_x) <= _NUDGE_HANDLE_GRAB_RADIUS:
+        start_dist = abs(x - start_x)
+        end_dist = abs(x - end_x)
+        start_hit = start_dist <= _NUDGE_HANDLE_GRAB_RADIUS
+        end_hit = end_dist <= _NUDGE_HANDLE_GRAB_RADIUS
+        if start_hit and end_hit:
+            return "start" if start_dist <= end_dist else "end"
+        if start_hit:
             return "start"
-        if abs(x - end_x) <= _NUDGE_HANDLE_GRAB_RADIUS:
+        if end_hit:
             return "end"
         return None
 
@@ -308,6 +316,7 @@ class WaveformNudgeBar(Widget):
         if self._marker_start is None or self._marker_end is None:
             return
         event.stop()
+        self.screen.clear_selection()
         self.capture_mouse()
         self._cancel_debounce()
         self._dragging = edge
@@ -363,5 +372,5 @@ class WaveformNudgeBar(Widget):
             elif x == end_x:
                 line.append("█", style=_END_HANDLE_STYLE)
             else:
-                line.append("─", style=_NUDGE_TRACK_STYLE)
+                line.append(" ")
         return line
