@@ -3,6 +3,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
+from typing import Literal
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,6 +42,7 @@ DETAIL_TAB_FINE_START = "fine-start"
 DETAIL_TAB_FINE_END = "fine-end"
 FINE_START_CACHE_SUFFIX = "_fine"
 FINE_END_CACHE_SUFFIX = "_fine-end"
+NudgeEdge = Literal["start", "end"]
 
 
 @dataclass(frozen=True)
@@ -110,12 +112,14 @@ class ClipDetailPanel(Vertical):
         waveform_cache_dir: Path,
         *,
         on_detail_updated: Callable[[], None] | None = None,
+        on_nudge: Callable[[NudgeEdge, float], None] | None = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self.session = session
         self._waveform_cache_dir = waveform_cache_dir
         self._on_detail_updated = on_detail_updated
+        self._on_nudge = on_nudge
         self._detail_tab = DETAIL_TAB_BASIC
         self._waveform_generation = 0
         self._fine_waveform_generation = 0
@@ -164,6 +168,14 @@ class ClipDetailPanel(Vertical):
         yield Static("", id="clip-times", markup=False)
         yield Static("", id="clip-status", markup=False)
         yield Static("", id="playback-status", markup=False)
+
+    def on_mount(self) -> None:
+        self._configure_waveform_nudge_handlers()
+
+    def _configure_waveform_nudge_handlers(self) -> None:
+        handler = self._on_nudge
+        for widget_id in ("waveform", "waveform-fine", "waveform-fine-end"):
+            self.query_one(f"#{widget_id}", WaveformWidget).set_nudge_handler(handler)
 
     @staticmethod
     def clip_status_text(candidate: ClipCandidate) -> str:

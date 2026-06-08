@@ -221,6 +221,7 @@ class ReviewScreen(Screen):
                 self._waveform_cache_dir,
                 id="detail-panel",
                 on_detail_updated=self._refresh_status_bars,
+                on_nudge=self._on_detail_nudge,
             )
         # yield Static(self._help_text(), id="help-bar")
         yield Footer()
@@ -282,6 +283,12 @@ class ReviewScreen(Screen):
 
     def _detail_panel(self) -> ClipDetailPanel:
         return self.query_one("#detail-panel", ClipDetailPanel)
+
+    def _on_detail_nudge(self, edge: str, delta: float) -> None:
+        if edge == "start":
+            self._nudge_start(delta)
+        else:
+            self._nudge_end(delta)
 
     def action_open_fine_start_tab(self) -> None:
         candidate = self._current_candidate()
