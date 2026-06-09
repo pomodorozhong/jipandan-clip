@@ -55,10 +55,7 @@ class WaveformNudgeBar(Widget):
 
     DEFAULT_CSS = """
     WaveformNudgeBar {
-        height: 1;
-        width: 100%;
         display: none;
-        background: transparent;
     }
     """
 
@@ -107,6 +104,10 @@ class WaveformNudgeBar(Widget):
             self._preview_end = None
         self.refresh()
 
+    def _release_mouse_capture(self) -> None:
+        if self.app.mouse_captured is self:
+            self.release_mouse()
+
     def clear(self) -> None:
         self._cancel_debounce()
         self._dragging = None
@@ -118,6 +119,7 @@ class WaveformNudgeBar(Widget):
         self._marker_end = None
         self._preview_start = None
         self._preview_end = None
+        self._release_mouse_capture()
         self.display = False
         self.refresh()
 
@@ -181,13 +183,11 @@ class WaveformNudgeBar(Widget):
         return max(earliest_end, min(range_end, time_seconds))
 
     def _apply_preview(self) -> None:
-        if self._waveform is None:
-            return
-        start_time = self._effective_start()
-        end_time = self._effective_end()
-        if start_time is None or end_time is None:
-            return
-        self._waveform.set_marker_preview(start_time, end_time)
+        if self._waveform is not None:
+            start_time = self._effective_start()
+            end_time = self._effective_end()
+            if start_time is not None and end_time is not None:
+                self._waveform.set_marker_preview(start_time, end_time)
         self.refresh()
 
     def _cancel_debounce(self) -> None:
@@ -344,13 +344,13 @@ class WaveformNudgeBar(Widget):
         self._schedule_commit(self._dragging)
 
     def on_mouse_up(self, event: events.MouseUp) -> None:
-        if self._dragging is None:
-            return
-        event.stop()
         edge = self._dragging
-        self._dragging = None
-        self.release_mouse()
-        self._schedule_commit(edge)
+        if edge is not None:
+            event.stop()
+            self._dragging = None
+            self._schedule_commit(edge)
+            self.refresh()
+        self._release_mouse_capture()
 
     def render(self) -> Text:
         width = max(self.size.width, 0)

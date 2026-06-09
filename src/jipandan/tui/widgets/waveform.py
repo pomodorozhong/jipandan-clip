@@ -3,8 +3,9 @@ from functools import partial
 from pathlib import Path
 
 from PIL import Image, ImageDraw
+from textual import events
 from textual.app import ComposeResult
-from textual.containers import Center, Vertical
+from textual.containers import Center, Container, Vertical
 from textual.widgets import LoadingIndicator, Static
 from textual_image.widget._base import Image as BaseWaveformImage
 
@@ -70,6 +71,11 @@ class WaveformWidget(Vertical, can_focus=True):
         border: tall $primary;
     }
 
+    #waveform-content {
+        height: 1fr;
+        width: 100%;
+    }
+
     #waveform-image {
         width: 100%;
         height: 1fr;
@@ -80,6 +86,13 @@ class WaveformWidget(Vertical, can_focus=True):
         height: 1fr;
         width: 100%;
         align: center middle;
+    }
+
+    #waveform-nudge-bar {
+        height: 1;
+        width: 100%;
+        display: none;
+        background: $surface;
     }
 
     #waveform-loading-row {
@@ -104,19 +117,6 @@ class WaveformWidget(Vertical, can_focus=True):
         content-align: center middle;
     }
 
-    #waveform-update-overlay {
-        layer: overlay;
-        width: 100%;
-        height: 1fr;
-        align: center middle;
-        background: $surface 50%;
-        display: none;
-    }
-
-    #waveform-update-loading {
-        height: auto;
-        width: auto;
-    }
     """
 
     def __init__(self, *args, **kwargs) -> None:
@@ -139,35 +139,28 @@ class WaveformWidget(Vertical, can_focus=True):
         self._nudge_bar: WaveformNudgeBar | None = None
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="waveform-placeholder-panel"):
-            with Center(id="waveform-loading-row"):
-                yield LoadingIndicator(id="waveform-loading")
-            with Center(id="waveform-placeholder-row"):
-                yield Static(
-                    GENERATING_WAVEFORM_PLACEHOLDER,
-                    id="waveform-placeholder",
-                    markup=False,
-                )
+        with Container(id="waveform-content"):
+            with Vertical(id="waveform-placeholder-panel"):
+                with Center(id="waveform-loading-row"):
+                    yield LoadingIndicator(id="waveform-loading")
+                with Center(id="waveform-placeholder-row"):
+                    yield Static(
+                        GENERATING_WAVEFORM_PLACEHOLDER,
+                        id="waveform-placeholder",
+                        markup=False,
+                    )
+            image = waveform_image_class(is_web=self.app.is_web)(id="waveform-image")
+            image.ALLOW_SELECT = False
+            image.can_focus = False
+            image.display = False
+            yield image
+        yield WaveformNudgeBar(id="waveform-nudge-bar")
 
     def on_mount(self) -> None:
-        image = waveform_image_class(is_web=self.app.is_web)(id="waveform-image")
-        image.ALLOW_SELECT = False
-        image.display = False
-        self.mount(image)
-        overlay = Center(
-            LoadingIndicator(id="waveform-update-loading"),
-            id="waveform-update-overlay",
-        )
-        overlay.display = False
-        self.mount(overlay)
-        nudge_bar = WaveformNudgeBar(id="waveform-nudge-bar")
-        nudge_bar.bind_waveform(self)
-        self.mount(nudge_bar)
-        self._nudge_bar = nudge_bar
+        self._nudge_bar = self.query_one("#waveform-nudge-bar", WaveformNudgeBar)
+        self._nudge_bar.bind_waveform(self)
         if self._nudge_handler is not None:
-            nudge_bar.set_nudge_handler(self._nudge_handler)
-        if self._image_update_in_progress:
-            overlay.display = True
+            self._nudge_bar.set_nudge_handler(self._nudge_handler)
         self._flush_pending_display()
 
     def set_nudge_handler(
@@ -176,6 +169,9 @@ class WaveformWidget(Vertical, can_focus=True):
         self._nudge_handler = handler
         if self._nudge_bar is not None:
             self._nudge_bar.set_nudge_handler(handler)
+
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        self.screen.clear_selection()
 
     def set_marker_preview(self, marker_start: float, marker_end: float) -> None:
         self._preview_marker_start = marker_start
@@ -206,45 +202,15 @@ class WaveformWidget(Vertical, can_focus=True):
             and len(self.query("#waveform-image")) > 0
         )
 
-    def _update_overlay_ready(self) -> bool:
-        return len(self.query("#waveform-update-overlay")) > 0
-
-    def _show_update_overlay(self) -> None:
-        if not self._update_overlay_ready():
-            return
-        self.query_one("#waveform-update-overlay", Center).display = True
-
-    def _hide_update_overlay(self) -> None:
-        if not self._update_overlay_ready():
-            return
-        self.query_one("#waveform-update-overlay", Center).display = False
-
     def _begin_image_update(self) -> int:
         self._image_update_token += 1
         self._image_update_in_progress = True
-        self._show_update_overlay()
         return self._image_update_token
 
     def _cancel_image_update(self, token: int | None = None) -> None:
         if token is not None and token != self._image_update_token:
             return
         self._image_update_in_progress = False
-        self._hide_update_overlay()
-
-    def _finish_image_update(self, token: int) -> None:
-        if token != self._image_update_token:
-            return
-
-        def after_layout() -> None:
-            if token != self._image_update_token:
-                return
-
-            def after_sixel_mount() -> None:
-                self._cancel_image_update(token)
-
-            self.call_after_refresh(after_sixel_mount)
-
-        self.call_after_refresh(after_layout)
 
     @staticmethod
     def _shows_loading_indicator(message: str) -> bool:
@@ -472,6 +438,18 @@ class WaveformWidget(Vertical, can_focus=True):
         image.display = True
         image.refresh()
         self.call_after_refresh(partial(self._finish_image_update, token))
+
+    def _finish_image_update(self, token: int) -> None:
+        if token != self._image_update_token:
+            return
+
+        def after_layout() -> None:
+            if token != self._image_update_token:
+                return
+            self._image_update_in_progress = False
+            self.query_one("#waveform-image", BaseWaveformImage).refresh()
+
+        self.call_after_refresh(after_layout)
 
     @staticmethod
     def expected_pixel_size() -> tuple[int, int]:
