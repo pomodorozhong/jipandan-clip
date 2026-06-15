@@ -1,11 +1,9 @@
-import hashlib
 import subprocess
 import threading
 import time
 from collections.abc import Callable
-from typing import Literal
-from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from textual import on, work
 from textual.app import ComposeResult
@@ -15,49 +13,25 @@ from textual.widgets import Static, TabbedContent, TabPane
 
 from jipandan.core import ffmpeg
 from jipandan.core.models import ClipCandidate, Session
-from jipandan.core.srt import seconds_to_ffmpeg_timestamp, srt_time_to_seconds
+from jipandan.core.srt import seconds_to_ffmpeg_timestamp
+from jipandan.tui.waveform_service import (
+    FINE_CLIP_SECONDS,
+    FINE_EXTRACT_DURATION,
+    FINE_EXTRACT_SECONDS,
+    BasicWaveformState,
+    FineWaveformState,
+    WaveformService,
+)
 from jipandan.tui.widgets.waveform import (
     GENERATING_WAVEFORM_PLACEHOLDER,
     WaveformWidget,
     format_playback_remaining,
 )
 
-WAVEFORM_DEBOUNCE_SECONDS = 0.4
-WAVEFORM_DEBOUNCE_MAX_SECONDS = 1.0
-WAVEFORM_PADDING_SECONDS = 1.0
-WAVEFORM_MIN_PADDING_SECONDS = 0.2
-MIN_SCHEDULE_DELAY_SECONDS = 0.001
-FINE_CLIP_SECONDS = 0.5
-FINE_PADDING_SECONDS = 0.3
-FINE_REGEN_PADDING_SECONDS = 0.1
-FINE_EXTRACT_SECONDS = FINE_PADDING_SECONDS + FINE_CLIP_SECONDS
-FINE_EXTRACT_DURATION = f"{FINE_EXTRACT_SECONDS:.3f}"
-FINE_PREGEN_DELAY_SECONDS = 1.0
-FINE_NUDGE_FINE = 0.01
-FINE_NUDGE_COARSE = 0.1
-FINE_START_NUDGE_FINE = FINE_NUDGE_FINE
-FINE_START_NUDGE_COARSE = FINE_NUDGE_COARSE
 DETAIL_TAB_BASIC = "basic"
 DETAIL_TAB_FINE_START = "fine-start"
 DETAIL_TAB_FINE_END = "fine-end"
-FINE_START_CACHE_SUFFIX = "_fine"
-FINE_END_CACHE_SUFFIX = "_fine-end"
 NudgeEdge = Literal["start", "end"]
-
-
-@dataclass(frozen=True)
-class _BasicWaveformState:
-    path: Path
-    viewport_start: str
-    viewport_duration: str
-    media_duration: float | None
-
-
-@dataclass(frozen=True)
-class _FineWaveformState:
-    path: Path
-    extract_start: float
-    media_duration: float | None
 
 
 class DetailTabs(TabbedContent, can_focus=False):
@@ -118,32 +92,20 @@ class ClipDetailPanel(Vertical):
         super().__init__(**kwargs)
         self.session = session
         self._waveform_cache_dir = waveform_cache_dir
+        self._waveform: WaveformService | None = None
         self._on_detail_updated = on_detail_updated
         self._on_nudge = on_nudge
         self._detail_tab = DETAIL_TAB_BASIC
-        self._waveform_generation = 0
-        self._fine_waveform_generation = 0
-        self._fine_end_waveform_generation = 0
         self._playback_end: float | None = None
         self._playback_timer: Timer | None = None
         self._playback_process: subprocess.Popen | None = None
-        self._waveform_debounce_timer: Timer | None = None
-        self._fine_debounce_timer: Timer | None = None
-        self._fine_end_debounce_timer: Timer | None = None
-        self._fine_pregen_timer: Timer | None = None
-        self._pending_fine_pregen_clip_id: str | None = None
-        self._fine_pregen_generation = 0
-        self._pending_waveform_id: str | None = None
-        self._pending_fine_clip_id: str | None = None
-        self._pending_fine_end_clip_id: str | None = None
-        self._waveform_debounce_started_at: float | None = None
-        self._displayed_waveform_viewport: tuple[str, str] | None = None
-        self._displayed_fine_extract_start: float | None = None
-        self._displayed_fine_end_extract_start: float | None = None
-        self._clip_waveform_states: dict[str, _BasicWaveformState] = {}
-        self._clip_fine_start_waveform_states: dict[str, _FineWaveformState] = {}
-        self._clip_fine_end_waveform_states: dict[str, _FineWaveformState] = {}
         self._active_candidate: ClipCandidate | None = None
+
+    @property
+    def waveform_service(self) -> WaveformService:
+        if self._waveform is None:
+            raise RuntimeError("WaveformService is not initialized until mount")
+        return self._waveform
 
     def compose(self) -> ComposeResult:
         with DetailTabs(initial=DETAIL_TAB_BASIC, id="detail-tabs"):
@@ -169,7 +131,18 @@ class ClipDetailPanel(Vertical):
         yield Static("", id="clip-status", markup=False)
         yield Static("", id="playback-status", markup=False)
 
+    def _schedule_timer(
+        self, delay: float, callback: Callable[[], None], name: str
+    ) -> Callable[[], None]:
+        timer = self.set_timer(delay, callback, name=name)
+        return timer.stop
+
     def on_mount(self) -> None:
+        self._waveform = WaveformService(
+            self.session,
+            self._waveform_cache_dir,
+            schedule=self._schedule_timer,
+        )
         self._configure_waveform_nudge_handlers()
 
     def _configure_waveform_nudge_handlers(self) -> None:
@@ -214,8 +187,10 @@ class ClipDetailPanel(Vertical):
         if pane_id is None:
             return
         self._detail_tab = pane_id
+        if self._waveform is None:
+            return
         if pane_id == DETAIL_TAB_BASIC:
-            self._cancel_fine_debounce()
+            self.waveform_service.cancel_fine_debounce()
         elif pane_id == DETAIL_TAB_FINE_START and self._active_candidate is not None:
             self.call_after_refresh(
                 self._begin_fine_start_waveform, self._active_candidate
@@ -228,7 +203,7 @@ class ClipDetailPanel(Vertical):
     def switch_to_basic_tab(self) -> None:
         if self._detail_tab == DETAIL_TAB_BASIC:
             return
-        self._cancel_fine_debounce()
+        self.waveform_service.cancel_fine_debounce()
         self._detail_tab = DETAIL_TAB_BASIC
         self._sync_detail_tabs()
 
@@ -236,7 +211,7 @@ class ClipDetailPanel(Vertical):
         if self._detail_tab == DETAIL_TAB_FINE_START:
             return
         self.stop_playback()
-        self._cancel_fine_debounce()
+        self.waveform_service.cancel_fine_debounce()
         self._active_candidate = candidate
         self._update_fine_start_tab_labels(candidate)
         self._detail_tab = DETAIL_TAB_FINE_START
@@ -246,7 +221,7 @@ class ClipDetailPanel(Vertical):
         if self._detail_tab == DETAIL_TAB_FINE_END:
             return
         self.stop_playback()
-        self._cancel_fine_debounce()
+        self.waveform_service.cancel_fine_debounce()
         self._active_candidate = candidate
         self._detail_tab = DETAIL_TAB_FINE_END
         self._sync_detail_tabs()
@@ -273,13 +248,7 @@ class ClipDetailPanel(Vertical):
         self.query_one("#clip-status", Static).update(text)
 
     def clear_detail(self) -> None:
-        self._displayed_waveform_viewport = None
-        self._displayed_fine_extract_start = None
-        self._displayed_fine_end_extract_start = None
-        self._clip_waveform_states.clear()
-        self._clip_fine_start_waveform_states.clear()
-        self._clip_fine_end_waveform_states.clear()
-        self._cancel_fine_waveform_pregen()
+        self.waveform_service.clear_cache()
         self.query_one("#clip-title", Static).update("No clips in current filter.")
         self.query_one("#waveform", WaveformWidget).show_placeholder("No waveform.")
         self.query_one("#waveform-fine", WaveformWidget).show_placeholder("No waveform.")
@@ -325,65 +294,34 @@ class ClipDetailPanel(Vertical):
             self.clip_status_text(candidate)
         )
 
-    @staticmethod
-    def _fine_slice_marker_positions(
-        extract_start: float, candidate: ClipCandidate
-    ) -> tuple[float, float]:
-        clip_start = ClipDetailPanel._clip_start_seconds(candidate)
-        clip_end = ClipDetailPanel._clip_end_seconds(candidate)
-        rel_start = clip_start - extract_start
-        rel_end = clip_end - extract_start
-        return rel_start, rel_end
-
-    @staticmethod
-    def _padding_below_minimum(
-        before: float, after: float, *, minimum: float = WAVEFORM_MIN_PADDING_SECONDS
-    ) -> bool:
-        return before < minimum or after < minimum
-
-    @staticmethod
-    def _fine_marker_padding_insufficient(marker_position: float) -> bool:
-        return (
-            marker_position < FINE_REGEN_PADDING_SECONDS
-            or (FINE_EXTRACT_SECONDS - marker_position) < FINE_REGEN_PADDING_SECONDS
-        )
-
-    def _needs_fine_start_regen(self, candidate: ClipCandidate) -> bool:
-        if self._displayed_fine_extract_start is None:
-            return True
-        return self._fine_start_padding_insufficient(
-            candidate, self._displayed_fine_extract_start
-        )
-
-    def _needs_fine_end_regen(self, candidate: ClipCandidate) -> bool:
-        if self._displayed_fine_end_extract_start is None:
-            return True
-        return self._fine_end_padding_insufficient(
-            candidate, self._displayed_fine_end_extract_start
-        )
-
     def update_after_nudge(self, candidate: ClipCandidate) -> None:
         """Refresh trim labels and markers; regen waveform when trim leaves the view."""
         self._active_candidate = candidate
         self._update_nudge_times_labels(candidate)
+        waveform = self.waveform_service
         if self.is_fine_start_tab():
             self.stop_playback()
             self._refresh_fine_start_waveform_markers(candidate)
-            self._schedule_fine_start_feedback(candidate.clip_id)
+            waveform.schedule_fine_start_feedback(
+                candidate.clip_id, self._on_fine_start_debounce_fire
+            )
         elif self.is_fine_end_tab():
             self.stop_playback()
             self._refresh_fine_end_waveform_markers(candidate)
-            self._schedule_fine_end_feedback(candidate.clip_id)
+            waveform.schedule_fine_end_feedback(
+                candidate.clip_id, self._on_fine_end_debounce_fire
+            )
         else:
             self._refresh_waveform_markers(candidate)
-            if self._needs_waveform_regen(candidate):
-                self._schedule_waveform_refresh(candidate.clip_id)
-            elif self._waveform_debounce_timer is not None:
-                self._waveform_debounce_timer.stop()
-                self._waveform_debounce_timer = None
-                self._pending_waveform_id = None
-                self._waveform_debounce_started_at = None
-        self._schedule_fine_waveform_pregen(candidate.clip_id)
+            if waveform.needs_basic_regen(candidate):
+                waveform.schedule_basic_refresh(
+                    candidate.clip_id, on_fire=self._on_basic_debounce_fire
+                )
+            else:
+                waveform.cancel_basic_debounce()
+        waveform.schedule_fine_pregen(
+            candidate.clip_id, self._on_fine_pregen_fire
+        )
 
     def update_detail(
         self,
@@ -397,118 +335,110 @@ class ClipDetailPanel(Vertical):
         self._update_clip_detail_labels(candidate)
         if self._on_detail_updated is not None:
             self._on_detail_updated()
+        waveform = self.waveform_service
         if debounce_waveform:
             if self.is_fine_start_tab():
-                self._schedule_fine_start_feedback(candidate.clip_id)
+                waveform.schedule_fine_start_feedback(
+                    candidate.clip_id, self._on_fine_start_debounce_fire
+                )
                 self._refresh_fine_start_waveform_markers(candidate)
             elif self.is_fine_end_tab():
-                self._schedule_fine_end_feedback(candidate.clip_id)
+                waveform.schedule_fine_end_feedback(
+                    candidate.clip_id, self._on_fine_end_debounce_fire
+                )
                 self._refresh_fine_end_waveform_markers(candidate)
             else:
                 if waveform_regen_on_debounce:
-                    self._schedule_waveform_refresh(
-                        candidate.clip_id, force_regen=force_waveform_regen
+                    waveform.schedule_basic_refresh(
+                        candidate.clip_id,
+                        force_regen=force_waveform_regen,
+                        on_fire=self._on_basic_debounce_fire,
                     )
                 self._refresh_waveform_markers(candidate)
         else:
-            self._cancel_waveform_debounce()
+            waveform.cancel_waveform_debounce()
             if self.is_fine_start_tab():
                 self._show_fine_start_waveform(candidate)
             elif self.is_fine_end_tab():
                 self._show_fine_end_waveform(candidate)
             else:
                 self._show_waveform(candidate)
-        self._schedule_fine_waveform_pregen(candidate.clip_id)
-
-    def _fine_waveforms_cached_in_memory(self, candidate: ClipCandidate) -> bool:
-        start = self._clip_fine_start_waveform_states.get(candidate.clip_id)
-        end = self._clip_fine_end_waveform_states.get(candidate.clip_id)
-        if start is None or end is None:
-            return False
-        if not start.path.exists() or not end.path.exists():
-            return False
-        if self._fine_start_padding_insufficient(candidate, start.extract_start):
-            return False
-        if self._fine_end_padding_insufficient(candidate, end.extract_start):
-            return False
-        return True
-
-    def _cancel_fine_waveform_pregen(self) -> None:
-        if self._fine_pregen_timer is not None:
-            self._fine_pregen_timer.stop()
-            self._fine_pregen_timer = None
-        self._pending_fine_pregen_clip_id = None
-        self._fine_pregen_generation += 1
-
-    def _schedule_fine_waveform_pregen(self, clip_id: str) -> None:
-        if self._fine_pregen_timer is not None:
-            self._fine_pregen_timer.stop()
-            self._fine_pregen_timer = None
-        self._pending_fine_pregen_clip_id = clip_id
-
-        def start_pregen() -> None:
-            self._fine_pregen_timer = None
-            pending_id = self._pending_fine_pregen_clip_id
-            self._pending_fine_pregen_clip_id = None
-            if pending_id is None:
-                return
-            if (
-                self._active_candidate is None
-                or self._active_candidate.clip_id != pending_id
-            ):
-                return
-            candidate = self.session.get_candidate(pending_id)
-            if candidate is None or self._fine_waveforms_cached_in_memory(candidate):
-                return
-            self._fine_pregen_generation += 1
-            generation = self._fine_pregen_generation
-            self._run_fine_waveform_pregen(pending_id, generation)
-
-        self._fine_pregen_timer = self.set_timer(
-            FINE_PREGEN_DELAY_SECONDS,
-            start_pregen,
-            name="fine-pregen",
+        waveform.schedule_fine_pregen(
+            candidate.clip_id, self._on_fine_pregen_fire
         )
 
-    def _store_fine_waveform_pregen(
-        self,
-        clip_id: str,
-        *,
-        generation: int,
-        start_state: _FineWaveformState,
-        end_state: _FineWaveformState,
-    ) -> None:
-        if generation != self._fine_pregen_generation:
+    def _on_basic_debounce_fire(self, clip_id: str, force_regen: bool) -> None:
+        candidate = self.session.get_candidate(clip_id)
+        if candidate is None:
             return
-        self._clip_fine_start_waveform_states[clip_id] = start_state
-        self._clip_fine_end_waveform_states[clip_id] = end_state
+        self._refresh_waveform_markers(candidate)
+        if force_regen or self.waveform_service.needs_basic_regen(candidate):
+            self.waveform_service.begin_basic_generation()
+            self._show_waveform(candidate, keep_previous=True)
+
+    def _on_fine_start_debounce_fire(self, clip_id: str) -> None:
+        if not self.is_fine_start_tab():
+            return
+        candidate = self.session.get_candidate(clip_id)
+        if candidate is None:
+            return
+        self._refresh_fine_start_waveform_markers(candidate)
+        if self.waveform_service.needs_fine_start_regen(candidate):
+            self._refresh_fine_start_feedback(
+                candidate, keep_previous=True, play=False
+            )
+        self.run_play_fine_start_preview(candidate)
+
+    def _on_fine_end_debounce_fire(self, clip_id: str) -> None:
+        if not self.is_fine_end_tab():
+            return
+        candidate = self.session.get_candidate(clip_id)
+        if candidate is None:
+            return
+        self._refresh_fine_end_waveform_markers(candidate)
+        if self.waveform_service.needs_fine_end_regen(candidate):
+            self._refresh_fine_end_feedback(
+                candidate, keep_previous=True, play=False
+            )
+        self.run_play_fine_end_preview(candidate)
+
+    def _on_fine_pregen_fire(self, clip_id: str) -> None:
+        if (
+            self._active_candidate is None
+            or self._active_candidate.clip_id != clip_id
+        ):
+            return
+        candidate = self.session.get_candidate(clip_id)
+        if candidate is None or self.waveform_service.fine_pair_ready(candidate):
+            return
+        generation = self.waveform_service.begin_fine_pregen()
+        self._run_fine_waveform_pregen(clip_id, generation)
 
     @work(thread=True, exclusive=True, group="fine-pregen")
     def _run_fine_waveform_pregen(self, clip_id: str, generation: int) -> None:
         candidate = self.session.get_candidate(clip_id)
         if candidate is None:
             return
+        waveform = self.waveform_service
         try:
-            start_png, start_duration = self._generate_fine_start_waveform_file(
-                candidate
-            )
-            end_png, end_duration = self._generate_fine_end_waveform_file(candidate)
+            start_png, start_duration = waveform.generate_fine_start(candidate)
+            end_png, end_duration = waveform.generate_fine_end(candidate)
         except Exception:
             return
-        if generation != self._fine_pregen_generation:
+        if not waveform.is_fine_pregen_current(generation):
             return
-        start_state = _FineWaveformState(
+        start_state = FineWaveformState(
             path=start_png,
-            extract_start=self._fine_start_extract_start(candidate),
+            extract_start=waveform.fine_start_extract_start(candidate),
             media_duration=start_duration,
         )
-        end_state = _FineWaveformState(
+        end_state = FineWaveformState(
             path=end_png,
-            extract_start=self._fine_end_extract_start(candidate),
+            extract_start=waveform.fine_end_extract_start(candidate),
             media_duration=end_duration,
         )
         self.app.call_from_thread(
-            self._store_fine_waveform_pregen,
+            waveform.store_fine_pregen,
             clip_id,
             generation=generation,
             start_state=start_state,
@@ -559,139 +489,6 @@ class ClipDetailPanel(Vertical):
             format_playback_remaining(remaining)
         )
 
-    def _cancel_fine_start_debounce(self) -> None:
-        if self._fine_debounce_timer is not None:
-            self._fine_debounce_timer.stop()
-            self._fine_debounce_timer = None
-        self._pending_fine_clip_id = None
-
-    def _cancel_fine_end_debounce(self) -> None:
-        if self._fine_end_debounce_timer is not None:
-            self._fine_end_debounce_timer.stop()
-            self._fine_end_debounce_timer = None
-        self._pending_fine_end_clip_id = None
-
-    def _cancel_fine_debounce(self) -> None:
-        self._cancel_fine_start_debounce()
-        self._cancel_fine_end_debounce()
-
-    def _cancel_waveform_debounce(self) -> None:
-        if self._waveform_debounce_timer is not None:
-            self._waveform_debounce_timer.stop()
-            self._waveform_debounce_timer = None
-        self._pending_waveform_id = None
-        self._waveform_debounce_started_at = None
-        self._cancel_fine_debounce()
-
-    def _viewport_padding_insufficient(
-        self,
-        candidate: ClipCandidate,
-        viewport_start: str,
-        viewport_duration: str,
-    ) -> bool:
-        disp_start = srt_time_to_seconds(viewport_start.replace(".", ","))
-        disp_end = disp_start + float(viewport_duration)
-        clip_start = self._clip_start_seconds(candidate)
-        clip_end = self._clip_end_seconds(candidate)
-        return self._padding_below_minimum(
-            clip_start - disp_start,
-            disp_end - clip_end,
-        )
-
-    def _needs_waveform_regen(self, candidate: ClipCandidate) -> bool:
-        if self._displayed_waveform_viewport is None:
-            return True
-        viewport_start, viewport_duration = self._displayed_waveform_viewport
-        return self._viewport_padding_insufficient(
-            candidate, viewport_start, viewport_duration
-        )
-
-    def _fine_start_padding_insufficient(
-        self, candidate: ClipCandidate, extract_start: float
-    ) -> bool:
-        rel_start, _rel_end = self._fine_slice_marker_positions(
-            extract_start, candidate
-        )
-        return self._fine_marker_padding_insufficient(rel_start)
-
-    def _fine_end_padding_insufficient(
-        self, candidate: ClipCandidate, extract_start: float
-    ) -> bool:
-        _rel_start, rel_end = self._fine_slice_marker_positions(
-            extract_start, candidate
-        )
-        return self._fine_marker_padding_insufficient(rel_end)
-
-    def _schedule_waveform_refresh(
-        self, clip_id: str, *, force_regen: bool = False
-    ) -> None:
-        self._pending_waveform_id = clip_id
-        now = time.monotonic()
-        if self._waveform_debounce_started_at is None:
-            self._waveform_debounce_started_at = now
-
-        if self._waveform_debounce_timer is not None:
-            self._waveform_debounce_timer.stop()
-            self._waveform_debounce_timer = None
-
-        elapsed = now - self._waveform_debounce_started_at
-        if elapsed >= WAVEFORM_DEBOUNCE_MAX_SECONDS:
-            delay = 0.0
-        else:
-            delay = min(
-                WAVEFORM_DEBOUNCE_SECONDS,
-                WAVEFORM_DEBOUNCE_MAX_SECONDS - elapsed,
-            )
-
-        def refresh_waveform() -> None:
-            self._waveform_debounce_timer = None
-            self._waveform_debounce_started_at = None
-            pending_id = self._pending_waveform_id
-            self._pending_waveform_id = None
-            if pending_id != clip_id:
-                return
-            candidate = self.session.get_candidate(clip_id)
-            if candidate is None:
-                return
-            self._refresh_waveform_markers(candidate)
-            if force_regen or self._needs_waveform_regen(candidate):
-                self._waveform_generation += 1
-                self._show_waveform(candidate, keep_previous=True)
-
-        self._waveform_debounce_timer = self.set_timer(
-            max(delay, MIN_SCHEDULE_DELAY_SECONDS),
-            refresh_waveform,
-            name="waveform-debounce",
-        )
-
-    def _schedule_fine_start_feedback(self, clip_id: str) -> None:
-        self._pending_fine_clip_id = clip_id
-        if self._fine_debounce_timer is not None:
-            self._fine_debounce_timer.stop()
-            self._fine_debounce_timer = None
-
-        def refresh_fine() -> None:
-            self._fine_debounce_timer = None
-            pending_id = self._pending_fine_clip_id
-            self._pending_fine_clip_id = None
-            if pending_id is None or not self.is_fine_start_tab():
-                return
-            candidate = self.session.get_candidate(pending_id)
-            if candidate is None:
-                return
-            self._refresh_fine_start_waveform_markers(candidate)
-            if self._needs_fine_start_regen(candidate):
-                self._refresh_fine_start_feedback(
-                    candidate, keep_previous=True, play=False
-                )
-            self.run_play_fine_start_preview(candidate)
-
-        self._fine_debounce_timer = self.set_timer(
-            WAVEFORM_DEBOUNCE_SECONDS,
-            refresh_fine,
-            name="fine-debounce",
-        )
-
     def _refresh_fine_start_feedback(
         self,
         candidate: ClipCandidate,
@@ -699,46 +496,19 @@ class ClipDetailPanel(Vertical):
         keep_previous: bool = False,
         play: bool = True,
     ) -> None:
-        cached = self._fine_waveform_cache_path(candidate, suffix=".png")
+        waveform = self.waveform_service
+        cached = waveform.fine_start_cache_path(candidate, suffix=".png")
         if cached.exists():
             self._present_fine_start_waveform(
                 candidate,
                 cached,
-                media_duration=self._waveform_media_duration(cached),
+                media_duration=waveform.media_duration(cached),
             )
             if play:
                 self.run_play_fine_start_preview(candidate)
             return
         self._start_fine_start_waveform_generation(
             candidate, keep_previous=keep_previous, play_after=play
-        )
-
-    def _schedule_fine_end_feedback(self, clip_id: str) -> None:
-        self._pending_fine_end_clip_id = clip_id
-        if self._fine_end_debounce_timer is not None:
-            self._fine_end_debounce_timer.stop()
-            self._fine_end_debounce_timer = None
-
-        def refresh_fine_end() -> None:
-            self._fine_end_debounce_timer = None
-            pending_id = self._pending_fine_end_clip_id
-            self._pending_fine_end_clip_id = None
-            if pending_id is None or not self.is_fine_end_tab():
-                return
-            candidate = self.session.get_candidate(pending_id)
-            if candidate is None:
-                return
-            self._refresh_fine_end_waveform_markers(candidate)
-            if self._needs_fine_end_regen(candidate):
-                self._refresh_fine_end_feedback(
-                    candidate, keep_previous=True, play=False
-                )
-            self.run_play_fine_end_preview(candidate)
-
-        self._fine_end_debounce_timer = self.set_timer(
-            WAVEFORM_DEBOUNCE_SECONDS,
-            refresh_fine_end,
-            name="fine-end-debounce",
         )
 
     def _refresh_fine_end_feedback(
@@ -748,93 +518,19 @@ class ClipDetailPanel(Vertical):
         keep_previous: bool = False,
         play: bool = True,
     ) -> None:
-        cached = self._fine_end_waveform_cache_path(candidate, suffix=".png")
+        waveform = self.waveform_service
+        cached = waveform.fine_end_cache_path(candidate, suffix=".png")
         if cached.exists():
             self._present_fine_end_waveform(
                 candidate,
                 cached,
-                media_duration=self._waveform_media_duration(cached),
+                media_duration=waveform.media_duration(cached),
             )
             if play:
                 self.run_play_fine_end_preview(candidate)
             return
         self._start_fine_end_waveform_generation(
             candidate, keep_previous=keep_previous, play_after=play
-        )
-
-    @staticmethod
-    def _waveform_key_digest(candidate: ClipCandidate) -> str:
-        key = f"{candidate.start}|{candidate.duration}"
-        return hashlib.md5(key.encode("utf-8")).hexdigest()[:10]
-
-    def waveform_cache_path(self, candidate: ClipCandidate, *, suffix: str) -> Path:
-        digest = self._waveform_key_digest(candidate)
-        return self._waveform_cache_dir / f"{candidate.filename_token}_{digest}{suffix}"
-
-    @staticmethod
-    def _fine_start_waveform_key_digest(candidate: ClipCandidate) -> str:
-        key = f"{candidate.start}|{FINE_EXTRACT_DURATION}"
-        return hashlib.md5(key.encode("utf-8")).hexdigest()[:10]
-
-    def _fine_start_waveform_cache_path(
-        self, candidate: ClipCandidate, *, suffix: str
-    ) -> Path:
-        digest = self._fine_start_waveform_key_digest(candidate)
-        return (
-            self._waveform_cache_dir
-            / f"{candidate.filename_token}_{digest}{FINE_START_CACHE_SUFFIX}{suffix}"
-        )
-
-    @staticmethod
-    def _fine_end_waveform_key_digest(candidate: ClipCandidate) -> str:
-        key = f"{candidate.end}|{FINE_EXTRACT_DURATION}"
-        return hashlib.md5(key.encode("utf-8")).hexdigest()[:10]
-
-    def _fine_end_waveform_cache_path(
-        self, candidate: ClipCandidate, *, suffix: str
-    ) -> Path:
-        digest = self._fine_end_waveform_key_digest(candidate)
-        return (
-            self._waveform_cache_dir
-            / f"{candidate.filename_token}_{digest}{FINE_END_CACHE_SUFFIX}{suffix}"
-        )
-
-    def _fine_waveform_cache_path(
-        self, candidate: ClipCandidate, *, suffix: str
-    ) -> Path:
-        return self._fine_start_waveform_cache_path(candidate, suffix=suffix)
-
-    @staticmethod
-    def _waveform_padded_start_seconds(candidate: ClipCandidate) -> float:
-        return max(
-            0.0,
-            ClipDetailPanel._clip_start_seconds(candidate) - WAVEFORM_PADDING_SECONDS,
-        )
-
-    def _waveform_padded_end_seconds(self, candidate: ClipCandidate) -> float:
-        return (
-            self._clip_end_seconds(candidate) + WAVEFORM_PADDING_SECONDS
-        )
-
-    def _waveform_extract_range(self, candidate: ClipCandidate) -> tuple[str, str]:
-        padded_start = self._waveform_padded_start_seconds(candidate)
-        duration = self._waveform_padded_end_seconds(candidate) - padded_start
-        return (
-            seconds_to_ffmpeg_timestamp(padded_start),
-            f"{duration:.3f}",
-        )
-
-    def _waveform_viewport(
-        self, candidate: ClipCandidate, *, media_duration: float | None = None
-    ) -> tuple[str, str]:
-        padded_start = self._waveform_padded_start_seconds(candidate)
-        if media_duration is not None:
-            duration = media_duration
-        else:
-            duration = self._waveform_padded_end_seconds(candidate) - padded_start
-        return (
-            seconds_to_ffmpeg_timestamp(padded_start),
-            f"{duration:.3f}",
         )
 
     def _present_waveform(
@@ -846,24 +542,31 @@ class ClipDetailPanel(Vertical):
         viewport_start: str | None = None,
         viewport_duration: str | None = None,
     ) -> None:
-        if viewport_start is None or viewport_duration is None:
-            viewport_start, viewport_duration = self._waveform_viewport(
-                candidate, media_duration=media_duration
-            )
-        self._displayed_waveform_viewport = (viewport_start, viewport_duration)
-        self._clip_waveform_states[candidate.clip_id] = _BasicWaveformState(
-            path=path,
+        state = self.waveform_service.record_basic_display(
+            candidate,
+            path,
+            media_duration=media_duration,
             viewport_start=viewport_start,
             viewport_duration=viewport_duration,
-            media_duration=media_duration,
         )
         self.query_one("#waveform", WaveformWidget).display_waveform(
             path,
-            viewport_start,
-            viewport_duration,
-            media_duration=media_duration,
+            state.viewport_start,
+            state.viewport_duration,
+            media_duration=state.media_duration,
         )
         self._refresh_waveform_markers(candidate)
+
+    def _present_from_basic_state(
+        self, candidate: ClipCandidate, state: BasicWaveformState
+    ) -> None:
+        self._present_waveform(
+            candidate,
+            state.path,
+            media_duration=state.media_duration,
+            viewport_start=state.viewport_start,
+            viewport_duration=state.viewport_duration,
+        )
 
     def _fine_start_waveform_widget(self) -> WaveformWidget:
         return self.query_one("#waveform-fine", WaveformWidget)
@@ -871,37 +574,11 @@ class ClipDetailPanel(Vertical):
     def _fine_end_waveform_widget(self) -> WaveformWidget:
         return self.query_one("#waveform-fine-end", WaveformWidget)
 
-    def _fine_waveform_widget(self) -> WaveformWidget:
-        return self._fine_start_waveform_widget()
-
     def _set_fine_start_waveform_placeholder(self, message: str) -> None:
         self._fine_start_waveform_widget().show_placeholder(message)
 
     def _set_fine_end_waveform_placeholder(self, message: str) -> None:
         self._fine_end_waveform_widget().show_placeholder(message)
-
-    def _set_fine_waveform_placeholder(self, message: str) -> None:
-        self._set_fine_start_waveform_placeholder(message)
-
-    @staticmethod
-    def _clip_start_seconds(candidate: ClipCandidate) -> float:
-        return srt_time_to_seconds(candidate.start.replace(".", ","))
-
-    @staticmethod
-    def _clip_end_seconds(candidate: ClipCandidate) -> float:
-        return srt_time_to_seconds(candidate.end.replace(".", ","))
-
-    def _fine_start_extract_start(self, candidate: ClipCandidate) -> float:
-        return max(
-            0.0,
-            self._clip_start_seconds(candidate) - FINE_PADDING_SECONDS,
-        )
-
-    def _fine_end_extract_start(self, candidate: ClipCandidate) -> float:
-        return max(
-            0.0,
-            self._clip_end_seconds(candidate) - FINE_CLIP_SECONDS,
-        )
 
     def _present_fine_slice_waveform(
         self,
@@ -930,13 +607,11 @@ class ClipDetailPanel(Vertical):
         media_duration: float | None = None,
         extract_start: float | None = None,
     ) -> None:
-        if extract_start is None:
-            extract_start = self._fine_start_extract_start(candidate)
-        self._displayed_fine_extract_start = extract_start
-        self._clip_fine_start_waveform_states[candidate.clip_id] = _FineWaveformState(
-            path=path,
-            extract_start=extract_start,
+        self.waveform_service.record_fine_start_display(
+            candidate,
+            path,
             media_duration=media_duration,
+            extract_start=extract_start,
         )
         self._present_fine_slice_waveform(
             self._fine_start_waveform_widget(),
@@ -954,13 +629,11 @@ class ClipDetailPanel(Vertical):
         media_duration: float | None = None,
         extract_start: float | None = None,
     ) -> None:
-        if extract_start is None:
-            extract_start = self._fine_end_extract_start(candidate)
-        self._displayed_fine_end_extract_start = extract_start
-        self._clip_fine_end_waveform_states[candidate.clip_id] = _FineWaveformState(
-            path=path,
-            extract_start=extract_start,
+        self.waveform_service.record_fine_end_display(
+            candidate,
+            path,
             media_duration=media_duration,
+            extract_start=extract_start,
         )
         self._present_fine_slice_waveform(
             self._fine_end_waveform_widget(),
@@ -970,27 +643,6 @@ class ClipDetailPanel(Vertical):
             refresh_markers=self._refresh_fine_end_waveform_markers,
         )
 
-    def _present_fine_waveform(
-        self,
-        candidate: ClipCandidate,
-        path: Path,
-        *,
-        media_duration: float | None = None,
-    ) -> None:
-        self._present_fine_start_waveform(
-            candidate, path, media_duration=media_duration
-        )
-
-    @staticmethod
-    def _waveform_media_duration(png_path: Path) -> float | None:
-        mp3_path = png_path.with_name(png_path.stem + ".mp3")
-        if not mp3_path.exists():
-            return None
-        try:
-            return ffmpeg.probe_duration_seconds(mp3_path)
-        except (OSError, subprocess.CalledProcessError, ValueError):
-            return None
-
     def _overlay_fine_slice_markers(
         self,
         widget: WaveformWidget,
@@ -999,7 +651,7 @@ class ClipDetailPanel(Vertical):
     ) -> None:
         if extract_start is None:
             return
-        rel_start, rel_end = self._fine_slice_marker_positions(
+        rel_start, rel_end = self.waveform_service.fine_marker_times(
             extract_start, candidate
         )
         window = FINE_EXTRACT_SECONDS
@@ -1011,7 +663,7 @@ class ClipDetailPanel(Vertical):
         )
 
     def _refresh_waveform_markers(self, candidate: ClipCandidate) -> None:
-        if self._displayed_waveform_viewport is None:
+        if not self.waveform_service.has_displayed_basic_viewport():
             return
         self.query_one("#waveform", WaveformWidget).overlay_trim_bounds(
             candidate.start,
@@ -1021,76 +673,30 @@ class ClipDetailPanel(Vertical):
     def _refresh_fine_start_waveform_markers(self, candidate: ClipCandidate) -> None:
         self._overlay_fine_slice_markers(
             self._fine_start_waveform_widget(),
-            self._displayed_fine_extract_start,
+            self.waveform_service.displayed_fine_start_extract(),
             candidate,
         )
 
     def _refresh_fine_end_waveform_markers(self, candidate: ClipCandidate) -> None:
         self._overlay_fine_slice_markers(
             self._fine_end_waveform_widget(),
-            self._displayed_fine_end_extract_start,
+            self.waveform_service.displayed_fine_end_extract(),
             candidate,
         )
-
-    def _refresh_fine_waveform_markers(self, candidate: ClipCandidate) -> None:
-        self._refresh_fine_start_waveform_markers(candidate)
-
-    def _reuse_stored_basic_waveform(self, candidate: ClipCandidate) -> bool:
-        stored = self._clip_waveform_states.get(candidate.clip_id)
-        if stored is None or not stored.path.exists():
-            return False
-        if self._viewport_padding_insufficient(
-            candidate, stored.viewport_start, stored.viewport_duration
-        ):
-            return False
-        self._present_waveform(
-            candidate,
-            stored.path,
-            media_duration=stored.media_duration,
-            viewport_start=stored.viewport_start,
-            viewport_duration=stored.viewport_duration,
-        )
-        return True
-
-    def _reuse_stored_fine_start_waveform(self, candidate: ClipCandidate) -> bool:
-        stored = self._clip_fine_start_waveform_states.get(candidate.clip_id)
-        if stored is None or not stored.path.exists():
-            return False
-        if self._fine_start_padding_insufficient(candidate, stored.extract_start):
-            return False
-        self._present_fine_start_waveform(
-            candidate,
-            stored.path,
-            media_duration=stored.media_duration,
-            extract_start=stored.extract_start,
-        )
-        return True
-
-    def _reuse_stored_fine_end_waveform(self, candidate: ClipCandidate) -> bool:
-        stored = self._clip_fine_end_waveform_states.get(candidate.clip_id)
-        if stored is None or not stored.path.exists():
-            return False
-        if self._fine_end_padding_insufficient(candidate, stored.extract_start):
-            return False
-        self._present_fine_end_waveform(
-            candidate,
-            stored.path,
-            media_duration=stored.media_duration,
-            extract_start=stored.extract_start,
-        )
-        return True
 
     def _show_waveform(
         self, candidate: ClipCandidate, *, keep_previous: bool = False
     ) -> None:
-        if self._reuse_stored_basic_waveform(candidate):
+        waveform = self.waveform_service
+        if state := waveform.try_reuse_basic(candidate):
+            self._present_from_basic_state(candidate, state)
             return
-        cached = self.waveform_cache_path(candidate, suffix=".png")
+        cached = waveform.basic_cache_path(candidate, suffix=".png")
         if cached.exists():
             self._present_waveform(
                 candidate,
                 cached,
-                media_duration=self._waveform_media_duration(cached),
+                media_duration=waveform.media_duration(cached),
             )
             return
         self._generate_waveform(candidate, keep_previous=keep_previous)
@@ -1098,14 +704,21 @@ class ClipDetailPanel(Vertical):
     def _show_fine_start_waveform(
         self, candidate: ClipCandidate, *, keep_previous: bool = False
     ) -> None:
-        if self._reuse_stored_fine_start_waveform(candidate):
+        waveform = self.waveform_service
+        if state := waveform.try_reuse_fine_start(candidate):
+            self._present_fine_start_waveform(
+                candidate,
+                state.path,
+                media_duration=state.media_duration,
+                extract_start=state.extract_start,
+            )
             return
-        cached = self._fine_start_waveform_cache_path(candidate, suffix=".png")
+        cached = waveform.fine_start_cache_path(candidate, suffix=".png")
         if cached.exists():
             self._present_fine_start_waveform(
                 candidate,
                 cached,
-                media_duration=self._waveform_media_duration(cached),
+                media_duration=waveform.media_duration(cached),
             )
             return
         self._start_fine_start_waveform_generation(
@@ -1115,30 +728,33 @@ class ClipDetailPanel(Vertical):
     def _show_fine_end_waveform(
         self, candidate: ClipCandidate, *, keep_previous: bool = False
     ) -> None:
-        if self._reuse_stored_fine_end_waveform(candidate):
+        waveform = self.waveform_service
+        if state := waveform.try_reuse_fine_end(candidate):
+            self._present_fine_end_waveform(
+                candidate,
+                state.path,
+                media_duration=state.media_duration,
+                extract_start=state.extract_start,
+            )
             return
-        cached = self._fine_end_waveform_cache_path(candidate, suffix=".png")
+        cached = waveform.fine_end_cache_path(candidate, suffix=".png")
         if cached.exists():
             self._present_fine_end_waveform(
                 candidate,
                 cached,
-                media_duration=self._waveform_media_duration(cached),
+                media_duration=waveform.media_duration(cached),
             )
             return
         self._start_fine_end_waveform_generation(
             candidate, keep_previous=keep_previous
         )
 
-    def _show_fine_waveform(
-        self, candidate: ClipCandidate, *, keep_previous: bool = False
-    ) -> None:
-        self._show_fine_start_waveform(candidate, keep_previous=keep_previous)
-
     def _start_fine_slice_waveform_generation(
         self,
         *,
         candidate: ClipCandidate,
-        generation_attr: str,
+        begin_generation: Callable[[], int],
+        is_current: Callable[[int], bool],
         set_placeholder: Callable[[str], None],
         present: Callable[[ClipCandidate, Path, float | None], None],
         generate_file: Callable[[ClipCandidate], tuple[Path, float]],
@@ -1146,8 +762,7 @@ class ClipDetailPanel(Vertical):
         play_preview: Callable[[ClipCandidate], None] | None = None,
         keep_previous: bool = False,
     ) -> None:
-        generation = getattr(self, generation_attr) + 1
-        setattr(self, generation_attr, generation)
+        generation = begin_generation()
         if not keep_previous:
             set_placeholder(GENERATING_WAVEFORM_PLACEHOLDER)
 
@@ -1157,10 +772,10 @@ class ClipDetailPanel(Vertical):
             try:
                 target_png, media_duration = generate_file(candidate)
             except Exception as exc:
-                if generation == getattr(self, generation_attr):
+                if is_current(generation):
                     app.call_from_thread(set_placeholder, f"Waveform failed: {exc}")
                 return
-            if generation != getattr(self, generation_attr):
+            if not is_current(generation):
                 return
 
             def on_ready() -> None:
@@ -1179,14 +794,16 @@ class ClipDetailPanel(Vertical):
         keep_previous: bool = False,
         play_after: bool = False,
     ) -> None:
+        waveform = self.waveform_service
         self._start_fine_slice_waveform_generation(
             candidate=candidate,
-            generation_attr="_fine_waveform_generation",
+            begin_generation=waveform.begin_fine_start_generation,
+            is_current=waveform.is_fine_start_generation_current,
             set_placeholder=self._set_fine_start_waveform_placeholder,
             present=lambda c, path, dur: self._present_fine_start_waveform(
                 c, path, media_duration=dur
             ),
-            generate_file=self._generate_fine_start_waveform_file,
+            generate_file=waveform.generate_fine_start,
             play_after=play_after,
             play_preview=self.run_play_fine_start_preview,
             keep_previous=keep_previous,
@@ -1199,93 +816,20 @@ class ClipDetailPanel(Vertical):
         keep_previous: bool = False,
         play_after: bool = False,
     ) -> None:
+        waveform = self.waveform_service
         self._start_fine_slice_waveform_generation(
             candidate=candidate,
-            generation_attr="_fine_end_waveform_generation",
+            begin_generation=waveform.begin_fine_end_generation,
+            is_current=waveform.is_fine_end_generation_current,
             set_placeholder=self._set_fine_end_waveform_placeholder,
             present=lambda c, path, dur: self._present_fine_end_waveform(
                 c, path, media_duration=dur
             ),
-            generate_file=self._generate_fine_end_waveform_file,
+            generate_file=waveform.generate_fine_end,
             play_after=play_after,
             play_preview=self.run_play_fine_end_preview,
             keep_previous=keep_previous,
         )
-
-    def _start_fine_waveform_generation(
-        self,
-        candidate: ClipCandidate,
-        *,
-        keep_previous: bool = False,
-        play_after: bool = False,
-    ) -> None:
-        self._start_fine_start_waveform_generation(
-            candidate, keep_previous=keep_previous, play_after=play_after
-        )
-
-    def generate_waveform_file(self, candidate: ClipCandidate) -> tuple[Path, float]:
-        """Generate (or reuse) the cached waveform PNG for ``candidate``.
-
-        Safe to call from a worker thread; performs no UI work.
-        """
-        target_png = self.waveform_cache_path(candidate, suffix=".png")
-        target_mp3 = self.waveform_cache_path(candidate, suffix=".mp3")
-        if target_png.exists() and target_mp3.exists():
-            return target_png, ffmpeg.probe_duration_seconds(target_mp3)
-        target_png.parent.mkdir(parents=True, exist_ok=True)
-        extract_start, extract_duration = self._waveform_extract_range(candidate)
-        ffmpeg.extract_preview_fast(
-            self.session.audio,
-            extract_start,
-            extract_duration,
-            target_mp3,
-        )
-        media_duration = ffmpeg.probe_duration_seconds(target_mp3)
-        ffmpeg.render_waveform(target_mp3, target_png)
-        return target_png, media_duration
-
-    def _generate_fine_start_waveform_file(
-        self, candidate: ClipCandidate
-    ) -> tuple[Path, float]:
-        target_png = self._fine_start_waveform_cache_path(candidate, suffix=".png")
-        target_mp3 = self._fine_start_waveform_cache_path(candidate, suffix=".mp3")
-        if target_png.exists() and target_mp3.exists():
-            return target_png, ffmpeg.probe_duration_seconds(target_mp3)
-        target_png.parent.mkdir(parents=True, exist_ok=True)
-        extract_start = self._fine_start_extract_start(candidate)
-        ffmpeg.extract_preview_fast(
-            self.session.audio,
-            seconds_to_ffmpeg_timestamp(extract_start),
-            FINE_EXTRACT_DURATION,
-            target_mp3,
-        )
-        media_duration = ffmpeg.probe_duration_seconds(target_mp3)
-        ffmpeg.render_waveform(target_mp3, target_png)
-        return target_png, media_duration
-
-    def _generate_fine_end_waveform_file(
-        self, candidate: ClipCandidate
-    ) -> tuple[Path, float]:
-        target_png = self._fine_end_waveform_cache_path(candidate, suffix=".png")
-        target_mp3 = self._fine_end_waveform_cache_path(candidate, suffix=".mp3")
-        if target_png.exists() and target_mp3.exists():
-            return target_png, ffmpeg.probe_duration_seconds(target_mp3)
-        extract_start = self._fine_end_extract_start(candidate)
-        target_png.parent.mkdir(parents=True, exist_ok=True)
-        ffmpeg.extract_preview_fast(
-            self.session.audio,
-            seconds_to_ffmpeg_timestamp(extract_start),
-            FINE_EXTRACT_DURATION,
-            target_mp3,
-        )
-        media_duration = ffmpeg.probe_duration_seconds(target_mp3)
-        ffmpeg.render_waveform(target_mp3, target_png)
-        return target_png, media_duration
-
-    def _generate_fine_waveform_file(
-        self, candidate: ClipCandidate
-    ) -> tuple[Path, float]:
-        return self._generate_fine_start_waveform_file(candidate)
 
     @work(thread=True, exclusive=True, group="detail-playback")
     def run_play_preview(self, candidate: ClipCandidate) -> None:
@@ -1312,8 +856,9 @@ class ClipDetailPanel(Vertical):
         return candidate.start, duration
 
     def _fine_end_playback_range(self, candidate: ClipCandidate) -> tuple[str, float]:
-        clip_start = self._clip_start_seconds(candidate)
-        clip_end = self._clip_end_seconds(candidate)
+        waveform = self.waveform_service
+        clip_start = waveform.clip_start_seconds(candidate)
+        clip_end = waveform.clip_end_seconds(candidate)
         duration = min(FINE_CLIP_SECONDS, clip_end - clip_start)
         start = max(clip_start, clip_end - duration)
         return seconds_to_ffmpeg_timestamp(start), duration
@@ -1361,16 +906,16 @@ class ClipDetailPanel(Vertical):
     def _generate_waveform(
         self, candidate: ClipCandidate, *, keep_previous: bool = False
     ) -> None:
-        generation = self._waveform_generation + 1
-        self._waveform_generation = generation
-        if not (keep_previous and self._displayed_waveform_viewport is not None):
+        waveform = self.waveform_service
+        generation = waveform.begin_basic_generation()
+        if not (keep_previous and waveform.has_displayed_basic_viewport()):
             self.app.call_from_thread(
                 self._set_full_waveform_placeholder,
                 GENERATING_WAVEFORM_PLACEHOLDER,
             )
         try:
-            target_png, media_duration = self.generate_waveform_file(candidate)
-            if generation != self._waveform_generation:
+            target_png, media_duration = waveform.generate_basic(candidate)
+            if not waveform.is_basic_generation_current(generation):
                 return
             self.app.call_from_thread(
                 self._present_waveform,
@@ -1379,7 +924,7 @@ class ClipDetailPanel(Vertical):
                 media_duration=media_duration,
             )
         except Exception as exc:
-            if generation != self._waveform_generation:
+            if not waveform.is_basic_generation_current(generation):
                 return
             self.app.call_from_thread(
                 self._set_full_waveform_placeholder,
@@ -1388,4 +933,3 @@ class ClipDetailPanel(Vertical):
 
     def _set_full_waveform_placeholder(self, message: str) -> None:
         self.query_one("#waveform", WaveformWidget).show_placeholder(message)
-

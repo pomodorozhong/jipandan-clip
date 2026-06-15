@@ -36,11 +36,8 @@ from jipandan.tui.screens.filter_selection import (
 )
 from jipandan.tui.screens.jump_to_index import JumpToIndexModal
 from jipandan.tui.screens.start_offset import StartOffsetModal, TrimOffsets
-from jipandan.tui.widgets.detail_panel import (
-    ClipDetailPanel,
-    FINE_NUDGE_COARSE,
-    FINE_NUDGE_FINE,
-)
+from jipandan.tui.waveform_service import FINE_NUDGE_COARSE, FINE_NUDGE_FINE, WaveformService
+from jipandan.tui.widgets.detail_panel import ClipDetailPanel
 
 class ReviewScreen(Screen):
     BINDINGS = [
@@ -133,6 +130,7 @@ class ReviewScreen(Screen):
         self._waveform_cache_dir = (
             Path("tmp") / "waveform" / session.audio.stem
         )
+        self._waveform_service: WaveformService | None = None
         self._skip_undo_stack: list[tuple[str, ClipStatus]] = []
         self._waveform_bulk_progress: str | None = None
         self._persist_debounce_timer: Timer | None = None
@@ -165,6 +163,7 @@ class ReviewScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
+        self._waveform_service = self._detail_panel().waveform_service
         self._refresh_status_bars()
         self._rebuild_list(select_first=True)
 
@@ -225,6 +224,11 @@ class ReviewScreen(Screen):
 
     def _detail_panel(self) -> ClipDetailPanel:
         return self.query_one("#detail-panel", ClipDetailPanel)
+
+    def _waveform(self) -> WaveformService:
+        if self._waveform_service is None:
+            raise RuntimeError("WaveformService is not initialized until mount")
+        return self._waveform_service
 
     def _on_detail_nudge(self, edge: str, delta: float) -> None:
         if edge == "start":
@@ -555,8 +559,8 @@ class ReviewScreen(Screen):
         pending = [
             candidate
             for candidate in candidates
-            if not self._detail_panel()
-            .waveform_cache_path(candidate, suffix=".png")
+            if not self._waveform()
+            .basic_cache_path(candidate, suffix=".png")
             .exists()
         ]
         cached = len(candidates) - len(pending)
@@ -924,15 +928,15 @@ class ReviewScreen(Screen):
         generated = 0
         cached = 0
         failed = 0
-        panel = self._detail_panel()
+        waveform = self._waveform()
         try:
             for index, candidate in enumerate(candidates, 1):
-                target = panel.waveform_cache_path(candidate, suffix=".png")
+                target = waveform.basic_cache_path(candidate, suffix=".png")
                 if target.exists():
                     cached += 1
                 else:
                     try:
-                        panel.generate_waveform_file(candidate)
+                        waveform.generate_basic(candidate)
                         generated += 1
                     except Exception:
                         failed += 1
