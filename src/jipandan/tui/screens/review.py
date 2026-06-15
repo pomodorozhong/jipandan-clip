@@ -593,18 +593,20 @@ class ReviewScreen(Screen):
 
     def action_nudge_start_down(self) -> None:
         panel = self._detail_panel()
-        if panel.is_fine_end_tab():
+        mode = panel.active_fine_mode()
+        if mode == "end":
             self._nudge_end(-FINE_NUDGE_FINE)
-        elif panel.is_fine_start_tab():
+        elif mode == "start":
             self._nudge_start(-FINE_NUDGE_FINE)
         else:
             self._nudge_start(-FINE_NUDGE_COARSE)
 
     def action_nudge_start_up(self) -> None:
         panel = self._detail_panel()
-        if panel.is_fine_end_tab():
+        mode = panel.active_fine_mode()
+        if mode == "end":
             self._nudge_end(FINE_NUDGE_FINE)
-        elif panel.is_fine_start_tab():
+        elif mode == "start":
             self._nudge_start(FINE_NUDGE_FINE)
         else:
             self._nudge_start(FINE_NUDGE_COARSE)
@@ -645,19 +647,17 @@ class ReviewScreen(Screen):
 
     def action_nudge_end_down(self) -> None:
         panel = self._detail_panel()
-        if panel.is_fine_start_tab():
+        mode = panel.active_fine_mode()
+        if mode == "start":
             self._nudge_start(-FINE_NUDGE_COARSE)
-        elif panel.is_fine_end_tab():
-            self._nudge_end(-FINE_NUDGE_COARSE)
         else:
             self._nudge_end(-FINE_NUDGE_COARSE)
 
     def action_nudge_end_up(self) -> None:
         panel = self._detail_panel()
-        if panel.is_fine_start_tab():
+        mode = panel.active_fine_mode()
+        if mode == "start":
             self._nudge_start(FINE_NUDGE_COARSE)
-        elif panel.is_fine_end_tab():
-            self._nudge_end(FINE_NUDGE_COARSE)
         else:
             self._nudge_end(FINE_NUDGE_COARSE)
 
