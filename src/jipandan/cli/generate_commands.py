@@ -4,7 +4,7 @@ import shlex
 from datetime import datetime, timezone
 from pathlib import Path
 
-from jipandan.core.ffmpeg import MPV_BASE
+from jipandan.core.audio_playback import default_audio_playback
 from jipandan.core.srt import (
     SubtitleEntry,
     compute_duration,
@@ -12,7 +12,7 @@ from jipandan.core.srt import (
     srt_time_to_ffmpeg,
 )
 
-_MPV_FLAGS = " ".join(MPV_BASE)
+_MPV_FLAGS = " ".join(default_audio_playback.cli_base_args())
 
 
 CELLS_PER_CLIP = 5

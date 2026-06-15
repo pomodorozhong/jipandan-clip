@@ -10,7 +10,7 @@ from textual.containers import Vertical
 from textual.timer import Timer
 from textual.widgets import Static, TabbedContent, TabPane
 
-from jipandan.core import ffmpeg
+from jipandan.core.audio_playback import AudioPlayback, default_audio_playback
 from jipandan.core.models import ClipCandidate, Session
 from jipandan.core.srt import seconds_to_ffmpeg_timestamp
 from jipandan.tui.fine_waveform import (
@@ -90,12 +90,18 @@ class ClipDetailPanel(Vertical):
         session: Session,
         waveform_cache_dir: Path,
         *,
+        audio_playback: AudioPlayback | None = None,
         on_detail_updated: Callable[[], None] | None = None,
         on_nudge: Callable[[NudgeEdge, float], None] | None = None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self.session = session
+        self._audio_playback = (
+            audio_playback
+            if audio_playback is not None
+            else default_audio_playback
+        )
         self._waveform_cache_dir = waveform_cache_dir
         self._waveform: WaveformService | None = None
         self._on_detail_updated = on_detail_updated
@@ -721,14 +727,14 @@ class ClipDetailPanel(Vertical):
         self.app.call_from_thread(self._start_playback_status, duration)
         process: subprocess.Popen | None = None
         try:
-            process = ffmpeg.spawn_play_preview(
+            process = self._audio_playback.spawn_play_preview(
                 self.session.audio, candidate.start, candidate.duration
             )
             self._playback_process = process
             process.wait()
         except Exception as exc:
             self.app.call_from_thread(
-                self.notify, f"mpv failed: {exc}", severity="error"
+                self.notify, f"Playback failed: {exc}", severity="error"
             )
         finally:
             if self._playback_process is process:
@@ -763,7 +769,7 @@ class ClipDetailPanel(Vertical):
         self.app.call_from_thread(self._start_playback_status, duration_seconds)
         process: subprocess.Popen | None = None
         try:
-            process = ffmpeg.spawn_play_preview(
+            process = self._audio_playback.spawn_play_preview(
                 self.session.audio,
                 start,
                 duration_str,
@@ -772,7 +778,7 @@ class ClipDetailPanel(Vertical):
             process.wait()
         except Exception as exc:
             self.app.call_from_thread(
-                self.notify, f"mpv failed: {exc}", severity="error"
+                self.notify, f"Playback failed: {exc}", severity="error"
             )
         finally:
             if self._playback_process is process:

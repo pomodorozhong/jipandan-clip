@@ -15,6 +15,7 @@ from textual.timer import Timer
 from textual.widgets import Input, Label, Static
 
 from jipandan.core import ffmpeg
+from jipandan.core.audio_playback import AudioPlayback, default_audio_playback
 from jipandan.core.ffmpeg import ExportOptions
 from jipandan.core.models import ClipCandidate
 from jipandan.tui.widgets.waveform import (
@@ -159,12 +160,18 @@ class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
         candidate: ClipCandidate,
         options: ExportOptions,
         *,
+        audio_playback: AudioPlayback | None = None,
         try_preloaded: Callable[[], ExportPreviewArtifacts | None] | None = None,
     ) -> None:
         super().__init__()
         self._audio = audio
         self._candidate = candidate
         self._options = options
+        self._audio_playback = (
+            audio_playback
+            if audio_playback is not None
+            else default_audio_playback
+        )
         self._try_preloaded = try_preloaded
         self._preview_path: Path | None = None
         self._as_is_seconds: float | None = None
@@ -361,13 +368,15 @@ class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
             return
         self._stop_playback()
         try:
-            self._playback_process = ffmpeg.spawn_play_file(self._preview_path)
+            self._playback_process = self._audio_playback.spawn_play_file(
+                self._preview_path
+            )
         except Exception as exc:
-            self.notify(f"mpv failed: {exc}", severity="error")
+            self.notify(f"Playback failed: {exc}", severity="error")
             return
         # Use the probed preview duration when available; otherwise fall back
         # to ``candidate.duration`` as an upper bound. The watcher below clears
-        # the status once mpv exits, so an upper bound stays safe.
+        # the status once playback exits, so an upper bound stays safe.
         countdown_seconds = (
             self._preview_seconds
             if self._preview_seconds is not None
@@ -411,7 +420,7 @@ class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
             self._stop_playback()
             return
         if remaining <= 0:
-            # mpv may still be flushing; let the next tick check process.poll().
+            # The player may still be flushing; let the next tick check process.poll().
             status.update(format_playback_remaining(0.0))
             return
         status.update(format_playback_remaining(remaining))
