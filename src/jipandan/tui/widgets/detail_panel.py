@@ -1,5 +1,4 @@
 import subprocess
-import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -658,44 +657,6 @@ class ClipDetailPanel(Vertical):
             mode, candidate, keep_previous=keep_previous
         )
 
-    def _start_fine_slice_waveform_generation(
-        self,
-        *,
-        candidate: ClipCandidate,
-        begin_generation: Callable[[], int],
-        is_current: Callable[[int], bool],
-        set_placeholder: Callable[[str], None],
-        present: Callable[[ClipCandidate, Path, float | None], None],
-        generate_file: Callable[[ClipCandidate], tuple[Path, float]],
-        play_after: bool = False,
-        play_preview: Callable[[ClipCandidate], None] | None = None,
-        keep_previous: bool = False,
-    ) -> None:
-        generation = begin_generation()
-        if not keep_previous:
-            set_placeholder(GENERATING_WAVEFORM_PLACEHOLDER)
-
-        app = self.app
-
-        def run() -> None:
-            try:
-                target_png, media_duration = generate_file(candidate)
-            except Exception as exc:
-                if is_current(generation):
-                    app.call_from_thread(set_placeholder, f"Waveform failed: {exc}")
-                return
-            if not is_current(generation):
-                return
-
-            def on_ready() -> None:
-                present(candidate, target_png, media_duration)
-                if play_after and play_preview is not None:
-                    play_preview(candidate)
-
-            app.call_from_thread(on_ready)
-
-        threading.Thread(target=run, daemon=True).start()
-
     def _start_fine_waveform_generation(
         self,
         mode: FineNudgeMode,
@@ -705,21 +666,50 @@ class ClipDetailPanel(Vertical):
         play_after: bool = False,
     ) -> None:
         slice_ = self.waveform_service.fine(mode)
-        self._start_fine_slice_waveform_generation(
-            candidate=candidate,
-            begin_generation=slice_.begin_generation,
-            is_current=slice_.is_generation_current,
-            set_placeholder=lambda msg, m=mode: self._fine_waveform_widget(
-                m
-            ).show_placeholder(msg),
-            present=lambda c, path, dur, m=mode: self._present_fine_waveform(
-                m, c, path, media_duration=dur
-            ),
-            generate_file=slice_.generate,
-            play_after=play_after,
-            play_preview=lambda c, m=mode: self.run_play_fine_preview(m, c),
-            keep_previous=keep_previous,
+        generation = slice_.begin_generation()
+        if not keep_previous:
+            self._set_fine_waveform_placeholder(
+                mode, GENERATING_WAVEFORM_PLACEHOLDER
+            )
+        self._run_fine_waveform_generation(
+            mode, candidate, generation, play_after
         )
+
+    @work(thread=True, exclusive=True, group="detail-fine-waveform")
+    def _run_fine_waveform_generation(
+        self,
+        mode: FineNudgeMode,
+        candidate: ClipCandidate,
+        generation: int,
+        play_after: bool,
+    ) -> None:
+        slice_ = self.waveform_service.fine(mode)
+        try:
+            target_png, media_duration = slice_.generate(candidate)
+        except Exception as exc:
+            if slice_.is_generation_current(generation):
+                self.app.call_from_thread(
+                    self._set_fine_waveform_placeholder,
+                    mode,
+                    f"Waveform failed: {exc}",
+                )
+            return
+        if not slice_.is_generation_current(generation):
+            return
+
+        def on_ready() -> None:
+            self._present_fine_waveform(
+                mode, candidate, target_png, media_duration=media_duration
+            )
+            if play_after:
+                self.run_play_fine_preview(mode, candidate)
+
+        self.app.call_from_thread(on_ready)
+
+    def _set_fine_waveform_placeholder(
+        self, mode: FineNudgeMode, message: str
+    ) -> None:
+        self._fine_waveform_widget(mode).show_placeholder(message)
 
     @work(thread=True, exclusive=True, group="detail-playback")
     def run_play_preview(self, candidate: ClipCandidate) -> None:
