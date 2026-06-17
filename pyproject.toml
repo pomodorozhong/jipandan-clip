@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "mlx-whisper>=0.4.3",
+    "sherpa-onnx>=1.13.3",
+    "sherpa-onnx-core>=1.13.3",
     "textual>=1.0.0",
     "textual-image>=0.12.0",
 ]

@@ -28,6 +28,14 @@ def seconds_to_ffmpeg_timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}.{ms:03d}"
 
 
+def format_srt_timestamp(seconds: float) -> str:
+    total_ms = int(round(seconds * 1000))
+    hours, remainder = divmod(total_ms, 3_600_000)
+    minutes, remainder = divmod(remainder, 60_000)
+    secs, ms = divmod(remainder, 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
+
+
 def compute_duration(start: str, end: str) -> str:
     duration_seconds = max(0.0, srt_time_to_seconds(end) - srt_time_to_seconds(start))
     return f"{duration_seconds:.3f}"

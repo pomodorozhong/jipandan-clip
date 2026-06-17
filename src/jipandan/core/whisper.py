@@ -4,6 +4,8 @@ import os
 import threading
 from pathlib import Path
 
+from jipandan.core.srt import format_srt_timestamp
+
 # Textual (and other TUIs) expose stderr.fileno() == -1. tqdm then tries to
 # create a multiprocessing lock for progress bars, which crashes with
 # "bad value(s) in fds_to_keep" when Hugging Face downloads models from a
@@ -35,7 +37,7 @@ def configure_progress_bars() -> None:
         pass
 
 
-def describe_transcribe_call(
+def describe_whisper_call(
     *,
     model_name: str,
     language: str | None,
@@ -70,7 +72,7 @@ def transcribe_to_text(
     configure_progress_bars()
     import mlx_whisper
 
-    model_repo, transcribe_kwargs = describe_transcribe_call(
+    model_repo, transcribe_kwargs = describe_whisper_call(
         model_name=model_name,
         language=language,
         temperature=temperature,
@@ -90,8 +92,8 @@ def transcribe_to_text(
             for idx, segment in enumerate(segments, start=1):
                 f.write(f"{idx}\n")
                 f.write(
-                    f"{_format_srt_timestamp(float(segment['start']))} --> "
-                    f"{_format_srt_timestamp(float(segment['end']))}\n"
+                    f"{format_srt_timestamp(float(segment['start']))} --> "
+                    f"{format_srt_timestamp(float(segment['end']))}\n"
                 )
                 f.write(f"{segment['text'].strip()}\n\n")
         else:
@@ -101,15 +103,6 @@ def transcribe_to_text(
                     f"{float(segment['end']):08.3f} "
                     f"{segment['text'].strip()}\n"
                 )
-
-
-def _format_srt_timestamp(seconds: float) -> str:
-    total_ms = int(round(seconds * 1000))
-    hours, remainder = divmod(total_ms, 3_600_000)
-    minutes, remainder = divmod(remainder, 60_000)
-    secs, ms = divmod(remainder, 1000)
-    return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
-
 
 def _resolve_model_name(model_name: str) -> str:
     if "/" in model_name:

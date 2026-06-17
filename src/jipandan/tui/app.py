@@ -17,22 +17,28 @@ class JipandanApp(App):
         srt_path: Path | None = None,
         clip_dir: Path | None = None,
         resume: bool = False,
-        model: str = "large-v3",
+        engine: str = "whisper",
+        model: str | None = None,
         language: str | None = None,
         temperature: float = 0.0,
         max_context: int = 0,
         entropy_thold: float = 3.0,
+        num_threads: int | None = None,
     ) -> None:
         super().__init__()
+        from jipandan.core.transcribe import default_model_for_engine
+
         self.audio = audio.resolve()
         self.srt_path = (srt_path or self.audio.with_suffix(".srt")).resolve()
         self.clip_dir = (clip_dir or Path("clip")).resolve()
         self.resume = resume
-        self.model = model
+        self.engine = engine
+        self.model = model or default_model_for_engine(engine)
         self.language = language
         self.temperature = temperature
         self.max_context = max_context
         self.entropy_thold = entropy_thold
+        self.num_threads = num_threads
 
     def on_mount(self) -> None:
         session_path = self.audio.with_suffix(".jipandan.json")
@@ -43,11 +49,13 @@ class JipandanApp(App):
                     audio=self.audio,
                     srt_path=self.srt_path,
                     clip_dir=self.clip_dir,
+                    engine=self.engine,
                     model=self.model,
                     language=self.language,
                     temperature=self.temperature,
                     max_context=self.max_context,
                     entropy_thold=self.entropy_thold,
+                    num_threads=self.num_threads,
                 )
             )
             return

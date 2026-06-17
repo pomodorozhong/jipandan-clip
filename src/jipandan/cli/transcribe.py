@@ -2,7 +2,7 @@ import argparse
 import time
 from pathlib import Path
 
-from jipandan.core.whisper import transcribe_to_text
+from jipandan.core.transcribe import default_model_for_engine, transcribe_to_text
 
 
 def _format_elapsed(elapsed_seconds: float) -> str:
@@ -29,9 +29,15 @@ def main() -> None:
         help="Output format (default: srt).",
     )
     parser.add_argument(
+        "--engine",
+        choices=("whisper", "paraformer"),
+        default="whisper",
+        help="Transcription backend (default: whisper).",
+    )
+    parser.add_argument(
         "--model",
-        default="large-v3",
-        help="Whisper model name (default: large-v3).",
+        default=None,
+        help="Model name (default: large-v3 for whisper, paraformer-zh-small for paraformer).",
     )
     parser.add_argument(
         "--language",
@@ -57,9 +63,17 @@ def main() -> None:
         "--entropy-thold",
         type=float,
         default=3.0,
-        help="Entropy threshold for fallback decoding (default: 3.0).",
+        help="Entropy threshold for fallback decoding (Whisper only, default: 3.0).",
+    )
+    parser.add_argument(
+        "--num-threads",
+        type=int,
+        default=None,
+        help="CPU threads for Paraformer (default: auto).",
     )
     args = parser.parse_args()
+    if args.model is None:
+        args.model = default_model_for_engine(args.engine)
     if args.output is None:
         args.output = args.input.with_suffix(f".{args.output_format}")
 
@@ -71,11 +85,13 @@ def main() -> None:
     transcribe_to_text(
         input_audio=args.input,
         output_text=args.output,
+        engine=args.engine,
         model_name=args.model,
         language=args.language,
         temperature=args.temperature,
         max_context=args.max_context,
         entropy_thold=args.entropy_thold,
+        num_threads=args.num_threads,
         output_format=args.output_format,
     )
     elapsed = time.perf_counter() - start

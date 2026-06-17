@@ -11,6 +11,7 @@ if os.environ.get("TEXTUAL_DRIVER") == "textual.drivers.web_driver:WebDriver":
         os.environ["TEXTUAL_CELL_HEIGHT"] = "16"
 
 # Configure tqdm/Hugging Face before Textual starts (stderr has no real fd in TUIs).
+from jipandan.core.transcribe import default_model_for_engine
 from jipandan.core.whisper import configure_progress_bars
 from jipandan.tui.app import JipandanApp
 
@@ -38,9 +39,15 @@ def main() -> None:
         help="Load existing session and merge with SRT if present.",
     )
     parser.add_argument(
+        "--engine",
+        choices=("whisper", "paraformer"),
+        default="whisper",
+        help="Transcription backend (default: whisper).",
+    )
+    parser.add_argument(
         "--model",
-        default="large-v3",
-        help="Whisper model name for transcription (default: large-v3).",
+        default=None,
+        help="Model name (default: large-v3 for whisper, paraformer-zh-small for paraformer).",
     )
     parser.add_argument(
         "--language",
@@ -66,9 +73,17 @@ def main() -> None:
         "--entropy-thold",
         type=float,
         default=3.0,
-        help="Entropy threshold for fallback decoding (default: 3.0).",
+        help="Entropy threshold for fallback decoding (Whisper only, default: 3.0).",
+    )
+    parser.add_argument(
+        "--num-threads",
+        type=int,
+        default=None,
+        help="CPU threads for Paraformer (default: auto).",
     )
     args = parser.parse_args()
+    if args.model is None:
+        args.model = default_model_for_engine(args.engine)
 
     configure_progress_bars()
 
@@ -77,11 +92,13 @@ def main() -> None:
         srt_path=args.srt,
         clip_dir=args.clip_dir,
         resume=args.resume,
+        engine=args.engine,
         model=args.model,
         language=args.language,
         temperature=args.temperature,
         max_context=args.max_context,
         entropy_thold=args.entropy_thold,
+        num_threads=args.num_threads,
     )
     app.run()
 
