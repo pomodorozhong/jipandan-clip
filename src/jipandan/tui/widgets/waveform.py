@@ -60,7 +60,7 @@ class WaveformWidget(Vertical, can_focus=True):
         height: 1fr;
         min-height: 6;
         padding: 0;
-        border: none;
+        border: tall transparent;
     }
 
     WaveformWidget:focus {
