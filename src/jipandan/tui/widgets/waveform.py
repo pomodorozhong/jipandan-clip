@@ -127,6 +127,7 @@ class WaveformWidget(Vertical, can_focus=True):
         self._marker_end: float | None = None
         self._preview_marker_start: float | None = None
         self._preview_marker_end: float | None = None
+        self._playhead_time: float | None = None
         self._nudge_handler: Callable[[NudgeEdge, float], None] | None = None
         self._pending_placeholder: str | None = None
         self._pending_plot_apply = False
@@ -181,6 +182,18 @@ class WaveformWidget(Vertical, can_focus=True):
         if not self._nodes_ready() or self._audio_path is None:
             return
         self._apply_marker_overlay()
+
+    def set_playhead(self, time_seconds: float) -> None:
+        if self._playhead_time == time_seconds:
+            return
+        self._playhead_time = time_seconds
+        self._apply_playhead_overlay()
+
+    def clear_playhead(self) -> None:
+        if self._playhead_time is None:
+            return
+        self._playhead_time = None
+        self._apply_playhead_overlay()
 
     def clear_marker_preview(self) -> None:
         if (
@@ -241,6 +254,7 @@ class WaveformWidget(Vertical, can_focus=True):
         self._marker_end = None
         self._preview_marker_start = None
         self._preview_marker_end = None
+        self._playhead_time = None
         self._pending_plot_apply = False
         self._envelope_times = None
         self._envelope_mins = None
@@ -562,6 +576,7 @@ class WaveformWidget(Vertical, can_focus=True):
         ):
             return
         markers = self._marker_positions_relative()
+        playhead = self._playhead_relative()
         render_waveform_plot(
             plot,
             times=self._envelope_times,
@@ -569,8 +584,27 @@ class WaveformWidget(Vertical, can_focus=True):
             maxs=self._envelope_maxs,
             marker_start=markers[0] if markers is not None else None,
             marker_end=markers[1] if markers is not None else None,
+            playhead=playhead,
             x_limits=x_limits,
         )
+
+    def _playhead_relative(self) -> float | None:
+        if self._playhead_time is None or self._viewport_start is None:
+            return None
+        image_start, _image_duration, image_end = self._image_time_range()
+        rel = self._playhead_time - image_start
+        if rel < 0.0 or rel > image_end - image_start:
+            return None
+        return rel
+
+    def _apply_playhead_overlay(self) -> None:
+        if self._plot_update_in_progress:
+            return
+        plot = self.query_one("#waveform-plot", WaveformPlotWidget)
+        if not plot.display:
+            return
+        self._render_plot(plot, x_limits=(plot._x_min, plot._x_max))
+        plot.refresh()
 
     def _start_envelope_load(self, mp3_path: Path) -> None:
         self._scroll_regen_generation += 1

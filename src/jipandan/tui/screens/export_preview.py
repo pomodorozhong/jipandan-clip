@@ -174,6 +174,7 @@ class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
         self._preview_seconds: float | None = None
         self._playback_process: subprocess.Popen | None = None
         self._playback_end: float | None = None
+        self._playback_duration: float | None = None
         self._playback_timer: Timer | None = None
         # Guard UI callbacks from worker threads after the modal is dismissed.
         self._is_active = False
@@ -379,6 +380,7 @@ class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
             if self._preview_seconds is not None
             else float(self._candidate.duration)
         )
+        self._playback_duration = countdown_seconds
         self._playback_end = time.monotonic() + countdown_seconds
         self._update_playback_status()
         self._playback_timer = self.set_interval(0.2, self._update_playback_status)
@@ -392,7 +394,9 @@ class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
             self._playback_timer.stop()
             self._playback_timer = None
         self._playback_end = None
+        self._playback_duration = None
         try:
+            self._waveform_widget().clear_playhead()
             self.query_one("#export-preview-status", Static).update("")
         except Exception:
             # Widget may already be gone during unmount.
@@ -413,6 +417,7 @@ class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
         remaining = self._playback_end - time.monotonic()
         try:
             status = self.query_one("#export-preview-status", Static)
+            widget = self._waveform_widget()
         except NoMatches:
             self._stop_playback()
             return
@@ -420,6 +425,9 @@ class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
             # The player may still be flushing; let the next tick check process.poll().
             status.update(format_playback_remaining(0.0))
             return
+        if self._playback_duration is not None:
+            elapsed = self._playback_duration - remaining
+            widget.set_playhead(elapsed)
         status.update(format_playback_remaining(remaining))
 
     def action_replay(self) -> None:

@@ -11,6 +11,7 @@ from textual_plot.plot_widget import map_pixel_to_coordinate
 
 START_MARKER_STYLE = "rgb(255,200,0)"
 END_MARKER_STYLE = "rgb(255,80,200)"
+PLAYHEAD_STYLE = "rgb(255,255,255)"
 DEFAULT_ENVELOPE_BUCKETS = 800
 
 
@@ -123,6 +124,7 @@ def render_waveform_plot(
     maxs: np.ndarray,
     marker_start: float | None = None,
     marker_end: float | None = None,
+    playhead: float | None = None,
     use_duration_axis: bool = True,
     x_limits: tuple[float, float] | None = None,
 ) -> None:
@@ -142,5 +144,7 @@ def render_waveform_plot(
         plot.add_v_line(marker_start, line_style=START_MARKER_STYLE, label="Start")
     if marker_end is not None:
         plot.add_v_line(marker_end, line_style=END_MARKER_STYLE, label="End")
+    if playhead is not None:
+        plot.add_v_line(playhead, line_style=PLAYHEAD_STYLE, label="")
     plot.set_xlabel("")
     plot.set_ylabel("")

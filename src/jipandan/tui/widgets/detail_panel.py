@@ -11,7 +11,7 @@ from textual.widgets import Static, TabbedContent, TabPane
 
 from jipandan.core.audio_playback import AudioPlayback, default_audio_playback
 from jipandan.core.models import ClipCandidate, Session
-from jipandan.core.srt import seconds_to_ffmpeg_timestamp
+from jipandan.core.srt import seconds_to_ffmpeg_timestamp, srt_time_to_seconds
 from jipandan.tui.fine_waveform import (
     FINE_END_TAB_ID,
     FINE_EXTRACT_DURATION,
@@ -107,8 +107,11 @@ class ClipDetailPanel(Vertical):
         self._on_nudge = on_nudge
         self._detail_tab = DETAIL_TAB_BASIC
         self._playback_end: float | None = None
+        self._playback_start: float | None = None
+        self._playback_duration: float | None = None
         self._playback_timer: Timer | None = None
         self._playback_process: subprocess.Popen | None = None
+        self._playback_waveform: WaveformWidget | None = None
         self._active_candidate: ClipCandidate | None = None
 
     @property
@@ -443,6 +446,7 @@ class ClipDetailPanel(Vertical):
             return
         if process.poll() is None:
             process.terminate()
+        self._clear_playback_status()
 
     def play_preview(self, candidate: ClipCandidate) -> None:
         mode = self.active_fine_mode()
@@ -453,12 +457,22 @@ class ClipDetailPanel(Vertical):
 
     def _clear_playback_status(self) -> None:
         self._playback_end = None
+        self._playback_start = None
+        self._playback_duration = None
         if self._playback_timer is not None:
             self._playback_timer.stop()
             self._playback_timer = None
+        if self._playback_waveform is not None:
+            self._playback_waveform.clear_playhead()
+            self._playback_waveform = None
         self.query_one("#playback-status", Static).update("")
 
-    def _start_playback_status(self, duration_seconds: float) -> None:
+    def _start_playback_status(
+        self, duration_seconds: float, *, playhead_start: float
+    ) -> None:
+        self._playback_waveform = self._active_waveform_widget()
+        self._playback_start = playhead_start
+        self._playback_duration = duration_seconds
         self._playback_end = time.monotonic() + duration_seconds
         self._update_playback_status()
         if self._playback_timer is not None:
@@ -466,12 +480,19 @@ class ClipDetailPanel(Vertical):
         self._playback_timer = self.set_interval(0.2, self._update_playback_status)
 
     def _update_playback_status(self) -> None:
-        if self._playback_end is None:
+        if (
+            self._playback_end is None
+            or self._playback_start is None
+            or self._playback_duration is None
+        ):
             return
         remaining = self._playback_end - time.monotonic()
         if remaining <= 0:
             self._clear_playback_status()
             return
+        elapsed = self._playback_duration - remaining
+        if self._playback_waveform is not None:
+            self._playback_waveform.set_playhead(self._playback_start + elapsed)
         self.query_one("#playback-status", Static).update(
             format_playback_remaining(remaining)
         )
@@ -713,7 +734,10 @@ class ClipDetailPanel(Vertical):
     @work(thread=True, exclusive=True, group="detail-playback")
     def run_play_preview(self, candidate: ClipCandidate) -> None:
         duration = float(candidate.duration)
-        self.app.call_from_thread(self._start_playback_status, duration)
+        playhead_start = srt_time_to_seconds(candidate.start.replace(".", ","))
+        self.app.call_from_thread(
+            self._start_playback_status, duration, playhead_start=playhead_start
+        )
         process: subprocess.Popen | None = None
         try:
             process = self._audio_playback.spawn_play_preview(
@@ -755,7 +779,12 @@ class ClipDetailPanel(Vertical):
         duration_seconds: float,
     ) -> None:
         duration_str = f"{duration_seconds:.3f}"
-        self.app.call_from_thread(self._start_playback_status, duration_seconds)
+        playhead_start = srt_time_to_seconds(start.replace(".", ","))
+        self.app.call_from_thread(
+            self._start_playback_status,
+            duration_seconds,
+            playhead_start=playhead_start,
+        )
         process: subprocess.Popen | None = None
         try:
             process = self._audio_playback.spawn_play_preview(
