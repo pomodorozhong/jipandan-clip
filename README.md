@@ -18,8 +18,6 @@ uv sync
 
 Run the full pipeline in one interactive session.
 
-Use iTerm2, Ghostty, or another terminal that supports inline images for waveform rendering.
-
 ```bash
 uv run jipandan raw.mp3
 ```
@@ -36,11 +34,9 @@ Session state is saved to `{audio_stem}.jipandan.json`.
 
 ### 2. Browser (via `jipandan-serve`)
 
-Use the browser UI if your terminal does not support inline waveform images.
+Use the browser UI if you prefer a web-based review session.
 
-Cons: Waveforms may look slightly blurrier than in iTerm2 or Ghostty.
-
-Pros: Asian IMEs are handled better by browsers. If you're having trouble typing clip titles in iTerm2 or Ghostty, consider trying this mode.
+Pros: Asian IMEs are handled better by browsers. If you're having trouble typing clip titles in the terminal, consider trying this mode.
 
 ```bash
 uv run jipandan-serve raw.mp3
@@ -63,4 +59,4 @@ Exported clips are saved as `clip/raw_0001_title.mp3`, `clip/raw_0002_title.mp3`
 ## Notice
 
 - The project is only tested on macOS.
-- Waveform display in the TUI uses inline PNG rendering (kitty/iTerm2 image protocol).
+- Waveforms are rendered with textual-plot (native terminal and browser).

@@ -167,34 +167,6 @@ def extract_preview_fast(
     """Extract a preview MP3 slice optimized for waveform rendering."""
     _extract_audio_slice_fast(input_audio, start, duration, out_mp3)
 
-
-WAVEFORM_PIXEL_SIZE = (800, 200)
-
-
-def render_waveform(
-    mp3: Path,
-    out_png: Path,
-    size: tuple[int, int] = WAVEFORM_PIXEL_SIZE,
-) -> None:
-    out_png.parent.mkdir(parents=True, exist_ok=True)
-    width, height = size
-    _run(
-        [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            "quiet",
-            "-i",
-            str(mp3),
-            "-filter_complex",
-            f"showwavespic=s={width}x{height}:colors=cyan",
-            "-frames:v",
-            "1",
-            str(out_png),
-        ]
-    )
-
-
 _INVALID_FILENAME_CHARS = re.compile(r'[/\\:*?"<>|\n\r\t]+')
 
 

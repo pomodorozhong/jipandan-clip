@@ -70,6 +70,34 @@ def downsample_envelope(
     return times, np.asarray(mins, dtype=np.float64), np.asarray(maxs, dtype=np.float64)
 
 
+def envelope_for_time_range(
+    samples: np.ndarray,
+    duration: float,
+    t_start: float,
+    t_end: float,
+    buckets: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Downsample ``samples`` to an envelope covering ``[t_start, t_end]``."""
+    if buckets <= 0:
+        raise ValueError("buckets must be positive")
+    if duration <= 0 or samples.size == 0:
+        return downsample_envelope(samples[:0], 0.0, buckets)
+
+    t_start = max(0.0, min(float(t_start), duration))
+    t_end = max(t_start, min(float(t_end), duration))
+    if t_end <= t_start:
+        return downsample_envelope(samples[:0], 0.0, buckets)
+
+    sample_count = samples.size
+    i0 = int(t_start / duration * sample_count)
+    i1 = max(i0 + 1, int(t_end / duration * sample_count))
+    i1 = min(i1, sample_count)
+    slice_samples = samples[i0:i1]
+    slice_duration = t_end - t_start
+    times, mins, maxs = downsample_envelope(slice_samples, slice_duration, buckets)
+    return times + t_start, mins, maxs
+
+
 def load_waveform_envelope(
     mp3: Path,
     *,

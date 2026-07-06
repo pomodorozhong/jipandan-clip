@@ -35,7 +35,6 @@ from jipandan.tui.screens.filter_selection import (
     FilterSelectionModal,
 )
 from jipandan.tui.screens.jump_to_index import JumpToIndexModal
-from jipandan.tui.screens.plot_waveform_preview import PlotWaveformPreviewModal
 from jipandan.tui.screens.start_offset import StartOffsetModal, TrimOffsets
 from jipandan.tui.waveform_service import FINE_NUDGE_COARSE, FINE_NUDGE_FINE, WaveformService
 from jipandan.tui.widgets.detail_panel import ClipDetailPanel
@@ -65,7 +64,6 @@ class ReviewScreen(Screen):
             priority=True,
         ),
         Binding("o", "set_trim_offsets", "Trim offsets"),
-        Binding("p", "open_plot_waveform_preview", "Plot preview"),
         Binding(
             "left_curly_bracket,{",
             "nudge_end_down",
@@ -550,14 +548,6 @@ class ReviewScreen(Screen):
             self._handle_jump_to_index,
         )
 
-    def action_open_plot_waveform_preview(self) -> None:
-        candidate = self._current_candidate()
-        if candidate is None:
-            return
-        self.app.push_screen(
-            PlotWaveformPreviewModal(candidate, self._waveform()),
-        )
-
     def action_generate_filter_waveforms(self) -> None:
         if self._waveform_bulk_progress is not None:
             self.notify("Waveform pre-generation already running.", severity="warning")
@@ -570,7 +560,7 @@ class ReviewScreen(Screen):
             candidate
             for candidate in candidates
             if not self._waveform()
-            .basic_cache_path(candidate, suffix=".png")
+            .basic_cache_path(candidate, suffix=".mp3")
             .exists()
         ]
         cached = len(candidates) - len(pending)
@@ -941,7 +931,7 @@ class ReviewScreen(Screen):
         waveform = self._waveform()
         try:
             for index, candidate in enumerate(candidates, 1):
-                target = waveform.basic_cache_path(candidate, suffix=".png")
+                target = waveform.basic_cache_path(candidate, suffix=".mp3")
                 if target.exists():
                     cached += 1
                 else:

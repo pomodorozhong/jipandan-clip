@@ -143,6 +143,20 @@ class WaveformNudgeBar(Widget):
             return self._preview_end
         return self._marker_end
 
+    def _time_to_bar_x(self, time_seconds: float, width: int) -> int:
+        if self._waveform is not None:
+            mapped = self._waveform.map_time_to_nudge_x(time_seconds)
+            if mapped is not None:
+                return max(0, min(width - 1, mapped))
+        if self._range_start is None or self._range_duration is None:
+            return 0
+        return time_to_pixel_x(
+            time_seconds,
+            self._range_start,
+            self._range_duration,
+            width,
+        )
+
     def _handle_x_positions(self, width: int) -> tuple[int | None, int | None]:
         if (
             self._range_start is None
@@ -154,18 +168,8 @@ class WaveformNudgeBar(Widget):
         end_time = self._effective_end()
         if start_time is None or end_time is None:
             return None, None
-        start_x = time_to_pixel_x(
-            start_time,
-            self._range_start,
-            self._range_duration,
-            width,
-        )
-        end_x = time_to_pixel_x(
-            end_time,
-            self._range_start,
-            self._range_duration,
-            width,
-        )
+        start_x = self._time_to_bar_x(start_time, width)
+        end_x = self._time_to_bar_x(end_time, width)
         return start_x, end_x
 
     def _clamp_start(self, time_seconds: float, end_time: float) -> float:
@@ -300,6 +304,10 @@ class WaveformNudgeBar(Widget):
         width = self.size.width
         if width <= 0:
             return None
+        if self._waveform is not None:
+            mapped = self._waveform.map_nudge_x_to_time(event.x)
+            if mapped is not None:
+                return mapped
         return pixel_x_to_time(
             event.x,
             self._range_start,

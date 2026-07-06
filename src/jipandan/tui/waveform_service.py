@@ -118,31 +118,17 @@ class WaveformService:
     # --- file generation (thread-safe) ---
 
     @staticmethod
-    def media_duration(png_path: Path) -> float | None:
-        mp3_path = png_path.with_name(png_path.stem + ".mp3")
-        if not mp3_path.exists():
+    def media_duration(audio_path: Path) -> float | None:
+        if not audio_path.exists():
             return None
         try:
-            return ffmpeg.probe_duration_seconds(mp3_path)
+            return ffmpeg.probe_duration_seconds(audio_path)
         except (OSError, subprocess.CalledProcessError, ValueError):
             return None
 
     def generate_basic(self, candidate: ClipCandidate) -> tuple[Path, float]:
-        target_png = self.basic_cache_path(candidate, suffix=".png")
-        target_mp3 = self.basic_cache_path(candidate, suffix=".mp3")
-        if target_png.exists() and target_mp3.exists():
-            return target_png, ffmpeg.probe_duration_seconds(target_mp3)
-        target_png.parent.mkdir(parents=True, exist_ok=True)
-        extract_start, extract_duration = self.basic_extract_range(candidate)
-        ffmpeg.extract_preview_fast(
-            self.session.audio,
-            extract_start,
-            extract_duration,
-            target_mp3,
-        )
-        media_duration = ffmpeg.probe_duration_seconds(target_mp3)
-        ffmpeg.render_waveform(target_mp3, target_png)
-        return target_png, media_duration
+        target_mp3 = self.ensure_basic_mp3(candidate)
+        return target_mp3, ffmpeg.probe_duration_seconds(target_mp3)
 
     def ensure_basic_mp3(self, candidate: ClipCandidate) -> Path:
         """Return the basic-tab preview MP3, extracting it if needed."""

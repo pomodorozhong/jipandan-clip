@@ -32,7 +32,6 @@ DEFAULT_PRELOAD_EXPORT_OPTIONS = ExportOptions(mode="trim_edges")
 @dataclass(frozen=True)
 class ExportPreviewArtifacts:
     preview_path: Path
-    waveform_path: Path
     preview_seconds: float
     as_is_seconds: float
 
@@ -87,11 +86,8 @@ def build_export_preview_artifacts(
         as_is_seconds = preview_seconds
     else:
         as_is_seconds = float(candidate.duration)
-    waveform_path = preview_path.with_suffix(".png")
-    ffmpeg.render_waveform(preview_path, waveform_path)
     return ExportPreviewArtifacts(
         preview_path=preview_path,
-        waveform_path=waveform_path,
         preview_seconds=preview_seconds,
         as_is_seconds=as_is_seconds,
     )
@@ -309,14 +305,14 @@ class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
         if self._preview_still_valid(generation):
             self.app.call_from_thread(
                 self._on_preview_ready,
-                artifacts.waveform_path,
+                artifacts.preview_path,
                 artifacts.as_is_seconds,
                 artifacts.preview_seconds,
             )
 
     def _on_preview_ready(
         self,
-        waveform_path: Path,
+        preview_path: Path,
         as_is_seconds: float,
         preview_seconds: float,
     ) -> None:
@@ -326,7 +322,7 @@ class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
             widget = self.query_one("#export-preview-waveform", WaveformWidget)
             preview_duration = f"{preview_seconds:.3f}"
             widget.display_waveform(
-                waveform_path,
+                preview_path,
                 "00:00:00.000",
                 preview_duration,
                 media_duration=preview_seconds,

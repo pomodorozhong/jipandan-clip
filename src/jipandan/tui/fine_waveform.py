@@ -147,11 +147,10 @@ class FineWaveformSlice:
         return self._displayed_extract
 
     def generate(self, candidate: ClipCandidate) -> tuple[Path, float]:
-        target_png = self.cache_path(candidate, suffix=".png")
         target_mp3 = self.cache_path(candidate, suffix=".mp3")
-        if target_png.exists() and target_mp3.exists():
-            return target_png, ffmpeg.probe_duration_seconds(target_mp3)
-        target_png.parent.mkdir(parents=True, exist_ok=True)
+        if target_mp3.exists():
+            return target_mp3, ffmpeg.probe_duration_seconds(target_mp3)
+        target_mp3.parent.mkdir(parents=True, exist_ok=True)
         extract_start = self.extract_start(candidate)
         ffmpeg.extract_preview_fast(
             self._service.session.audio,
@@ -160,8 +159,7 @@ class FineWaveformSlice:
             target_mp3,
         )
         media_duration = ffmpeg.probe_duration_seconds(target_mp3)
-        ffmpeg.render_waveform(target_mp3, target_png)
-        return target_png, media_duration
+        return target_mp3, media_duration
 
     def _padding_insufficient(
         self, candidate: ClipCandidate, extract_start: float

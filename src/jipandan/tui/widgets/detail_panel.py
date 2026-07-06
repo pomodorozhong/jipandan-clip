@@ -416,9 +416,9 @@ class ClipDetailPanel(Vertical):
         try:
             for mode in FINE_NUDGE_MODES:
                 slice_ = waveform.fine(mode)
-                png, duration = slice_.generate(candidate)
+                mp3, duration = slice_.generate(candidate)
                 states[mode] = FineWaveformState(
-                    path=png,
+                    path=mp3,
                     extract_start=slice_.extract_start(candidate),
                     media_duration=duration,
                 )
@@ -485,7 +485,7 @@ class ClipDetailPanel(Vertical):
         play: bool = True,
     ) -> None:
         slice_ = self.waveform_service.fine(mode)
-        cached = slice_.cache_path(candidate, suffix=".png")
+        cached = slice_.cache_path(candidate, suffix=".mp3")
         if cached.exists():
             self._present_fine_waveform(
                 mode,
@@ -620,7 +620,7 @@ class ClipDetailPanel(Vertical):
         if state := waveform.try_reuse_basic(candidate):
             self._present_from_basic_state(candidate, state)
             return
-        cached = waveform.basic_cache_path(candidate, suffix=".png")
+        cached = waveform.basic_cache_path(candidate, suffix=".mp3")
         if cached.exists():
             self._present_waveform(
                 candidate,
@@ -644,7 +644,7 @@ class ClipDetailPanel(Vertical):
                 extract_start=state.extract_start,
             )
             return
-        cached = slice_.cache_path(candidate, suffix=".png")
+        cached = slice_.cache_path(candidate, suffix=".mp3")
         if cached.exists():
             self._present_fine_waveform(
                 mode,
@@ -685,7 +685,7 @@ class ClipDetailPanel(Vertical):
     ) -> None:
         slice_ = self.waveform_service.fine(mode)
         try:
-            target_png, media_duration = slice_.generate(candidate)
+            target_mp3, media_duration = slice_.generate(candidate)
         except Exception as exc:
             if slice_.is_generation_current(generation):
                 self.app.call_from_thread(
@@ -699,7 +699,7 @@ class ClipDetailPanel(Vertical):
 
         def on_ready() -> None:
             self._present_fine_waveform(
-                mode, candidate, target_png, media_duration=media_duration
+                mode, candidate, target_mp3, media_duration=media_duration
             )
             if play_after:
                 self.run_play_fine_preview(mode, candidate)
@@ -787,13 +787,13 @@ class ClipDetailPanel(Vertical):
                 GENERATING_WAVEFORM_PLACEHOLDER,
             )
         try:
-            target_png, media_duration = waveform.generate_basic(candidate)
+            target_mp3, media_duration = waveform.generate_basic(candidate)
             if not waveform.is_basic_generation_current(generation):
                 return
             self.app.call_from_thread(
                 self._present_waveform,
                 candidate,
-                target_png,
+                target_mp3,
                 media_duration=media_duration,
             )
         except Exception as exc:

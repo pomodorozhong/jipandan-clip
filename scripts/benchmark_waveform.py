@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark showwavespic vs textual-plot waveform generation."""
+"""Benchmark textual-plot waveform envelope generation."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ import argparse
 import shutil
 import statistics
 import sys
-import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,14 +29,7 @@ class ClipTiming:
     index: int
     duration: float
     padded_extract: float
-    showwavespic_ms: float
     textual_plot_ms: float
-
-    @property
-    def ratio(self) -> float:
-        if self.textual_plot_ms <= 0:
-            return float("inf")
-        return self.showwavespic_ms / self.textual_plot_ms
 
 
 @dataclass(frozen=True)
@@ -48,76 +41,27 @@ class BreakdownTiming:
 
 def _noop_schedule(
     _delay: float, _callback: object, _name: str
-) -> callable:
+) -> Callable[[], None]:
     return lambda: None
-
-
-def _padded_extract_seconds(candidate: ClipCandidate) -> float:
-    start = srt_time_to_seconds(candidate.start.replace(".", ","))
-    duration = float(candidate.duration)
-    padded_start = max(0.0, start - WAVEFORM_PADDING_SECONDS)
-    padded_end = start + duration + WAVEFORM_PADDING_SECONDS
-    return padded_end - padded_start
 
 
 def stratified_sample(
     candidates: list[ClipCandidate], sample_size: int
 ) -> list[ClipCandidate]:
-    """Pick clips evenly across duration quartiles."""
-    if sample_size >= len(candidates):
+    if len(candidates) <= sample_size:
         return list(candidates)
+    step = len(candidates) / sample_size
+    return [candidates[int(i * step)] for i in range(sample_size)]
 
-    sorted_candidates = sorted(candidates, key=lambda c: float(c.duration))
-    quartile_count = 4
-    per_quartile = max(1, sample_size // quartile_count)
-    remainder = sample_size - per_quartile * quartile_count
-    chunk_size = len(sorted_candidates) // quartile_count
 
-    selected: list[ClipCandidate] = []
-    for q in range(quartile_count):
-        start = q * chunk_size
-        end = len(sorted_candidates) if q == quartile_count - 1 else (q + 1) * chunk_size
-        bucket = sorted_candidates[start:end]
-        if not bucket:
-            continue
-        take = per_quartile + (1 if q < remainder else 0)
-        if take >= len(bucket):
-            selected.extend(bucket)
-            continue
-        step = len(bucket) / take
-        for i in range(take):
-            selected.append(bucket[int(i * step)])
-
-    # Deduplicate while preserving order (quartile edges may overlap).
-    seen: set[int] = set()
-    unique: list[ClipCandidate] = []
-    for candidate in selected:
-        if candidate.index in seen:
-            continue
-        seen.add(candidate.index)
-        unique.append(candidate)
-    return unique[:sample_size]
+def _padded_extract_seconds(candidate: ClipCandidate) -> float:
+    start = srt_time_to_seconds(candidate.start.replace(".", ","))
+    end = srt_time_to_seconds(candidate.end.replace(".", ","))
+    return (end - start) + 2 * WAVEFORM_PADDING_SECONDS
 
 
 def _median_ms(samples: list[float]) -> float:
     return statistics.median(samples) * 1000.0
-
-
-def _percentile_ms(samples: list[float], pct: float) -> float:
-    if not samples:
-        return 0.0
-    ordered = sorted(samples)
-    rank = (len(ordered) - 1) * pct / 100.0
-    low = int(rank)
-    high = min(low + 1, len(ordered) - 1)
-    weight = rank - low
-    return (ordered[low] * (1.0 - weight) + ordered[high] * weight) * 1000.0
-
-
-def _time_showwavespic(mp3: Path, png: Path) -> float:
-    start = time.perf_counter()
-    ffmpeg.render_waveform(mp3, png)
-    return time.perf_counter() - start
 
 
 def _time_textual_plot(mp3: Path, *, buckets: int) -> tuple[float, BreakdownTiming]:
@@ -170,26 +114,15 @@ def _benchmark_render_only(
     iterations: int,
     cache_dir: Path,
 ) -> tuple[list[ClipTiming], list[BreakdownTiming]]:
-    png_dir = cache_dir / "png"
-    png_dir.mkdir(parents=True, exist_ok=True)
     clip_timings: list[ClipTiming] = []
     breakdowns: list[BreakdownTiming] = []
 
     for candidate in candidates:
         mp3 = _ensure_mp3(service, candidate, cache_dir)
-        png = png_dir / f"{candidate.filename_token}.png"
-
-        show_samples: list[float] = []
         plot_samples: list[float] = []
         breakdown_samples: list[BreakdownTiming] = []
 
         for _ in range(iterations):
-            if png.exists():
-                png.unlink()
-            show_samples.append(_time_showwavespic(mp3, png))
-            if png.exists():
-                png.unlink()
-
             elapsed, breakdown = _time_textual_plot(mp3, buckets=buckets)
             plot_samples.append(elapsed)
             breakdown_samples.append(breakdown)
@@ -199,7 +132,6 @@ def _benchmark_render_only(
                 index=candidate.index,
                 duration=float(candidate.duration),
                 padded_extract=_padded_extract_seconds(candidate),
-                showwavespic_ms=_median_ms(show_samples),
                 textual_plot_ms=_median_ms(plot_samples),
             )
         )
@@ -227,28 +159,12 @@ def _benchmark_full_pipeline(
     clip_timings: list[ClipTiming] = []
 
     for candidate in candidates:
-        show_samples: list[float] = []
         plot_samples: list[float] = []
 
         for i in range(iterations):
-            show_dir = base_cache_dir / f"full-show-{candidate.index}-{i}"
             plot_dir = base_cache_dir / f"full-plot-{candidate.index}-{i}"
-            show_dir.mkdir(parents=True, exist_ok=True)
             plot_dir.mkdir(parents=True, exist_ok=True)
-
             extract_start, extract_duration = service.basic_extract_range(candidate)
-
-            show_mp3 = show_dir / "preview.mp3"
-            show_png = show_dir / "preview.png"
-            show_start = time.perf_counter()
-            ffmpeg.extract_preview_fast(
-                service.session.audio,
-                extract_start,
-                extract_duration,
-                show_mp3,
-            )
-            ffmpeg.render_waveform(show_mp3, show_png)
-            show_samples.append(time.perf_counter() - show_start)
 
             plot_mp3 = plot_dir / "preview.mp3"
             plot_start = time.perf_counter()
@@ -260,8 +176,6 @@ def _benchmark_full_pipeline(
             )
             load_waveform_envelope(plot_mp3, buckets=buckets)
             plot_samples.append(time.perf_counter() - plot_start)
-
-            shutil.rmtree(show_dir, ignore_errors=True)
             shutil.rmtree(plot_dir, ignore_errors=True)
 
         clip_timings.append(
@@ -269,7 +183,6 @@ def _benchmark_full_pipeline(
                 index=candidate.index,
                 duration=float(candidate.duration),
                 padded_extract=_padded_extract_seconds(candidate),
-                showwavespic_ms=_median_ms(show_samples),
                 textual_plot_ms=_median_ms(plot_samples),
             )
         )
@@ -285,47 +198,25 @@ def _warmup(
     cache_dir: Path,
 ) -> None:
     mp3 = _ensure_mp3(service, candidate, cache_dir / "warmup")
-    png = cache_dir / "warmup" / "warmup.png"
-    _time_showwavespic(mp3, png)
-    if png.exists():
-        png.unlink()
     load_waveform_envelope(mp3, buckets=buckets)
 
 
 def _summarize(label: str, timings: list[ClipTiming]) -> None:
-    show_ms = [t.showwavespic_ms for t in timings]
     plot_ms = [t.textual_plot_ms for t in timings]
-    ratios = [t.ratio for t in timings]
-
-    show_median = statistics.median(show_ms)
-    plot_median = statistics.median(plot_ms)
-    speedup = show_median / plot_median if plot_median > 0 else float("inf")
-    faster = "textual-plot faster" if speedup > 1 else "showwavespic faster"
-
     print(f"\n{label}:")
     print(
-        f"  showwavespic   mean: {statistics.mean(show_ms):6.1f} ms  "
-        f"median: {show_median:6.1f} ms  p95: {_percentile_ms([v / 1000 for v in show_ms], 95):6.1f} ms"
-    )
-    print(
         f"  textual-plot   mean: {statistics.mean(plot_ms):6.1f} ms  "
-        f"median: {plot_median:6.1f} ms  p95: {_percentile_ms([v / 1000 for v in plot_ms], 95):6.1f} ms"
-    )
-    print(f"  speedup:        {speedup:.2f}x ({faster})")
-    print(
-        f"  per-clip ratio  mean: {statistics.mean(ratios):.2f}x  "
-        f"median: {statistics.median(ratios):.2f}x  "
-        f"max: {max(ratios):.2f}x"
+        f"median: {statistics.median(plot_ms):6.1f} ms"
     )
 
 
 def _print_clip_table(timings: list[ClipTiming]) -> None:
-    print("\nPer-clip timings (median ms per approach):")
-    print(f"{'clip':>6}  {'dur':>5}  {'extract':>7}  {'showwavespic':>12}  {'textual-plot':>12}  {'ratio':>6}")
+    print("\nPer-clip timings (median ms):")
+    print(f"{'clip':>6}  {'dur':>5}  {'extract':>7}  {'textual-plot':>12}")
     for t in timings:
         print(
             f"{t.index:6d}  {t.duration:5.1f}  {t.padded_extract:7.1f}  "
-            f"{t.showwavespic_ms:12.1f}  {t.textual_plot_ms:12.1f}  {t.ratio:6.2f}x"
+            f"{t.textual_plot_ms:12.1f}"
         )
 
 
@@ -381,9 +272,6 @@ def main(argv: list[str] | None = None) -> int:
 
     _warmup(service, candidates[0], buckets=args.buckets, cache_dir=cache_root)
 
-    render_timings: list[ClipTiming] | None = None
-    breakdowns: list[BreakdownTiming] | None = None
-
     if args.mode in ("render-only", "both"):
         render_dir = cache_root / "render-only"
         if render_dir.exists():
@@ -395,7 +283,7 @@ def main(argv: list[str] | None = None) -> int:
             iterations=args.iterations,
             cache_dir=render_dir,
         )
-        _summarize("Render-only (MP3 → waveform data)", render_timings)
+        _summarize("Render-only (MP3 → envelope)", render_timings)
         _print_clip_table(render_timings)
         if breakdowns:
             _print_breakdown(breakdowns)
@@ -411,7 +299,7 @@ def main(argv: list[str] | None = None) -> int:
             iterations=args.iterations,
             base_cache_dir=full_dir,
         )
-        _summarize("Full pipeline (extract + render)", full_timings)
+        _summarize("Full pipeline (extract + envelope)", full_timings)
         if args.mode == "full":
             _print_clip_table(full_timings)
 
