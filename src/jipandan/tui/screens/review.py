@@ -35,6 +35,7 @@ from jipandan.tui.screens.filter_selection import (
     FilterSelectionModal,
 )
 from jipandan.tui.screens.jump_to_index import JumpToIndexModal
+from jipandan.tui.screens.plot_waveform_preview import PlotWaveformPreviewModal
 from jipandan.tui.screens.start_offset import StartOffsetModal, TrimOffsets
 from jipandan.tui.waveform_service import FINE_NUDGE_COARSE, FINE_NUDGE_FINE, WaveformService
 from jipandan.tui.widgets.detail_panel import ClipDetailPanel
@@ -64,6 +65,7 @@ class ReviewScreen(Screen):
             priority=True,
         ),
         Binding("o", "set_trim_offsets", "Trim offsets"),
+        Binding("p", "open_plot_waveform_preview", "Plot preview"),
         Binding(
             "left_curly_bracket,{",
             "nudge_end_down",
@@ -546,6 +548,14 @@ class ReviewScreen(Screen):
         self.app.push_screen(
             JumpToIndexModal(),
             self._handle_jump_to_index,
+        )
+
+    def action_open_plot_waveform_preview(self) -> None:
+        candidate = self._current_candidate()
+        if candidate is None:
+            return
+        self.app.push_screen(
+            PlotWaveformPreviewModal(candidate, self._waveform()),
         )
 
     def action_generate_filter_waveforms(self) -> None:

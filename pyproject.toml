@@ -8,6 +8,7 @@ dependencies = [
     "mlx-whisper>=0.4.3",
     "textual>=1.0.0",
     "textual-image>=0.12.0",
+    "textual-plot>=0.10.0",
 ]
 
 [project.scripts]

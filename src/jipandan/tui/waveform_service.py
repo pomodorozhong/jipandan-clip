@@ -144,6 +144,21 @@ class WaveformService:
         ffmpeg.render_waveform(target_mp3, target_png)
         return target_png, media_duration
 
+    def ensure_basic_mp3(self, candidate: ClipCandidate) -> Path:
+        """Return the basic-tab preview MP3, extracting it if needed."""
+        target_mp3 = self.basic_cache_path(candidate, suffix=".mp3")
+        if target_mp3.exists():
+            return target_mp3
+        target_mp3.parent.mkdir(parents=True, exist_ok=True)
+        extract_start, extract_duration = self.basic_extract_range(candidate)
+        ffmpeg.extract_preview_fast(
+            self.session.audio,
+            extract_start,
+            extract_duration,
+            target_mp3,
+        )
+        return target_mp3
+
     # --- viewport / marker geometry ---
 
     @staticmethod
