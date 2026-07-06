@@ -40,6 +40,69 @@ def decode_mp3_mono_f32(
     return np.frombuffer(result.stdout, dtype=np.float32)
 
 
+def decode_audio_slice_mono_f32(
+    audio: Path,
+    start_seconds: float,
+    duration_seconds: float,
+    sample_rate: int = _DEFAULT_SAMPLE_RATE,
+) -> np.ndarray:
+    """Decode a slice of ``audio`` to mono float32 PCM via ffmpeg."""
+    if duration_seconds <= 0:
+        return np.zeros(0, dtype=np.float32)
+    result = subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "quiet",
+            "-ss",
+            f"{max(0.0, start_seconds):.3f}",
+            "-i",
+            str(audio),
+            "-t",
+            f"{duration_seconds:.3f}",
+            "-ac",
+            "1",
+            "-ar",
+            str(sample_rate),
+            "-f",
+            "f32le",
+            "pipe:1",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return np.frombuffer(result.stdout, dtype=np.float32)
+
+
+def padded_extract_range(
+    visible_start: float,
+    visible_end: float,
+    source_duration: float,
+) -> tuple[float, float]:
+    """Return extract bounds with padding equal to the visible span on each side."""
+    span = max(visible_end - visible_start, 1e-6)
+    pad = span
+    start = max(0.0, visible_start - pad)
+    end = min(source_duration, visible_end + pad)
+    return start, end
+
+
+def extract_covers_visible(
+    extract_start: float,
+    extract_end: float,
+    visible_start: float,
+    visible_end: float,
+) -> bool:
+    """Return whether ``extract_*`` already has viewport-width padding around visible."""
+    span = max(visible_end - visible_start, 1e-6)
+    pad = span
+    return (
+        visible_start - pad >= extract_start - 1e-6
+        and visible_end + pad <= extract_end + 1e-6
+    )
+
+
 def downsample_envelope(
     samples: np.ndarray,
     duration: float,
@@ -68,34 +131,6 @@ def downsample_envelope(
     count = len(mins)
     times = (np.arange(count, dtype=np.float64) + 0.5) * duration / count
     return times, np.asarray(mins, dtype=np.float64), np.asarray(maxs, dtype=np.float64)
-
-
-def envelope_for_time_range(
-    samples: np.ndarray,
-    duration: float,
-    t_start: float,
-    t_end: float,
-    buckets: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Downsample ``samples`` to an envelope covering ``[t_start, t_end]``."""
-    if buckets <= 0:
-        raise ValueError("buckets must be positive")
-    if duration <= 0 or samples.size == 0:
-        return downsample_envelope(samples[:0], 0.0, buckets)
-
-    t_start = max(0.0, min(float(t_start), duration))
-    t_end = max(t_start, min(float(t_end), duration))
-    if t_end <= t_start:
-        return downsample_envelope(samples[:0], 0.0, buckets)
-
-    sample_count = samples.size
-    i0 = int(t_start / duration * sample_count)
-    i1 = max(i0 + 1, int(t_end / duration * sample_count))
-    i1 = min(i1, sample_count)
-    slice_samples = samples[i0:i1]
-    slice_duration = t_end - t_start
-    times, mins, maxs = downsample_envelope(slice_samples, slice_duration, buckets)
-    return times + t_start, mins, maxs
 
 
 def load_waveform_envelope(

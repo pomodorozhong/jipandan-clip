@@ -521,6 +521,7 @@ class ClipDetailPanel(Vertical):
             state.viewport_start,
             state.viewport_duration,
             media_duration=state.media_duration,
+            source_audio=self.session.audio,
         )
         self._refresh_waveform_markers(candidate)
 
@@ -542,13 +543,20 @@ class ClipDetailPanel(Vertical):
         path: Path,
         *,
         media_duration: float | None = None,
+        extract_start: float | None = None,
         refresh_markers: Callable[[ClipCandidate], None],
     ) -> None:
+        viewport_start = (
+            seconds_to_ffmpeg_timestamp(extract_start)
+            if extract_start is not None
+            else "00:00:00.000"
+        )
         widget.display_waveform(
             path,
-            "00:00:00.000",
+            viewport_start,
             FINE_EXTRACT_DURATION,
             media_duration=media_duration,
+            source_audio=self.session.audio,
         )
         widget._flush_pending_display()
         refresh_markers(candidate)
@@ -574,6 +582,7 @@ class ClipDetailPanel(Vertical):
             candidate,
             path,
             media_duration=media_duration,
+            extract_start=extract_start,
             refresh_markers=lambda c, m=mode: self._refresh_fine_waveform_markers(m, c),
         )
 
@@ -583,18 +592,8 @@ class ClipDetailPanel(Vertical):
         extract_start: float | None,
         candidate: ClipCandidate,
     ) -> None:
-        if extract_start is None:
-            return
-        rel_start, rel_end = self.waveform_service.fine_marker_times(
-            extract_start, candidate
-        )
-        window = FINE_EXTRACT_SECONDS
-        marker_start = max(0.0, min(rel_start, window))
-        marker_end = max(marker_start, min(rel_end, window))
-        widget.overlay_trim_bounds(
-            seconds_to_ffmpeg_timestamp(marker_start),
-            seconds_to_ffmpeg_timestamp(marker_end),
-        )
+        del extract_start
+        widget.overlay_trim_bounds(candidate.start, candidate.end)
 
     def _refresh_waveform_markers(self, candidate: ClipCandidate) -> None:
         if not self.waveform_service.has_displayed_basic_viewport():

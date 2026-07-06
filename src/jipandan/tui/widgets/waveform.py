@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
+import subprocess
 
 import numpy as np
 from textual import events, on, work
@@ -8,14 +9,17 @@ from textual.app import ComposeResult
 from textual.containers import Center, Container, Vertical
 from textual.timer import Timer
 from textual.widgets import LoadingIndicator, Static
+
 from textual_plot import PlotWidget
 
 from jipandan.core import ffmpeg
-from jipandan.core.srt import srt_time_to_seconds
+from jipandan.core.srt import seconds_to_ffmpeg_timestamp, srt_time_to_seconds
 from jipandan.core.waveform_envelope import (
+    decode_audio_slice_mono_f32,
     decode_mp3_mono_f32,
     downsample_envelope,
-    envelope_for_time_range,
+    extract_covers_visible,
+    padded_extract_range,
 )
 from jipandan.tui.widgets.waveform_nudge_bar import (
     MARKER_EPSILON_SECONDS,
@@ -23,6 +27,7 @@ from jipandan.tui.widgets.waveform_nudge_bar import (
     WaveformNudgeBar,
 )
 from jipandan.tui.widgets.waveform_plot import (
+    WaveformPlotWidget,
     absolute_time_to_nudge_x,
     envelope_buckets_for_width,
     nudge_x_to_absolute_time,
@@ -35,7 +40,6 @@ _LOADING_PLACEHOLDERS = frozenset(
     {GENERATING_WAVEFORM_PLACEHOLDER, GENERATING_PREVIEW_PLACEHOLDER}
 )
 _SCALE_REGEN_DEBOUNCE_SECONDS = 0.15
-_SCALE_REGEN_MIN_RELATIVE_DELTA = 0.03
 
 
 def format_playback_remaining(seconds: float) -> str:
@@ -55,8 +59,8 @@ class WaveformWidget(Vertical, can_focus=True):
     WaveformWidget {
         height: 1fr;
         min-height: 6;
-        padding: 1 0 0 0;
-        border: tall transparent;
+        padding: 0;
+        border: none;
     }
 
     WaveformWidget:focus {
@@ -114,6 +118,8 @@ class WaveformWidget(Vertical, can_focus=True):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._audio_path: Path | None = None
+        self._source_audio: Path | None = None
+        self._source_duration: float | None = None
         self._viewport_start: float | None = None
         self._viewport_duration: float | None = None
         self._media_duration: float | None = None
@@ -130,12 +136,10 @@ class WaveformWidget(Vertical, can_focus=True):
         self._envelope_times: np.ndarray | None = None
         self._envelope_mins: np.ndarray | None = None
         self._envelope_maxs: np.ndarray | None = None
-        self._pcm_samples: np.ndarray | None = None
-        self._pcm_duration: float | None = None
-        self._scale_regen_enabled = False
-        self._last_regen_x_range: tuple[float, float] | None = None
-        self._scale_regen_timer: Timer | None = None
-        self._pending_scale_x_range: tuple[float, float] | None = None
+        self._scroll_regen_enabled = False
+        self._scroll_regen_generation = 0
+        self._scroll_regen_timer: Timer | None = None
+        self._pending_scroll_view: tuple[float, float, float, float] | None = None
 
     def compose(self) -> ComposeResult:
         with Container(id="waveform-content"):
@@ -148,7 +152,7 @@ class WaveformWidget(Vertical, can_focus=True):
                         id="waveform-placeholder",
                         markup=False,
                     )
-            plot = PlotWidget(id="waveform-plot")
+            plot = WaveformPlotWidget(id="waveform-plot")
             plot.can_focus = False
             plot.display = False
             yield plot
@@ -241,11 +245,11 @@ class WaveformWidget(Vertical, can_focus=True):
         self._envelope_times = None
         self._envelope_mins = None
         self._envelope_maxs = None
-        self._pcm_samples = None
-        self._pcm_duration = None
-        self._scale_regen_enabled = False
-        self._last_regen_x_range = None
-        self._cancel_scale_regen_timer()
+        self._source_audio = None
+        self._source_duration = None
+        self._scroll_regen_generation += 1
+        self._scroll_regen_enabled = False
+        self._cancel_scroll_regen_timer()
         if not self._nodes_ready():
             self._pending_placeholder = message
             return
@@ -255,7 +259,7 @@ class WaveformWidget(Vertical, can_focus=True):
         panel = self.query_one("#waveform-placeholder-panel", Vertical)
         loading = self.query_one("#waveform-loading", LoadingIndicator)
         placeholder = self.query_one("#waveform-placeholder", Static)
-        plot = self.query_one("#waveform-plot", PlotWidget)
+        plot = self.query_one("#waveform-plot", WaveformPlotWidget)
         placeholder.update(message)
         loading.display = self._shows_loading_indicator(message)
         panel.display = True
@@ -268,11 +272,19 @@ class WaveformWidget(Vertical, can_focus=True):
         viewport_duration: str,
         *,
         media_duration: float | None = None,
+        source_audio: Path | None = None,
     ) -> None:
         if not path.exists():
             self.show_placeholder(f"Waveform not found: {path}")
             return
         self._audio_path = path
+        self._source_audio = source_audio
+        self._source_duration = None
+        if source_audio is not None and source_audio.exists():
+            try:
+                self._source_duration = ffmpeg.probe_duration_seconds(source_audio)
+            except (OSError, subprocess.CalledProcessError, ValueError):
+                self._source_duration = None
         self._viewport_start = _timestamp_seconds(viewport_start)
         self._viewport_duration = float(viewport_duration)
         self._media_duration = (
@@ -367,7 +379,7 @@ class WaveformWidget(Vertical, can_focus=True):
     def map_time_to_nudge_x(self, time_seconds: float) -> int | None:
         if self._viewport_start is None or not self._nodes_ready():
             return None
-        plot = self.query_one("#waveform-plot", PlotWidget)
+        plot = self.query_one("#waveform-plot", WaveformPlotWidget)
         if not plot.display:
             return None
         try:
@@ -382,7 +394,7 @@ class WaveformWidget(Vertical, can_focus=True):
     def map_nudge_x_to_time(self, nudge_x: float) -> float | None:
         if self._viewport_start is None or not self._nodes_ready():
             return None
-        plot = self.query_one("#waveform-plot", PlotWidget)
+        plot = self.query_one("#waveform-plot", WaveformPlotWidget)
         if not plot.display:
             return None
         try:
@@ -398,89 +410,144 @@ class WaveformWidget(Vertical, can_focus=True):
         if self._nudge_bar is not None and self._nudge_bar.display:
             self._nudge_bar.refresh()
 
-    def _cancel_scale_regen_timer(self) -> None:
-        if self._scale_regen_timer is not None:
-            self._scale_regen_timer.stop()
-            self._scale_regen_timer = None
-        self._pending_scale_x_range = None
+    def _cancel_scroll_regen_timer(self) -> None:
+        if self._scroll_regen_timer is not None:
+            self._scroll_regen_timer.stop()
+            self._scroll_regen_timer = None
+        self._pending_scroll_view = None
 
-    def _scale_range_needs_regen(self, x_min: float, x_max: float) -> bool:
-        if self._last_regen_x_range is None:
-            return True
-        last_min, last_max = self._last_regen_x_range
-        span = max(last_max - last_min, 1e-6)
-        if abs(x_min - last_min) / span < _SCALE_REGEN_MIN_RELATIVE_DELTA:
-            if abs(x_max - last_max) / span < _SCALE_REGEN_MIN_RELATIVE_DELTA:
-                return False
-        return True
+    def _schedule_scroll_regen(self, x_min: float, x_max: float) -> None:
+        if not self._scroll_regen_enabled:
+            return
+        if self._source_audio is None or self._source_duration is None:
+            return
+        if self._viewport_start is None or self._media_duration is None:
+            return
 
-    def _schedule_scale_regen(self, x_min: float, x_max: float) -> None:
-        if not self._scale_regen_enabled:
+        visible_start = self._viewport_start + x_min
+        visible_end = self._viewport_start + x_max
+        extract_start = self._viewport_start
+        extract_end = extract_start + self._media_duration
+        if extract_covers_visible(
+            extract_start, extract_end, visible_start, visible_end
+        ):
             return
-        if self._pcm_samples is None or self._pcm_duration is None:
+
+        new_start, new_end = padded_extract_range(
+            visible_start, visible_end, self._source_duration
+        )
+        if new_end <= new_start:
             return
-        self._pending_scale_x_range = (x_min, x_max)
-        if self._scale_regen_timer is not None:
-            self._scale_regen_timer.stop()
-        self._scale_regen_timer = self.set_timer(
+
+        self._pending_scroll_view = (visible_start, visible_end, new_start, new_end)
+        if self._scroll_regen_timer is not None:
+            self._scroll_regen_timer.stop()
+        self._scroll_regen_timer = self.set_timer(
             _SCALE_REGEN_DEBOUNCE_SECONDS,
-            self._run_scale_regen,
-            name="waveform-scale-regen",
+            self._run_scroll_regen,
+            name="waveform-scroll-regen",
         )
 
-    def _run_scale_regen(self) -> None:
-        self._scale_regen_timer = None
-        pending = self._pending_scale_x_range
-        self._pending_scale_x_range = None
+    def _run_scroll_regen(self) -> None:
+        self._scroll_regen_timer = None
+        pending = self._pending_scroll_view
+        self._pending_scroll_view = None
         if pending is None or not self._nodes_ready():
             return
-        x_min, x_max = pending
-        if not self._scale_range_needs_regen(x_min, x_max):
+        visible_start, visible_end, extract_start, extract_end = pending
+        current_start = self._viewport_start
+        assert current_start is not None
+        current_end = current_start + (self._media_duration or 0.0)
+        if extract_covers_visible(
+            current_start, current_end, visible_start, visible_end
+        ):
             return
-        plot = self.query_one("#waveform-plot", PlotWidget)
+        plot = self.query_one("#waveform-plot", WaveformPlotWidget)
         if not plot.display:
             return
-        self._regen_envelope_for_range(plot, x_min, x_max)
+        self._scroll_regen_generation += 1
+        generation = self._scroll_regen_generation
+        self._load_scroll_extract(
+            extract_start,
+            extract_end,
+            visible_start,
+            visible_end,
+            generation,
+        )
 
     @on(PlotWidget.ScaleChanged)
     def _on_plot_scale_changed(self, event: PlotWidget.ScaleChanged) -> None:
         if not self._nodes_ready():
             return
-        plot = self.query_one("#waveform-plot", PlotWidget)
+        plot = self.query_one("#waveform-plot", WaveformPlotWidget)
         if event.plot is not plot:
             return
-        self._schedule_scale_regen(event.x_min, event.x_max)
+        self._schedule_scroll_regen(event.x_min, event.x_max)
 
-    def _regen_envelope_for_range(
-        self, plot: PlotWidget, x_min: float, x_max: float
+    @work(thread=True, exclusive=True, group="waveform-scroll-regen")
+    def _load_scroll_extract(
+        self,
+        extract_start: float,
+        extract_end: float,
+        visible_start: float,
+        visible_end: float,
+        generation: int,
     ) -> None:
-        if self._pcm_samples is None or self._pcm_duration is None:
+        if self._source_audio is None:
             return
-        duration = self._pcm_duration
-        visible_min = max(0.0, min(x_min, duration))
-        visible_max = max(visible_min, min(x_max, duration))
-        if visible_max <= visible_min:
-            return
-        self._scale_regen_enabled = False
+        duration = extract_end - extract_start
         try:
-            width = max(plot.size.width, 1)
+            width = max(self.size.width, self.app.size.width)
             buckets = envelope_buckets_for_width(width)
-            times, mins, maxs = envelope_for_time_range(
-                self._pcm_samples,
-                duration,
-                visible_min,
-                visible_max,
-                buckets,
+            samples = decode_audio_slice_mono_f32(
+                self._source_audio, extract_start, duration
             )
+            times, mins, maxs = downsample_envelope(samples, duration, buckets)
+        except Exception:
+            return
+        if generation != self._scroll_regen_generation:
+            return
+        x_limits = (visible_start - extract_start, visible_end - extract_start)
+        self.app.call_from_thread(
+            self._on_scroll_extract_ready,
+            generation,
+            extract_start,
+            duration,
+            times,
+            mins,
+            maxs,
+            x_limits,
+        )
+
+    def _on_scroll_extract_ready(
+        self,
+        generation: int,
+        extract_start: float,
+        duration: float,
+        times: np.ndarray,
+        mins: np.ndarray,
+        maxs: np.ndarray,
+        x_limits: tuple[float, float],
+    ) -> None:
+        if generation != self._scroll_regen_generation:
+            return
+        if not self._nodes_ready():
+            return
+        plot = self.query_one("#waveform-plot", WaveformPlotWidget)
+        if not plot.display:
+            return
+        self._scroll_regen_enabled = False
+        try:
+            self._viewport_start = extract_start
+            self._media_duration = duration
             self._envelope_times = times
             self._envelope_mins = mins
             self._envelope_maxs = maxs
-            self._last_regen_x_range = (x_min, x_max)
-            self._render_plot(plot, x_limits=(x_min, x_max))
+            self._render_plot(plot, x_limits=x_limits)
             plot.refresh()
             self.call_after_refresh(self._refresh_nudge_bar_handles)
         finally:
-            self._scale_regen_enabled = True
+            self._scroll_regen_enabled = True
 
     def _render_plot(
         self,
@@ -506,9 +573,12 @@ class WaveformWidget(Vertical, can_focus=True):
         )
 
     def _start_envelope_load(self, mp3_path: Path) -> None:
+        self._scroll_regen_generation += 1
+        self._cancel_scroll_regen_timer()
+        self._scroll_regen_enabled = False
         token = self._begin_plot_update()
         panel = self.query_one("#waveform-placeholder-panel", Vertical)
-        plot = self.query_one("#waveform-plot", PlotWidget)
+        plot = self.query_one("#waveform-plot", WaveformPlotWidget)
         panel.display = True
         plot.display = False
         self._load_envelope(mp3_path, token)
@@ -530,7 +600,6 @@ class WaveformWidget(Vertical, can_focus=True):
         self.app.call_from_thread(
             self._on_envelope_ready,
             token,
-            samples,
             duration,
             times,
             mins,
@@ -546,7 +615,6 @@ class WaveformWidget(Vertical, can_focus=True):
     def _on_envelope_ready(
         self,
         token: int,
-        samples: np.ndarray,
         duration: float,
         times: np.ndarray,
         mins: np.ndarray,
@@ -554,14 +622,12 @@ class WaveformWidget(Vertical, can_focus=True):
     ) -> None:
         if token != self._plot_update_token:
             return
-        self._pcm_samples = samples
-        self._pcm_duration = duration
         self._envelope_times = times
         self._envelope_mins = mins
         self._envelope_maxs = maxs
-        self._scale_regen_enabled = False
+        self._scroll_regen_enabled = False
         panel = self.query_one("#waveform-placeholder-panel", Vertical)
-        plot = self.query_one("#waveform-plot", PlotWidget)
+        plot = self.query_one("#waveform-plot", WaveformPlotWidget)
         self._render_plot(plot)
         panel.display = False
         plot.display = True
@@ -571,7 +637,7 @@ class WaveformWidget(Vertical, can_focus=True):
     def _apply_marker_overlay(self) -> None:
         if self._plot_update_in_progress:
             return
-        plot = self.query_one("#waveform-plot", PlotWidget)
+        plot = self.query_one("#waveform-plot", WaveformPlotWidget)
         if not plot.display:
             return
         self._render_plot(plot, x_limits=(plot._x_min, plot._x_max))
@@ -582,9 +648,8 @@ class WaveformWidget(Vertical, can_focus=True):
         if token != self._plot_update_token:
             return
         self._plot_update_in_progress = False
-        plot = self.query_one("#waveform-plot", PlotWidget)
+        plot = self.query_one("#waveform-plot", WaveformPlotWidget)
         plot.refresh()
-        self._last_regen_x_range = (plot._x_min, plot._x_max)
-        self._scale_regen_enabled = True
+        self._scroll_regen_enabled = self._source_audio is not None
         self._sync_nudge_bar()
         self._refresh_nudge_bar_handles()

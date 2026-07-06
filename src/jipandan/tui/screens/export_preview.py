@@ -326,6 +326,7 @@ class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
                 "00:00:00.000",
                 preview_duration,
                 media_duration=preview_seconds,
+                source_audio=preview_path,
             )
             if not self._is_active:
                 return
