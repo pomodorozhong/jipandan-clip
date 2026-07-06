@@ -115,7 +115,7 @@ class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
     }
 
     #export-preview-dialog {
-        width: 90;
+        width: 92%;
         height: auto;
         border: thick $primary;
         background: $surface;
@@ -123,7 +123,8 @@ class ExportPreviewModal(ModalScreen[ExportConfirm | bool | None]):
     }
 
     #export-preview-waveform {
-        height: 12;
+        height: 24;
+        min-height: 18;
     }
 
     #export-title-input {
