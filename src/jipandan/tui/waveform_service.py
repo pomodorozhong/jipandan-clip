@@ -8,9 +8,11 @@ from pathlib import Path
 from jipandan.core import ffmpeg
 from jipandan.core.models import ClipCandidate, Session
 from jipandan.core.waveform_envelope import (
+    ENVELOPE_CACHE_VERSION,
     MAX_ENVELOPE_CACHE_BUCKETS,
     WAVEFORM_ENVELOPE_SUFFIX,
     build_envelope_from_audio_slice,
+    is_waveform_envelope_cache,
     load_envelope_cache,
     save_envelope_cache,
 )
@@ -115,7 +117,7 @@ class WaveformService:
 
     @staticmethod
     def _basic_key_digest(candidate: ClipCandidate) -> str:
-        key = f"{candidate.start}|{candidate.duration}"
+        key = f"{candidate.start}|{candidate.duration}|{ENVELOPE_CACHE_VERSION}"
         return hashlib.md5(key.encode("utf-8")).hexdigest()[:10]
 
     def basic_cache_path(self, candidate: ClipCandidate, *, suffix: str) -> Path:
@@ -125,11 +127,16 @@ class WaveformService:
     # --- file generation (thread-safe) ---
 
     @staticmethod
-    def media_duration(audio_path: Path) -> float | None:
-        if not audio_path.exists():
+    def media_duration(path: Path) -> float | None:
+        if not path.exists():
             return None
+        if is_waveform_envelope_cache(path):
+            try:
+                return load_envelope_cache(path).duration
+            except (OSError, ValueError, KeyError):
+                return None
         try:
-            return ffmpeg.probe_duration_seconds(audio_path)
+            return ffmpeg.probe_duration_seconds(path)
         except (OSError, subprocess.CalledProcessError, ValueError):
             return None
 

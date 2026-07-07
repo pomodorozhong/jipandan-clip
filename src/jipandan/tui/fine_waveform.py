@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from jipandan.core.waveform_envelope import (
+    ENVELOPE_CACHE_VERSION,
     MAX_ENVELOPE_CACHE_BUCKETS,
     WAVEFORM_ENVELOPE_SUFFIX,
     build_envelope_from_audio_slice,
@@ -67,7 +68,9 @@ class FineModeSpec:
         return candidate.start if self.mode == "start" else candidate.end
 
     def cache_key_digest(self, candidate: ClipCandidate) -> str:
-        key = f"{self.trim_key(candidate)}|{FINE_EXTRACT_DURATION}"
+        key = (
+            f"{self.trim_key(candidate)}|{FINE_EXTRACT_DURATION}|{ENVELOPE_CACHE_VERSION}"
+        )
         return hashlib.md5(key.encode("utf-8")).hexdigest()[:10]
 
     def extract_start_seconds(self, clip_start: float, clip_end: float) -> float:

@@ -14,6 +14,7 @@ _DEFAULT_SAMPLE_RATE = 8000
 _DEFAULT_BUCKETS = 800
 WAVEFORM_ENVELOPE_SUFFIX = ".wenv.npz"
 MAX_ENVELOPE_CACHE_BUCKETS = 4096
+ENVELOPE_CACHE_VERSION = "v2"
 
 
 @dataclass(frozen=True)
@@ -95,16 +96,24 @@ def build_envelope_from_audio_slice(
     buckets: int,
     *,
     sample_rate: int = _DEFAULT_SAMPLE_RATE,
+    accurate: bool = True,
 ) -> WaveformEnvelopeCache:
     samples = decode_audio_slice_mono_f32(
-        audio, start_seconds, duration_seconds, sample_rate=sample_rate
+        audio,
+        start_seconds,
+        duration_seconds,
+        sample_rate=sample_rate,
+        accurate=accurate,
     )
-    times, mins, maxs = downsample_envelope(samples, duration_seconds, buckets)
+    actual_duration = samples_duration_seconds(samples.size, sample_rate)
+    if actual_duration <= 0:
+        actual_duration = duration_seconds
+    times, mins, maxs = downsample_envelope(samples, actual_duration, buckets)
     return WaveformEnvelopeCache(
         times=times,
         mins=mins,
         maxs=maxs,
-        duration=duration_seconds,
+        duration=actual_duration,
         buckets=len(mins),
     )
 
@@ -141,22 +150,33 @@ def decode_audio_slice_mono_f32(
     start_seconds: float,
     duration_seconds: float,
     sample_rate: int = _DEFAULT_SAMPLE_RATE,
+    *,
+    accurate: bool = True,
 ) -> np.ndarray:
     """Decode a slice of ``audio`` to mono float32 PCM via ffmpeg."""
     if duration_seconds <= 0:
         return np.zeros(0, dtype=np.float32)
-    result = subprocess.run(
+
+    start_seconds = max(0.0, start_seconds)
+    cmd: list[str] = ["ffmpeg", "-y", "-loglevel", "quiet"]
+
+    if start_seconds > 0.0:
+        if accurate:
+            preroll = min(start_seconds, 2.0)
+            cmd.extend(["-ss", f"{start_seconds - preroll:.6f}"])
+        else:
+            cmd.extend(["-ss", f"{start_seconds:.3f}"])
+
+    cmd.extend(["-i", str(audio)])
+
+    if start_seconds > 0.0 and accurate:
+        preroll = min(start_seconds, 2.0)
+        cmd.extend(["-ss", f"{preroll:.6f}"])
+
+    cmd.extend(
         [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            "quiet",
-            "-ss",
-            f"{max(0.0, start_seconds):.3f}",
-            "-i",
-            str(audio),
             "-t",
-            f"{duration_seconds:.3f}",
+            f"{duration_seconds:.6f}",
             "-ac",
             "1",
             "-ar",
@@ -164,11 +184,22 @@ def decode_audio_slice_mono_f32(
             "-f",
             "f32le",
             "pipe:1",
-        ],
+        ]
+    )
+    result = subprocess.run(
+        cmd,
         check=True,
         capture_output=True,
     )
     return np.frombuffer(result.stdout, dtype=np.float32)
+
+
+def samples_duration_seconds(
+    sample_count: int, sample_rate: int = _DEFAULT_SAMPLE_RATE
+) -> float:
+    if sample_count <= 0:
+        return 0.0
+    return sample_count / sample_rate
 
 
 def padded_extract_range(

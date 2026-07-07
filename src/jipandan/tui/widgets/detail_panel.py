@@ -568,6 +568,11 @@ class ClipDetailPanel(Vertical):
         extract_start: float | None = None,
         refresh_markers: Callable[[ClipCandidate], None],
     ) -> None:
+        duration_seconds = (
+            media_duration
+            if media_duration is not None
+            else float(FINE_EXTRACT_SECONDS)
+        )
         viewport_start = (
             seconds_to_ffmpeg_timestamp(extract_start)
             if extract_start is not None
@@ -576,7 +581,7 @@ class ClipDetailPanel(Vertical):
         widget.display_waveform(
             path,
             viewport_start,
-            FINE_EXTRACT_DURATION,
+            f"{duration_seconds:.3f}",
             media_duration=media_duration,
             source_audio=self.session.audio,
         )

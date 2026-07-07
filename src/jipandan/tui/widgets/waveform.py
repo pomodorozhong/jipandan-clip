@@ -517,7 +517,7 @@ class WaveformWidget(Vertical, can_focus=True):
             width = max(self.size.width, self.app.size.width)
             buckets = envelope_buckets_for_width(width)
             samples = decode_audio_slice_mono_f32(
-                self._source_audio, extract_start, duration
+                self._source_audio, extract_start, duration, accurate=False
             )
             times, mins, maxs = downsample_envelope(samples, duration, buckets)
         except Exception:
@@ -629,6 +629,7 @@ class WaveformWidget(Vertical, can_focus=True):
             self._source_audio,
             self._viewport_start,
             self._media_duration,
+            accurate=False,
         )
         duration = self._media_duration
         times, mins, maxs = downsample_envelope(samples, duration, buckets)
