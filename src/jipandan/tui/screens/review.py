@@ -172,6 +172,9 @@ class ReviewScreen(Screen):
         return self.query_one("#clip-list", ListView)
 
     def _on_clip_selection_changed(self, clip_id: str | None) -> None:
+        panel = self._detail_panel()
+        panel.stop_playback()
+        panel.switch_to_basic_tab()
         if clip_id is None:
             self._clear_detail()
         else:
