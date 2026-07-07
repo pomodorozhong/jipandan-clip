@@ -13,6 +13,8 @@ START_MARKER_STYLE = "rgb(255,200,0)"
 END_MARKER_STYLE = "rgb(255,80,200)"
 PLAYHEAD_STYLE = "rgb(255,255,255)"
 DEFAULT_ENVELOPE_BUCKETS = 800
+WAVEFORM_Y_FLOOR_MIN = -0.6
+WAVEFORM_Y_FLOOR_MAX = 0.6
 
 
 class WaveformPlotWidget(PlotWidget):
@@ -133,11 +135,15 @@ def render_waveform_plot(
         plot.set_x_formatter(DurationFormatter())
     if x_limits is not None:
         plot.set_xlimits(x_limits[0], x_limits[1])
-        plot.set_ylimits(None, None)
     else:
         # clear() keeps prior zoom/pan limits; reset so a new clip autoscales.
         plot.set_xlimits(None, None)
-        plot.set_ylimits(None, None)
+    # Auto-fit to data while enforcing a minimum visible amplitude window.
+    data_min = float(np.min(mins))
+    data_max = float(np.max(maxs))
+    y_min = min(data_min, WAVEFORM_Y_FLOOR_MIN)
+    y_max = max(data_max, WAVEFORM_Y_FLOOR_MAX)
+    plot.set_ylimits(y_min, y_max)
     plot.plot(times, maxs, line_style="cyan", hires_mode=HiResMode.BRAILLE)
     plot.plot(times, mins, line_style="cyan", hires_mode=HiResMode.BRAILLE)
     if marker_start is not None:
