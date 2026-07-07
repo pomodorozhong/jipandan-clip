@@ -172,17 +172,28 @@ class WaveformNudgeBar(Widget):
         end_x = self._time_to_bar_x(end_time, width)
         return start_x, end_x
 
+    def _drag_bounds(self) -> tuple[float, float] | None:
+        if self._waveform is not None:
+            bounds = self._waveform.nudge_drag_bounds()
+            if bounds is not None:
+                return bounds
+        if self._range_start is None or self._range_duration is None:
+            return None
+        return self._range_start, self._range_start + self._range_duration
+
     def _clamp_start(self, time_seconds: float, end_time: float) -> float:
-        if self._range_start is None:
+        bounds = self._drag_bounds()
+        if bounds is None:
             return time_seconds
-        latest_start = max(self._range_start, end_time - MIN_CLIP_DURATION_SECONDS)
-        return max(self._range_start, min(latest_start, time_seconds))
+        range_start, _range_end = bounds
+        latest_start = max(range_start, end_time - MIN_CLIP_DURATION_SECONDS)
+        return max(range_start, min(latest_start, time_seconds))
 
     def _clamp_end(self, time_seconds: float, start_time: float) -> float:
-        range_end = self._range_start
-        if range_end is None or self._range_duration is None:
+        bounds = self._drag_bounds()
+        if bounds is None:
             return time_seconds
-        range_end += self._range_duration
+        _range_start, range_end = bounds
         earliest_end = start_time + MIN_CLIP_DURATION_SECONDS
         return max(earliest_end, min(range_end, time_seconds))
 

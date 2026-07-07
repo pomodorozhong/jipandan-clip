@@ -358,8 +358,13 @@ class WaveformWidget(Vertical, can_focus=True):
         if self._marker_end is None:
             self._nudge_bar.clear()
             return
-        image_start, image_duration, _image_end = self._image_time_range()
-        self._nudge_bar.set_time_range(image_start, image_duration)
+        drag_bounds = self.nudge_drag_bounds()
+        if drag_bounds is not None:
+            range_start, range_end = drag_bounds
+            range_duration = range_end - range_start
+        else:
+            range_start, range_duration, _ = self._image_time_range()
+        self._nudge_bar.set_time_range(range_start, range_duration)
         self._nudge_bar.sync_markers(self._marker_start, self._marker_end)
         self._nudge_bar.show()
 
@@ -422,6 +427,23 @@ class WaveformWidget(Vertical, can_focus=True):
             )
         except (ValueError, ZeroDivisionError):
             return None
+
+    def nudge_drag_bounds(self) -> tuple[float, float] | None:
+        """Absolute time range matching the visible plot window for drag clamping."""
+        if self._viewport_start is None or not self._nodes_ready():
+            return None
+        plot = self.query_one("#waveform-plot", WaveformPlotWidget)
+        if not plot.display:
+            return None
+        visible_start = self._viewport_start + plot._x_min
+        visible_end = self._viewport_start + plot._x_max
+        min_time = max(0.0, visible_start)
+        max_time = visible_end
+        if self._source_duration is not None:
+            max_time = min(max_time, self._source_duration)
+        if max_time < min_time:
+            return None
+        return min_time, max_time
 
     def _refresh_nudge_bar_handles(self) -> None:
         if self._nudge_bar is not None and self._nudge_bar.display:
@@ -500,6 +522,7 @@ class WaveformWidget(Vertical, can_focus=True):
         if event.plot is not plot:
             return
         self._schedule_scroll_regen(event.x_min, event.x_max)
+        self._sync_nudge_bar()
 
     @work(thread=True, exclusive=True, group="waveform-scroll-regen")
     def _load_scroll_extract(
@@ -562,7 +585,7 @@ class WaveformWidget(Vertical, can_focus=True):
             self._envelope_maxs = maxs
             self._render_plot(plot, x_limits=x_limits)
             plot.refresh()
-            self.call_after_refresh(self._refresh_nudge_bar_handles)
+            self.call_after_refresh(self._sync_nudge_bar)
         finally:
             self._scroll_regen_enabled = True
 
