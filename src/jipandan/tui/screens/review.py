@@ -36,6 +36,7 @@ from jipandan.tui.screens.filter_selection import (
 )
 from jipandan.tui.screens.jump_to_index import JumpToIndexModal
 from jipandan.tui.screens.start_offset import StartOffsetModal, TrimOffsets
+from jipandan.core.waveform_envelope import WAVEFORM_ENVELOPE_SUFFIX
 from jipandan.tui.waveform_service import FINE_NUDGE_COARSE, FINE_NUDGE_FINE, WaveformService
 from jipandan.tui.widgets.detail_panel import ClipDetailPanel
 
@@ -560,7 +561,7 @@ class ReviewScreen(Screen):
             candidate
             for candidate in candidates
             if not self._waveform()
-            .basic_cache_path(candidate, suffix=".mp3")
+            .basic_cache_path(candidate, suffix=WAVEFORM_ENVELOPE_SUFFIX)
             .exists()
         ]
         cached = len(candidates) - len(pending)
@@ -931,7 +932,9 @@ class ReviewScreen(Screen):
         waveform = self._waveform()
         try:
             for index, candidate in enumerate(candidates, 1):
-                target = waveform.basic_cache_path(candidate, suffix=".mp3")
+                target = waveform.basic_cache_path(
+                    candidate, suffix=WAVEFORM_ENVELOPE_SUFFIX
+                )
                 if target.exists():
                     cached += 1
                 else:

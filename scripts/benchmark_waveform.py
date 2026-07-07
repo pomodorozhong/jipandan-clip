@@ -12,14 +12,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from jipandan.core import ffmpeg
 from jipandan.core.models import ClipCandidate, Session
 from jipandan.core.srt import srt_time_to_seconds
 from jipandan.core.waveform_envelope import (
-    _DEFAULT_SAMPLE_RATE,
-    decode_mp3_mono_f32,
-    downsample_envelope,
-    load_waveform_envelope,
+    WAVEFORM_ENVELOPE_SUFFIX,
+    load_envelope_cache,
+    resample_envelope_to_buckets,
 )
 from jipandan.tui.waveform_service import WAVEFORM_PADDING_SECONDS, WaveformService
 
@@ -34,9 +32,8 @@ class ClipTiming:
 
 @dataclass(frozen=True)
 class BreakdownTiming:
-    probe_ms: float
-    decode_ms: float
-    downsample_ms: float
+    load_ms: float
+    resample_ms: float
 
 
 def _noop_schedule(
@@ -64,49 +61,45 @@ def _median_ms(samples: list[float]) -> float:
     return statistics.median(samples) * 1000.0
 
 
-def _time_textual_plot(mp3: Path, *, buckets: int) -> tuple[float, BreakdownTiming]:
+def _time_envelope_cache_load(
+    envelope_path: Path, *, buckets: int
+) -> tuple[float, BreakdownTiming]:
     total_start = time.perf_counter()
 
-    probe_start = time.perf_counter()
-    duration = ffmpeg.probe_duration_seconds(mp3)
-    probe_elapsed = time.perf_counter() - probe_start
+    load_start = time.perf_counter()
+    cached = load_envelope_cache(envelope_path)
+    load_elapsed = time.perf_counter() - load_start
 
-    decode_start = time.perf_counter()
-    samples = decode_mp3_mono_f32(mp3, sample_rate=_DEFAULT_SAMPLE_RATE)
-    decode_elapsed = time.perf_counter() - decode_start
-
-    downsample_start = time.perf_counter()
-    downsample_envelope(samples, duration, buckets)
-    downsample_elapsed = time.perf_counter() - downsample_start
+    resample_start = time.perf_counter()
+    resample_envelope_to_buckets(
+        cached.times,
+        cached.mins,
+        cached.maxs,
+        cached.duration,
+        buckets,
+    )
+    resample_elapsed = time.perf_counter() - resample_start
 
     total_elapsed = time.perf_counter() - total_start
     breakdown = BreakdownTiming(
-        probe_ms=probe_elapsed * 1000.0,
-        decode_ms=decode_elapsed * 1000.0,
-        downsample_ms=downsample_elapsed * 1000.0,
+        load_ms=load_elapsed * 1000.0,
+        resample_ms=resample_elapsed * 1000.0,
     )
     return total_elapsed, breakdown
 
 
-def _ensure_mp3(
+def _ensure_envelope(
     service: WaveformService, candidate: ClipCandidate, cache_dir: Path
 ) -> Path:
     service._cache_dir = cache_dir  # noqa: SLF001 — benchmark-only cache override
     cache_dir.mkdir(parents=True, exist_ok=True)
-    mp3 = service.basic_cache_path(candidate, suffix=".mp3")
-    if mp3.exists():
-        mp3.unlink()
-    extract_start, extract_duration = service.basic_extract_range(candidate)
-    ffmpeg.extract_preview_fast(
-        service.session.audio,
-        extract_start,
-        extract_duration,
-        mp3,
-    )
-    return mp3
+    envelope = service.basic_cache_path(candidate, suffix=WAVEFORM_ENVELOPE_SUFFIX)
+    if envelope.exists():
+        envelope.unlink()
+    return service.ensure_basic_envelope(candidate)
 
 
-def _benchmark_render_only(
+def _benchmark_cache_load(
     service: WaveformService,
     candidates: list[ClipCandidate],
     *,
@@ -118,12 +111,12 @@ def _benchmark_render_only(
     breakdowns: list[BreakdownTiming] = []
 
     for candidate in candidates:
-        mp3 = _ensure_mp3(service, candidate, cache_dir)
+        envelope = _ensure_envelope(service, candidate, cache_dir)
         plot_samples: list[float] = []
         breakdown_samples: list[BreakdownTiming] = []
 
         for _ in range(iterations):
-            elapsed, breakdown = _time_textual_plot(mp3, buckets=buckets)
+            elapsed, breakdown = _time_envelope_cache_load(envelope, buckets=buckets)
             plot_samples.append(elapsed)
             breakdown_samples.append(breakdown)
 
@@ -137,10 +130,9 @@ def _benchmark_render_only(
         )
         breakdowns.append(
             BreakdownTiming(
-                probe_ms=statistics.median([b.probe_ms for b in breakdown_samples]),
-                decode_ms=statistics.median([b.decode_ms for b in breakdown_samples]),
-                downsample_ms=statistics.median(
-                    [b.downsample_ms for b in breakdown_samples]
+                load_ms=statistics.median([b.load_ms for b in breakdown_samples]),
+                resample_ms=statistics.median(
+                    [b.resample_ms for b in breakdown_samples]
                 ),
             )
         )
@@ -164,17 +156,10 @@ def _benchmark_full_pipeline(
         for i in range(iterations):
             plot_dir = base_cache_dir / f"full-plot-{candidate.index}-{i}"
             plot_dir.mkdir(parents=True, exist_ok=True)
-            extract_start, extract_duration = service.basic_extract_range(candidate)
+            service._cache_dir = plot_dir  # noqa: SLF001 — benchmark-only cache override
 
-            plot_mp3 = plot_dir / "preview.mp3"
             plot_start = time.perf_counter()
-            ffmpeg.extract_preview_fast(
-                service.session.audio,
-                extract_start,
-                extract_duration,
-                plot_mp3,
-            )
-            load_waveform_envelope(plot_mp3, buckets=buckets)
+            service.generate_basic(candidate)
             plot_samples.append(time.perf_counter() - plot_start)
             shutil.rmtree(plot_dir, ignore_errors=True)
 
@@ -197,8 +182,8 @@ def _warmup(
     buckets: int,
     cache_dir: Path,
 ) -> None:
-    mp3 = _ensure_mp3(service, candidate, cache_dir / "warmup")
-    load_waveform_envelope(mp3, buckets=buckets)
+    envelope = _ensure_envelope(service, candidate, cache_dir / "warmup")
+    _time_envelope_cache_load(envelope, buckets=buckets)
 
 
 def _summarize(label: str, timings: list[ClipTiming]) -> None:
@@ -221,11 +206,10 @@ def _print_clip_table(timings: list[ClipTiming]) -> None:
 
 
 def _print_breakdown(breakdowns: list[BreakdownTiming]) -> None:
-    probe = statistics.mean([b.probe_ms for b in breakdowns])
-    decode = statistics.mean([b.decode_ms for b in breakdowns])
-    downsample = statistics.mean([b.downsample_ms for b in breakdowns])
-    print("\nTextual-plot breakdown (render-only, mean across clips):")
-    print(f"  probe: {probe:.1f} ms | decode: {decode:.1f} ms | downsample: {downsample:.1f} ms")
+    load = statistics.mean([b.load_ms for b in breakdowns])
+    resample = statistics.mean([b.resample_ms for b in breakdowns])
+    print("\nEnvelope cache load breakdown (mean across clips):")
+    print(f"  load: {load:.1f} ms | resample: {resample:.1f} ms")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -242,7 +226,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--iterations", type=int, default=3)
     parser.add_argument(
         "--mode",
-        choices=("render-only", "full", "both"),
+        choices=("cache-load", "full", "both"),
         default="both",
     )
     args = parser.parse_args(argv)
@@ -272,18 +256,18 @@ def main(argv: list[str] | None = None) -> int:
 
     _warmup(service, candidates[0], buckets=args.buckets, cache_dir=cache_root)
 
-    if args.mode in ("render-only", "both"):
-        render_dir = cache_root / "render-only"
+    if args.mode in ("cache-load", "both"):
+        render_dir = cache_root / "cache-load"
         if render_dir.exists():
             shutil.rmtree(render_dir)
-        render_timings, breakdowns = _benchmark_render_only(
+        render_timings, breakdowns = _benchmark_cache_load(
             service,
             candidates,
             buckets=args.buckets,
             iterations=args.iterations,
             cache_dir=render_dir,
         )
-        _summarize("Render-only (MP3 → envelope)", render_timings)
+        _summarize("Cache load (.wenv.npz → plot data)", render_timings)
         _print_clip_table(render_timings)
         if breakdowns:
             _print_breakdown(breakdowns)
@@ -299,7 +283,7 @@ def main(argv: list[str] | None = None) -> int:
             iterations=args.iterations,
             base_cache_dir=full_dir,
         )
-        _summarize("Full pipeline (extract + envelope)", full_timings)
+        _summarize("Full pipeline (extract + envelope cache write)", full_timings)
         if args.mode == "full":
             _print_clip_table(full_timings)
 

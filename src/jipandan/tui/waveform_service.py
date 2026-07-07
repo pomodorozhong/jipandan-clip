@@ -7,6 +7,13 @@ from pathlib import Path
 
 from jipandan.core import ffmpeg
 from jipandan.core.models import ClipCandidate, Session
+from jipandan.core.waveform_envelope import (
+    MAX_ENVELOPE_CACHE_BUCKETS,
+    WAVEFORM_ENVELOPE_SUFFIX,
+    build_envelope_from_audio_slice,
+    load_envelope_cache,
+    save_envelope_cache,
+)
 from jipandan.core.srt import seconds_to_ffmpeg_timestamp, srt_time_to_seconds
 from jipandan.tui.fine_waveform import (
     FINE_CLIP_SECONDS,
@@ -127,23 +134,32 @@ class WaveformService:
             return None
 
     def generate_basic(self, candidate: ClipCandidate) -> tuple[Path, float]:
-        target_mp3 = self.ensure_basic_mp3(candidate)
-        return target_mp3, ffmpeg.probe_duration_seconds(target_mp3)
+        target = self.ensure_basic_envelope(candidate)
+        return target, load_envelope_cache(target).duration
 
-    def ensure_basic_mp3(self, candidate: ClipCandidate) -> Path:
-        """Return the basic-tab preview MP3, extracting it if needed."""
-        target_mp3 = self.basic_cache_path(candidate, suffix=".mp3")
-        if target_mp3.exists():
-            return target_mp3
-        target_mp3.parent.mkdir(parents=True, exist_ok=True)
+    def ensure_basic_envelope(self, candidate: ClipCandidate) -> Path:
+        """Return the basic-tab waveform envelope cache, building it if needed."""
+        target = self.basic_cache_path(candidate, suffix=WAVEFORM_ENVELOPE_SUFFIX)
+        if target.exists():
+            return target
         extract_start, extract_duration = self.basic_extract_range(candidate)
-        ffmpeg.extract_preview_fast(
+        start_seconds = srt_time_to_seconds(extract_start.replace(".", ","))
+        duration_seconds = float(extract_duration)
+        envelope = build_envelope_from_audio_slice(
             self.session.audio,
-            extract_start,
-            extract_duration,
-            target_mp3,
+            start_seconds,
+            duration_seconds,
+            MAX_ENVELOPE_CACHE_BUCKETS,
         )
-        return target_mp3
+        save_envelope_cache(
+            target,
+            times=envelope.times,
+            mins=envelope.mins,
+            maxs=envelope.maxs,
+            duration=envelope.duration,
+            buckets=envelope.buckets,
+        )
+        return target
 
     # --- viewport / marker geometry ---
 

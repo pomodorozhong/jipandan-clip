@@ -19,7 +19,10 @@ from jipandan.core.waveform_envelope import (
     decode_mp3_mono_f32,
     downsample_envelope,
     extract_covers_visible,
+    is_waveform_envelope_cache,
+    load_envelope_cache,
     padded_extract_range,
+    resample_envelope_to_buckets,
 )
 from jipandan.tui.widgets.waveform_nudge_bar import (
     MARKER_EPSILON_SECONDS,
@@ -606,7 +609,7 @@ class WaveformWidget(Vertical, can_focus=True):
         self._render_plot(plot, x_limits=(plot._x_min, plot._x_max))
         plot.refresh()
 
-    def _start_envelope_load(self, mp3_path: Path) -> None:
+    def _start_envelope_load(self, cache_path: Path) -> None:
         self._scroll_regen_generation += 1
         self._cancel_scroll_regen_timer()
         self._scroll_regen_enabled = False
@@ -615,16 +618,44 @@ class WaveformWidget(Vertical, can_focus=True):
         plot = self.query_one("#waveform-plot", WaveformPlotWidget)
         panel.display = True
         plot.display = False
-        self._load_envelope(mp3_path, token)
+        self._load_envelope(cache_path, token)
+
+    def _envelope_from_source(self, buckets: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+        if self._source_audio is None or not self._source_audio.exists():
+            raise ValueError("source audio unavailable for envelope rebuild")
+        if self._viewport_start is None or self._media_duration is None:
+            raise ValueError("viewport unavailable for envelope rebuild")
+        samples = decode_audio_slice_mono_f32(
+            self._source_audio,
+            self._viewport_start,
+            self._media_duration,
+        )
+        duration = self._media_duration
+        times, mins, maxs = downsample_envelope(samples, duration, buckets)
+        return times, mins, maxs, duration
 
     @work(thread=True, exclusive=True, group="waveform-envelope")
-    def _load_envelope(self, mp3_path: Path, token: int) -> None:
+    def _load_envelope(self, cache_path: Path, token: int) -> None:
         try:
             width = max(self.size.width, self.app.size.width)
             buckets = envelope_buckets_for_width(width)
-            duration = ffmpeg.probe_duration_seconds(mp3_path)
-            samples = decode_mp3_mono_f32(mp3_path)
-            times, mins, maxs = downsample_envelope(samples, duration, buckets)
+            if is_waveform_envelope_cache(cache_path):
+                cached = load_envelope_cache(cache_path)
+                duration = cached.duration
+                if cached.buckets >= buckets:
+                    times, mins, maxs = resample_envelope_to_buckets(
+                        cached.times,
+                        cached.mins,
+                        cached.maxs,
+                        duration,
+                        buckets,
+                    )
+                else:
+                    times, mins, maxs, duration = self._envelope_from_source(buckets)
+            else:
+                duration = ffmpeg.probe_duration_seconds(cache_path)
+                samples = decode_mp3_mono_f32(cache_path)
+                times, mins, maxs = downsample_envelope(samples, duration, buckets)
         except Exception as exc:
             if token == self._plot_update_token:
                 self.app.call_from_thread(self._on_envelope_failed, token, str(exc))

@@ -8,8 +8,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from jipandan.core import ffmpeg
-from jipandan.core.models import ClipCandidate
+from jipandan.core.waveform_envelope import (
+    MAX_ENVELOPE_CACHE_BUCKETS,
+    WAVEFORM_ENVELOPE_SUFFIX,
+    build_envelope_from_audio_slice,
+    load_envelope_cache,
+    save_envelope_cache,
+)
 from jipandan.core.srt import seconds_to_ffmpeg_timestamp
 
 if TYPE_CHECKING:
@@ -147,19 +152,25 @@ class FineWaveformSlice:
         return self._displayed_extract
 
     def generate(self, candidate: ClipCandidate) -> tuple[Path, float]:
-        target_mp3 = self.cache_path(candidate, suffix=".mp3")
-        if target_mp3.exists():
-            return target_mp3, ffmpeg.probe_duration_seconds(target_mp3)
-        target_mp3.parent.mkdir(parents=True, exist_ok=True)
+        target = self.cache_path(candidate, suffix=WAVEFORM_ENVELOPE_SUFFIX)
+        if target.exists():
+            return target, load_envelope_cache(target).duration
         extract_start = self.extract_start(candidate)
-        ffmpeg.extract_preview_fast(
+        envelope = build_envelope_from_audio_slice(
             self._service.session.audio,
-            seconds_to_ffmpeg_timestamp(extract_start),
-            FINE_EXTRACT_DURATION,
-            target_mp3,
+            extract_start,
+            float(FINE_EXTRACT_SECONDS),
+            MAX_ENVELOPE_CACHE_BUCKETS,
         )
-        media_duration = ffmpeg.probe_duration_seconds(target_mp3)
-        return target_mp3, media_duration
+        save_envelope_cache(
+            target,
+            times=envelope.times,
+            mins=envelope.mins,
+            maxs=envelope.maxs,
+            duration=envelope.duration,
+            buckets=envelope.buckets,
+        )
+        return target, envelope.duration
 
     def _padding_insufficient(
         self, candidate: ClipCandidate, extract_start: float

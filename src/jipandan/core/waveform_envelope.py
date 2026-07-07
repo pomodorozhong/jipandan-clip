@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +12,101 @@ from jipandan.core import ffmpeg
 
 _DEFAULT_SAMPLE_RATE = 8000
 _DEFAULT_BUCKETS = 800
+WAVEFORM_ENVELOPE_SUFFIX = ".wenv.npz"
+MAX_ENVELOPE_CACHE_BUCKETS = 4096
+
+
+@dataclass(frozen=True)
+class WaveformEnvelopeCache:
+    times: np.ndarray
+    mins: np.ndarray
+    maxs: np.ndarray
+    duration: float
+    buckets: int
+
+
+def is_waveform_envelope_cache(path: Path) -> bool:
+    return path.suffixes == [".wenv", ".npz"] or path.name.endswith(WAVEFORM_ENVELOPE_SUFFIX)
+
+
+def save_envelope_cache(
+    path: Path,
+    *,
+    times: np.ndarray,
+    mins: np.ndarray,
+    maxs: np.ndarray,
+    duration: float,
+    buckets: int,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        path,
+        times=times,
+        mins=mins,
+        maxs=maxs,
+        duration=np.float64(duration),
+        buckets=np.int32(buckets),
+    )
+
+
+def load_envelope_cache(path: Path) -> WaveformEnvelopeCache:
+    with np.load(path, allow_pickle=False) as data:
+        return WaveformEnvelopeCache(
+            times=data["times"],
+            mins=data["mins"],
+            maxs=data["maxs"],
+            duration=float(data["duration"]),
+            buckets=int(data["buckets"]),
+        )
+
+
+def resample_envelope_to_buckets(
+    times: np.ndarray,
+    mins: np.ndarray,
+    maxs: np.ndarray,
+    duration: float,
+    target_buckets: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Merge cached buckets down to ``target_buckets`` (never upsamples)."""
+    if target_buckets <= 0:
+        raise ValueError("target_buckets must be positive")
+    source_buckets = len(mins)
+    if source_buckets <= target_buckets:
+        return times, mins, maxs
+
+    ratio = source_buckets / target_buckets
+    new_mins: list[float] = []
+    new_maxs: list[float] = []
+    for index in range(target_buckets):
+        start_idx = int(index * ratio)
+        end_idx = max(start_idx + 1, int((index + 1) * ratio))
+        new_mins.append(float(mins[start_idx:end_idx].min()))
+        new_maxs.append(float(maxs[start_idx:end_idx].max()))
+
+    count = len(new_mins)
+    new_times = (np.arange(count, dtype=np.float64) + 0.5) * duration / count
+    return new_times, np.asarray(new_mins, dtype=np.float64), np.asarray(new_maxs, dtype=np.float64)
+
+
+def build_envelope_from_audio_slice(
+    audio: Path,
+    start_seconds: float,
+    duration_seconds: float,
+    buckets: int,
+    *,
+    sample_rate: int = _DEFAULT_SAMPLE_RATE,
+) -> WaveformEnvelopeCache:
+    samples = decode_audio_slice_mono_f32(
+        audio, start_seconds, duration_seconds, sample_rate=sample_rate
+    )
+    times, mins, maxs = downsample_envelope(samples, duration_seconds, buckets)
+    return WaveformEnvelopeCache(
+        times=times,
+        mins=mins,
+        maxs=maxs,
+        duration=duration_seconds,
+        buckets=len(mins),
+    )
 
 
 def decode_mp3_mono_f32(
@@ -133,13 +229,13 @@ def downsample_envelope(
     return times, np.asarray(mins, dtype=np.float64), np.asarray(maxs, dtype=np.float64)
 
 
-def load_waveform_envelope(
+def envelope_from_mp3(
     mp3: Path,
     *,
     buckets: int = _DEFAULT_BUCKETS,
     sample_rate: int = _DEFAULT_SAMPLE_RATE,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Load ``mp3`` and return ``(times, mins, maxs)`` in seconds/amplitude."""
+    """Decode ``mp3`` and return ``(times, mins, maxs)`` in seconds/amplitude."""
     duration = ffmpeg.probe_duration_seconds(mp3)
     samples = decode_mp3_mono_f32(mp3, sample_rate=sample_rate)
     return downsample_envelope(samples, duration, buckets)

@@ -12,6 +12,7 @@ from textual.widgets import Static, TabbedContent, TabPane
 from jipandan.core.audio_playback import AudioPlayback, default_audio_playback
 from jipandan.core.models import ClipCandidate, Session
 from jipandan.core.srt import seconds_to_ffmpeg_timestamp, srt_time_to_seconds
+from jipandan.core.waveform_envelope import WAVEFORM_ENVELOPE_SUFFIX
 from jipandan.tui.fine_waveform import (
     FINE_END_TAB_ID,
     FINE_EXTRACT_DURATION,
@@ -506,7 +507,7 @@ class ClipDetailPanel(Vertical):
         play: bool = True,
     ) -> None:
         slice_ = self.waveform_service.fine(mode)
-        cached = slice_.cache_path(candidate, suffix=".mp3")
+        cached = slice_.cache_path(candidate, suffix=WAVEFORM_ENVELOPE_SUFFIX)
         if cached.exists():
             self._present_fine_waveform(
                 mode,
@@ -640,7 +641,7 @@ class ClipDetailPanel(Vertical):
         if state := waveform.try_reuse_basic(candidate):
             self._present_from_basic_state(candidate, state)
             return
-        cached = waveform.basic_cache_path(candidate, suffix=".mp3")
+        cached = waveform.basic_cache_path(candidate, suffix=WAVEFORM_ENVELOPE_SUFFIX)
         if cached.exists():
             self._present_waveform(
                 candidate,
@@ -664,7 +665,7 @@ class ClipDetailPanel(Vertical):
                 extract_start=state.extract_start,
             )
             return
-        cached = slice_.cache_path(candidate, suffix=".mp3")
+        cached = slice_.cache_path(candidate, suffix=WAVEFORM_ENVELOPE_SUFFIX)
         if cached.exists():
             self._present_fine_waveform(
                 mode,
@@ -815,13 +816,13 @@ class ClipDetailPanel(Vertical):
                 GENERATING_WAVEFORM_PLACEHOLDER,
             )
         try:
-            target_mp3, media_duration = waveform.generate_basic(candidate)
+            target_path, media_duration = waveform.generate_basic(candidate)
             if not waveform.is_basic_generation_current(generation):
                 return
             self.app.call_from_thread(
                 self._present_waveform,
                 candidate,
-                target_mp3,
+                target_path,
                 media_duration=media_duration,
             )
         except Exception as exc:
