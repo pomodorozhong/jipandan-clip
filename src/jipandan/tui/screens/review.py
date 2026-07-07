@@ -3,12 +3,13 @@ from collections.abc import Callable
 from pathlib import Path
 
 from textual import on, work
+from textual.actions import SkipAction
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal
+from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.timer import Timer
-from textual.widgets import Footer, Header, ListView, Tab, Tabs
+from textual.widgets import Footer, Header, Input, ListView, Tab, Tabs
 
 from jipandan.core import ffmpeg
 from jipandan.core.models import ClipCandidate, ClipStatus, Session
@@ -81,6 +82,7 @@ class ReviewScreen(Screen):
         # Binding("f", "cycle_filter", "Filter"),
         Binding("f", "open_filter_modal", "Filter picker"),
         Binding("g", "jump_to_index_prompt", "Jump index"),
+        Binding("slash", "focus_clip_search", "Search"),
         Binding("ctrl+g", "generate_filter_waveforms", "Pregen waveforms"),
         Binding("h", "toggle_hide_processed", "Hide processed"),
         Binding("ctrl+s", "save_session", "Save"),
@@ -103,8 +105,17 @@ class ReviewScreen(Screen):
         height: 1fr;
     }
 
-    #clip-list {
+    #clip-list-pane {
         width: 40%;
+        height: 1fr;
+    }
+
+    #clip-search {
+        width: 100%;
+    }
+
+    #clip-list {
+        height: 1fr;
         border: solid $primary;
     }
 
@@ -152,7 +163,9 @@ class ReviewScreen(Screen):
             active=self._clip_list.filter_mode,
         )
         with Horizontal(id="main-pane"):
-            yield ListView(id="clip-list")
+            with Vertical(id="clip-list-pane"):
+                yield Input(placeholder="Search title…", id="clip-search")
+                yield ListView(id="clip-list")
             yield ClipDetailPanel(
                 self.session,
                 self._waveform_cache_dir,
@@ -203,6 +216,31 @@ class ReviewScreen(Screen):
         tabs = self.query_one("#filter-tabs", Tabs)
         if tabs.active != self._clip_list.filter_mode:
             tabs.active = self._clip_list.filter_mode
+
+    @on(Input.Changed, "#clip-search")
+    def on_clip_search_changed(self, event: Input.Changed) -> None:
+        self._apply_clip_search(event.value)
+
+    @on(Input.Submitted, "#clip-search")
+    def on_clip_search_submitted(self, event: Input.Submitted) -> None:
+        self._apply_clip_search(event.value)
+        self._list_view().focus()
+
+    @on(Input.Blurred, "#clip-search")
+    def on_clip_search_blurred(self, event: Input.Blurred) -> None:
+        self._apply_clip_search(event.value)
+
+    def _clip_search_focused(self) -> bool:
+        focused = self.focused
+        return isinstance(focused, Input) and focused.id == "clip-search"
+
+    def _apply_clip_search(self, query: str) -> None:
+        current = self._current_candidate()
+        self._clip_list.set_search_query(query)
+        self._clip_list.apply_filter_to_items(
+            self._list_view(),
+            preserve_clip_id=current.clip_id if current is not None else None,
+        )
 
     @on(Tabs.TabActivated, "#filter-tabs")
     def on_filter_tab_activated(self, event: Tabs.TabActivated) -> None:
@@ -546,6 +584,9 @@ class ReviewScreen(Screen):
                 f"No #{requested_index} in current filter; jumped to nearest #{target_clip_id}"
             )
 
+    def action_focus_clip_search(self) -> None:
+        self.query_one("#clip-search", Input).focus()
+
     def action_jump_to_index_prompt(self) -> None:
         self.app.push_screen(
             JumpToIndexModal(),
@@ -700,6 +741,8 @@ class ReviewScreen(Screen):
         self._persist_debounced()
 
     def action_play_preview(self) -> None:
+        if self._clip_search_focused():
+            raise SkipAction()
         panel = self._detail_panel()
         if panel.is_playing():
             panel.stop_playback()

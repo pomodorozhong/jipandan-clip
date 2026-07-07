@@ -1,5 +1,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
+import re
+import unicodedata
 
 from textual.containers import Horizontal
 from textual.widgets import Label, ListItem, ListView, Tabs
@@ -17,6 +19,17 @@ STATUS_BADGE: dict[ClipStatus, str] = {
 
 PROCESSED_HIDDEN_CLASS = "processed-hidden"
 FILTER_HIDDEN_CLASS = "filter-hidden"
+
+
+def _normalize_search_text(text: str) -> str:
+    return unicodedata.normalize("NFKC", text).casefold()
+
+
+_ZERO_WIDTH_RE = re.compile(r"[\u200b-\u200d\ufeff]")
+
+
+def _normalize_search_query(query: str) -> str:
+    return _ZERO_WIDTH_RE.sub("", query).strip()
 
 
 class FilterTabs(Tabs, can_focus=False):
@@ -96,6 +109,7 @@ class ClipListController:
         self._on_selection_changed = on_selection_changed
         self._on_list_state_changed = on_list_state_changed
         self.filter_mode = "unsorted"
+        self.search_query = ""
         self.hide_processed = False
         self._pinned_processed_visible: set[str] = set()
         self._processed_hidden: set[str] = set()
@@ -148,12 +162,24 @@ class ClipListController:
             return False
         return True
 
+    def _candidate_matches_search(self, candidate: ClipCandidate) -> bool:
+        if not self.search_query:
+            return True
+        haystack = _normalize_search_text(candidate.title)
+        needle = _normalize_search_text(self.search_query)
+        return needle in haystack
+
     def _item_would_be_visible(self, candidate: ClipCandidate) -> bool:
         if candidate.clip_id in self._processed_hidden:
             return False
+        if self.search_query:
+            return self._candidate_matches_search(candidate)
         if candidate.clip_id in self._pinned_processed_visible:
             return True
         return self._candidate_matches_filter(candidate)
+
+    def set_search_query(self, query: str) -> None:
+        self.search_query = _normalize_search_query(query)
 
     def visible_candidates(self) -> list[ClipCandidate]:
         return [
@@ -208,36 +234,45 @@ class ClipListController:
                 self._sync_item_visibility(item)
         self._sync_filtered_clip_ids(list_view)
         self._notify_list_state_changed()
+        self._ensure_visible_selection(
+            list_view,
+            prefer_clip_id=preserve_clip_id,
+            select_first=select_first,
+        )
 
-        if preserve_clip_id is not None:
+    def _ensure_visible_selection(
+        self,
+        list_view: ListView,
+        *,
+        prefer_clip_id: str | None = None,
+        select_first: bool = False,
+    ) -> None:
+        if prefer_clip_id is not None and not select_first:
             for index, item in enumerate(list_view.children):
                 if (
                     isinstance(item, ClipListItem)
-                    and item.candidate_id == preserve_clip_id
+                    and item.candidate_id == prefer_clip_id
                     and self.is_visible_item(item)
                 ):
                     list_view.index = index
-                    self._on_selection_changed(preserve_clip_id)
+                    self._on_selection_changed(prefer_clip_id)
                     return
-            if self.filtered_clip_ids:
-                first_dom = self._first_visible_dom_index(list_view)
-                if first_dom is not None:
-                    list_view.index = first_dom
-                    first_item = list_view.children[first_dom]
-                    if isinstance(first_item, ClipListItem):
-                        self._on_selection_changed(first_item.candidate_id)
+
+        if not select_first:
+            highlighted = self.highlighted_item(list_view)
+            if highlighted is not None:
+                self._on_selection_changed(highlighted.candidate_id)
                 return
 
-        if select_first:
-            first_dom = self._first_visible_dom_index(list_view)
-            if first_dom is not None:
-                list_view.index = first_dom
-                first_item = list_view.children[first_dom]
-                if isinstance(first_item, ClipListItem):
-                    self._on_selection_changed(first_item.candidate_id)
-            else:
-                list_view.index = None
-                self._on_selection_changed(None)
+        first_dom = self._first_visible_dom_index(list_view)
+        if first_dom is not None:
+            list_view.index = first_dom
+            first_item = list_view.children[first_dom]
+            if isinstance(first_item, ClipListItem):
+                self._on_selection_changed(first_item.candidate_id)
+        else:
+            list_view.index = None
+            self._on_selection_changed(None)
 
     def visible_position(self, list_view: ListView, dom_index: int) -> int:
         visible = 0
