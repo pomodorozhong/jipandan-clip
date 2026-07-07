@@ -42,9 +42,8 @@ from jipandan.tui.widgets.waveform_nudge_bar import NudgeEdge
 DETAIL_TAB_BASIC = "basic"
 DETAIL_TAB_FINE_START = FINE_START_TAB_ID
 DETAIL_TAB_FINE_END = FINE_END_TAB_ID
-PLAYHEAD_UPDATE_INTERVAL_SECONDS = 0.033
-PLAYHEAD_SMOOTH_BLEND = 0.22
-PLAYHEAD_SNAP_ERROR_SECONDS = 0.35
+PLAYHEAD_UPDATE_INTERVAL_SECONDS = 1 / 30
+PLAYHEAD_SYNC_TIMEOUT_SECONDS = 3.0
 
 
 class DetailTabs(TabbedContent, can_focus=False):
@@ -115,16 +114,12 @@ class ClipDetailPanel(Vertical):
         self._on_detail_updated = on_detail_updated
         self._on_nudge = on_nudge
         self._detail_tab = DETAIL_TAB_BASIC
+        self._playback_spawned_at: float | None = None
         self._playback_started_at: float | None = None
+        self._playback_synced = False
         self._playback_start: float | None = None
         self._playback_duration: float | None = None
-        self._playback_ipc_origin: float | None = None
-        self._playback_last_elapsed: float | None = None
-        self._playback_render_elapsed: float | None = None
-        self._playback_render_updated_at: float | None = None
         self._playback_process_done = False
-        self._playback_done_elapsed_anchor: float | None = None
-        self._playback_done_monotonic_anchor: float | None = None
         self._playback_timer: Timer | None = None
         self._playback_process: subprocess.Popen | None = None
         self._playback_monitor: MpvPlaybackMonitor | None = None
@@ -473,16 +468,12 @@ class ClipDetailPanel(Vertical):
             self.run_play_preview(candidate)
 
     def _clear_playback_status(self) -> None:
+        self._playback_spawned_at = None
         self._playback_started_at = None
+        self._playback_synced = False
         self._playback_start = None
         self._playback_duration = None
-        self._playback_ipc_origin = None
-        self._playback_last_elapsed = None
-        self._playback_render_elapsed = None
-        self._playback_render_updated_at = None
         self._playback_process_done = False
-        self._playback_done_elapsed_anchor = None
-        self._playback_done_monotonic_anchor = None
         if self._playback_timer is not None:
             self._playback_timer.stop()
             self._playback_timer = None
@@ -494,20 +485,16 @@ class ClipDetailPanel(Vertical):
             self._playback_waveform = None
         self.query_one("#playback-status", Static).update("")
 
-    def _start_playback_status(
+    def _begin_playback_tracking(
         self, duration_seconds: float, *, playhead_start: float
     ) -> None:
         self._playback_waveform = self._active_waveform_widget()
         self._playback_start = playhead_start
         self._playback_duration = duration_seconds
-        self._playback_started_at = time.monotonic()
-        self._playback_ipc_origin = None
-        self._playback_last_elapsed = None
-        self._playback_render_elapsed = None
-        self._playback_render_updated_at = time.monotonic()
+        self._playback_spawned_at = time.monotonic()
+        self._playback_started_at = None
+        self._playback_synced = False
         self._playback_process_done = False
-        self._playback_done_elapsed_anchor = None
-        self._playback_done_monotonic_anchor = None
         self._update_playback_status()
         if self._playback_timer is not None:
             self._playback_timer.stop()
@@ -515,91 +502,55 @@ class ClipDetailPanel(Vertical):
             PLAYHEAD_UPDATE_INTERVAL_SECONDS, self._update_playback_status
         )
 
+    def _sync_playback_start(self, now: float) -> bool:
+        if self._playback_synced:
+            return True
+        if self._playback_monitor is not None:
+            ipc_pos = self._playback_monitor.time_pos()
+            if ipc_pos is None or ipc_pos <= 0.0:
+                spawned_at = self._playback_spawned_at
+                if (
+                    spawned_at is not None
+                    and now - spawned_at >= PLAYHEAD_SYNC_TIMEOUT_SECONDS
+                ):
+                    self._playback_started_at = now
+                    self._playback_synced = True
+                    self._playback_monitor.close()
+                    self._playback_monitor = None
+                    return True
+                return False
+            self._playback_started_at = now
+            self._playback_synced = True
+            self._playback_monitor.close()
+            self._playback_monitor = None
+            return True
+        self._playback_started_at = now
+        self._playback_synced = True
+        return True
+
     def _mark_playback_process_done(self) -> None:
         self._playback_process = None
-        if self._playback_process_done:
-            return
         self._playback_process_done = True
-        anchor = self._playback_render_elapsed
-        if anchor is None:
-            anchor = self._playback_last_elapsed
-        if anchor is None:
-            anchor = 0.0
-        self._playback_done_elapsed_anchor = anchor
-        self._playback_done_monotonic_anchor = time.monotonic()
 
     def _update_playback_status(self) -> None:
         if (
-            self._playback_started_at is None
-            or self._playback_start is None
+            self._playback_start is None
             or self._playback_duration is None
         ):
             return
         now = time.monotonic()
-        if (
-            self._playback_render_elapsed is not None
-            and self._playback_render_updated_at is not None
-        ):
-            dt = max(0.0, now - self._playback_render_updated_at)
-            self._playback_render_elapsed += dt
-        self._playback_render_updated_at = now
-
-        measured_elapsed: float | None = None
-        status_elapsed: float | None = None
-        if self._playback_monitor is not None:
-            ipc_pos = self._playback_monitor.time_pos()
-            if ipc_pos is not None and ipc_pos > 0.0:
-                if self._playback_ipc_origin is None:
-                    self._playback_ipc_origin = ipc_pos
-                measured_elapsed = max(0.0, ipc_pos - self._playback_ipc_origin)
-            # Keep countdown moving even while waiting for first accurate IPC tick.
-            status_elapsed = max(0.0, now - self._playback_started_at)
-        else:
-            measured_elapsed = max(0.0, now - self._playback_started_at)
-        if (
-            self._playback_process_done
-            and self._playback_done_elapsed_anchor is not None
-            and self._playback_done_monotonic_anchor is not None
-        ):
-            done_elapsed = self._playback_done_elapsed_anchor + max(
-                0.0, now - self._playback_done_monotonic_anchor
-            )
-            measured_elapsed = (
-                done_elapsed
-                if measured_elapsed is None
-                else max(measured_elapsed, done_elapsed)
-            )
-
-        if measured_elapsed is not None:
-            if self._playback_render_elapsed is None:
-                self._playback_render_elapsed = measured_elapsed
-            else:
-                error = measured_elapsed - self._playback_render_elapsed
-                if abs(error) >= PLAYHEAD_SNAP_ERROR_SECONDS:
-                    self._playback_render_elapsed = measured_elapsed
-                else:
-                    blended = (
-                        self._playback_render_elapsed
-                        + error * PLAYHEAD_SMOOTH_BLEND
-                    )
-                    # Playback progress should be monotonic; avoid tiny backwards
-                    # corrections from sparse/noisy IPC updates.
-                    self._playback_render_elapsed = max(
-                        self._playback_render_elapsed, blended
-                    )
-
-        effective_elapsed = (
-            self._playback_render_elapsed
-            if self._playback_render_elapsed is not None
-            else status_elapsed or 0.0
+        if not self._sync_playback_start(now):
+            if self._playback_waveform is not None:
+                self._playback_waveform.clear_playhead()
+            return
+        assert self._playback_started_at is not None
+        elapsed = min(
+            max(0.0, now - self._playback_started_at),
+            self._playback_duration,
         )
-        clamped_elapsed = min(max(0.0, effective_elapsed), self._playback_duration)
-        self._playback_last_elapsed = clamped_elapsed
-        remaining = max(0.0, self._playback_duration - clamped_elapsed)
-        if self._playback_waveform is not None and self._playback_render_elapsed is not None:
-            self._playback_waveform.set_playhead(self._playback_start + clamped_elapsed)
-        elif self._playback_waveform is not None:
-            self._playback_waveform.clear_playhead()
+        remaining = max(0.0, self._playback_duration - elapsed)
+        if self._playback_waveform is not None:
+            self._playback_waveform.set_playhead(self._playback_start + elapsed)
         self.query_one("#playback-status", Static).update(
             format_playback_remaining(remaining)
         )
@@ -862,7 +813,7 @@ class ClipDetailPanel(Vertical):
                 )
             self._playback_process = process
             self.app.call_from_thread(
-                self._start_playback_status, duration, playhead_start=playhead_start
+                self._begin_playback_tracking, duration, playhead_start=playhead_start
             )
             process.wait()
         except Exception as exc:
@@ -916,7 +867,7 @@ class ClipDetailPanel(Vertical):
                 )
             self._playback_process = process
             self.app.call_from_thread(
-                self._start_playback_status,
+                self._begin_playback_tracking,
                 duration_seconds,
                 playhead_start=playhead_start,
             )
