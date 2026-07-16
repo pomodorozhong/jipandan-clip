@@ -52,21 +52,30 @@ def main() -> None:
         "--temperature",
         type=float,
         default=0.0,
-        help="Sampling temperature for transcription (default: 0.0).",
+        help=(
+            "Sampling temperature (default: 0.0). "
+            "At 0.0, mlx uses the Whisper fallback ladder on failed windows."
+        ),
     )
     parser.add_argument(
         "-mc",
         "--max-context",
         type=int,
         default=0,
-        help="Maximum context tokens between segments (default: 0).",
+        help=(
+            "If <= 0, disable conditioning on previous text "
+            "(default: 0; recommended for long/silent audio)."
+        ),
     )
     parser.add_argument(
         "-et",
         "--entropy-thold",
         type=float,
-        default=3.0,
-        help="Entropy threshold for fallback decoding (default: 3.0).",
+        default=2.4,
+        help=(
+            "Compression-ratio threshold for decode fallback "
+            "(mlx compression_ratio_threshold; default: 2.4)."
+        ),
     )
     args = parser.parse_args()
 
