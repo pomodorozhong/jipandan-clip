@@ -21,7 +21,7 @@ class JipandanApp(App):
         language: str | None = None,
         temperature: float = 0.0,
         max_context: int = 0,
-        entropy_thold: float = 3.0,
+        entropy_thold: float = 2.4,
     ) -> None:
         super().__init__()
         self.audio = audio.resolve()
