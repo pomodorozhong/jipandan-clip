@@ -11,8 +11,10 @@ from textual.timer import Timer
 from textual.widgets import Footer, Header, ListView, Tab, Tabs
 
 from jipandan.core import ffmpeg
+from jipandan.core.clip_rank import average_amplitude
 from jipandan.core.models import ClipCandidate, ClipStatus, Session
 from jipandan.core.ffmpeg import ExportOptions
+from jipandan.core.waveform_envelope import WAVEFORM_ENVELOPE_SUFFIX, load_envelope_cache
 from jipandan.tui.clip_list import (
     ClipListController,
     ClipListItem,
@@ -36,7 +38,6 @@ from jipandan.tui.screens.filter_selection import (
 )
 from jipandan.tui.screens.jump_to_index import JumpToIndexModal
 from jipandan.tui.screens.start_offset import StartOffsetModal, TrimOffsets
-from jipandan.core.waveform_envelope import WAVEFORM_ENVELOPE_SUFFIX
 from jipandan.tui.waveform_service import FINE_NUDGE_COARSE, FINE_NUDGE_FINE, WaveformService
 from jipandan.tui.widgets.detail_panel import ClipDetailPanel
 
@@ -127,6 +128,7 @@ class ReviewScreen(Screen):
             session,
             on_selection_changed=self._on_clip_selection_changed,
             on_list_state_changed=self._refresh_status_bars,
+            amplitude_for_candidate=self._amplitude_for_candidate,
         )
         self._waveform_cache_dir = (
             Path("tmp") / "waveform" / session.audio.stem
@@ -220,11 +222,32 @@ class ReviewScreen(Screen):
         if change is None:
             return
         self._sync_filter_tabs()
+        if change.requires_rebuild:
+            self._rebuild_list(
+                select_first=change.select_first,
+                preserve_clip_id=change.preserve_clip_id,
+                force=True,
+            )
+            return
         self._clip_list.apply_filter_to_items(
             self._list_view(),
             select_first=change.select_first,
             preserve_clip_id=change.preserve_clip_id,
         )
+
+    def _amplitude_for_candidate(self, candidate: ClipCandidate) -> float | None:
+        if self._waveform_service is None:
+            return None
+        path = self._waveform_service.basic_cache_path(
+            candidate, suffix=WAVEFORM_ENVELOPE_SUFFIX
+        )
+        if not path.exists():
+            return None
+        try:
+            envelope = load_envelope_cache(path)
+        except (OSError, ValueError, KeyError):
+            return None
+        return average_amplitude(envelope.mins, envelope.maxs)
 
     def _detail_panel(self) -> ClipDetailPanel:
         return self.query_one("#detail-panel", ClipDetailPanel)
@@ -290,9 +313,10 @@ class ReviewScreen(Screen):
         self,
         select_first: bool = False,
         preserve_clip_id: str | None = None,
+        force: bool = False,
     ) -> None:
         list_view = self._list_view()
-        if self._clip_list.needs_rebuild(list_view):
+        if force or self._clip_list.needs_rebuild(list_view):
             await list_view.clear()
             items = self._clip_list.build_items()
             if items:
@@ -496,6 +520,13 @@ class ReviewScreen(Screen):
         if change is None:
             return
         self._sync_filter_tabs()
+        if change.requires_rebuild:
+            self._rebuild_list(
+                select_first=change.select_first,
+                preserve_clip_id=change.preserve_clip_id,
+                force=True,
+            )
+            return
         self._clip_list.apply_filter_to_items(
             self._list_view(),
             select_first=change.select_first,
@@ -578,6 +609,18 @@ class ReviewScreen(Screen):
             f"({cached} already cached)..."
         )
         self._run_bulk_waveform_generation(candidates)
+
+    def _rerank_after_waveforms(self) -> None:
+        """Rebuild the ranked list now that amplitude caches are available."""
+        if self._clip_list.filter_mode != "ranked":
+            return
+        current = self._current_candidate()
+        self._rebuild_list(
+            select_first=current is None,
+            preserve_clip_id=current.clip_id if current is not None else None,
+            force=True,
+        )
+        self.notify("Ranked list updated with amplitude scores.")
 
     def action_toggle_hide_processed(self) -> None:
         current = self._current_candidate()
@@ -958,3 +1001,5 @@ class ReviewScreen(Screen):
             f"Waveform pre-generation done: "
             f"{generated} generated, {cached} cached, {failed} failed.",
         )
+        if generated > 0 and self._clip_list.filter_mode == "ranked":
+            self.app.call_from_thread(self._rerank_after_waveforms)
