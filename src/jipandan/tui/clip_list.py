@@ -4,8 +4,14 @@ from dataclasses import dataclass
 from textual.containers import Horizontal
 from textual.widgets import Label, ListItem, ListView, Tabs
 
+from jipandan.core.clip_rank import score_candidate, sort_by_interest
 from jipandan.core.models import ClipCandidate, ClipStatus, Session
 from jipandan.tui.screens.filter_selection import FILTER_ORDER
+
+# Pending-only filters that share the same status match as "unsorted".
+PENDING_FILTER_MODES = frozenset({"unsorted", "ranked"})
+# Filters that change list DOM order (require rebuild when entered/left).
+ORDERED_FILTER_MODES = frozenset({"ranked"})
 
 STATUS_BADGE: dict[ClipStatus, str] = {
     "pending": "  ",
@@ -80,6 +86,16 @@ class FilterModeChange:
 
     preserve_clip_id: str | None
     select_first: bool
+    previous_mode: str
+    mode: str
+
+    @property
+    def requires_rebuild(self) -> bool:
+        """True when display order may change (e.g. ranked ↔ chronological)."""
+        return (
+            self.previous_mode in ORDERED_FILTER_MODES
+            or self.mode in ORDERED_FILTER_MODES
+        )
 
 
 class ClipListController:
@@ -91,10 +107,13 @@ class ClipListController:
         *,
         on_selection_changed: Callable[[str | None], None],
         on_list_state_changed: Callable[[], None] | None = None,
+        amplitude_for_candidate: Callable[[ClipCandidate], float | None]
+        | None = None,
     ) -> None:
         self.session = session
         self._on_selection_changed = on_selection_changed
         self._on_list_state_changed = on_list_state_changed
+        self._amplitude_for_candidate = amplitude_for_candidate
         self.filter_mode = "unsorted"
         self.hide_processed = False
         self._pinned_processed_visible: set[str] = set()
@@ -120,8 +139,15 @@ class ClipListController:
             return FilterModeChange(
                 preserve_clip_id=preserve_clip_id,
                 select_first=False,
+                previous_mode=previous_mode,
+                mode=mode,
             )
-        return FilterModeChange(preserve_clip_id=None, select_first=True)
+        return FilterModeChange(
+            preserve_clip_id=None,
+            select_first=True,
+            previous_mode=previous_mode,
+            mode=mode,
+        )
 
     def cycle_filter(self, *, direction: int) -> FilterModeChange | None:
         current_idx = FILTER_ORDER.index(self.filter_mode)
@@ -141,7 +167,7 @@ class ClipListController:
         self._processed_hidden.clear()
 
     def _candidate_matches_filter(self, candidate: ClipCandidate) -> bool:
-        if self.filter_mode == "unsorted":
+        if self.filter_mode in PENDING_FILTER_MODES:
             if candidate.status != "pending":
                 return False
         elif self.filter_mode != "all" and candidate.status != self.filter_mode:
@@ -155,10 +181,31 @@ class ClipListController:
             return True
         return self._candidate_matches_filter(candidate)
 
+    def _lookup_amplitude(self, candidate: ClipCandidate) -> float | None:
+        if self._amplitude_for_candidate is None:
+            return None
+        return self._amplitude_for_candidate(candidate)
+
+    def interest_score_for(self, candidate: ClipCandidate) -> float:
+        return score_candidate(candidate, self._lookup_amplitude(candidate))
+
+    def display_candidates(self) -> list[ClipCandidate]:
+        """Candidates in list DOM order for the current filter mode."""
+        candidates = list(self.session.candidates)
+        if self.filter_mode != "ranked":
+            return candidates
+        pending = [c for c in candidates if c.status == "pending"]
+        others = [c for c in candidates if c.status != "pending"]
+        amplitudes = {
+            candidate.clip_id: self._lookup_amplitude(candidate)
+            for candidate in pending
+        }
+        return sort_by_interest(pending, amplitude_for_candidate=amplitudes) + others
+
     def visible_candidates(self) -> list[ClipCandidate]:
         return [
             candidate
-            for candidate in self.session.candidates
+            for candidate in self.display_candidates()
             if self._item_would_be_visible(candidate)
         ]
 
@@ -398,7 +445,7 @@ class ClipListController:
         return expected_ids != existing_ids
 
     def build_items(self) -> list[ClipListItem]:
-        return [ClipListItem(candidate) for candidate in self.session.candidates]
+        return [ClipListItem(candidate) for candidate in self.display_candidates()]
 
     def find_insert_after(
         self,

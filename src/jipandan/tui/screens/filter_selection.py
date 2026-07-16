@@ -5,10 +5,11 @@ from textual.screen import ModalScreen
 from textual.widgets import Label, OptionList
 from textual.widgets.option_list import Option
 
-FILTER_ORDER = ["unsorted", "group1", "group2", "exported", "all"]
+FILTER_ORDER = ["unsorted", "ranked", "group1", "group2", "exported", "all"]
 FILTER_BAR_LABELS: dict[str, str] = {
     "all": "All",
     "unsorted": "Unsorted",
+    "ranked": "Ranked",
     "group1": "G1",
     "group2": "G2",
     "exported": "Exported",
@@ -17,6 +18,7 @@ FILTER_BAR_LABELS: dict[str, str] = {
 FILTER_LABELS: dict[str, str] = {
     "all": "All",
     "unsorted": "Unsorted",
+    "ranked": "Ranked (smart)",
     "group1": "Group 1",
     "group2": "Group 2",
     "exported": "Exported",
