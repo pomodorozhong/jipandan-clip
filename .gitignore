@@ -8,6 +8,8 @@ wheels/
 
 # Virtual environments
 .venv
+frontend/node_modules/
+*.tsbuildinfo
 
 # macOS
 .DS_Store

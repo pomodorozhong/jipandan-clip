@@ -35,7 +35,7 @@ def main() -> None:
     parser.add_argument(
         "--resume",
         action="store_true",
-        help="Load existing session and merge with SRT if present.",
+        help="Deprecated: existing sessions resume automatically; SRT changes need review.",
     )
     parser.add_argument(
         "--model",

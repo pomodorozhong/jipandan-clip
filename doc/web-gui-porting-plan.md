@@ -2,6 +2,10 @@
 
 Prepared 2026-09-23. This plan proposes a native browser interface for clip review while retaining the existing Python audio pipeline. It is a plan, not an implementation or a commitment to deploy a public service.
 
+Checkpoint 1 decisions (2026-09-24): keep saved clips missing from a changed SRT until explicitly removed; generate a new export filename when one exists; search within the selected status filter; undo recent marks, trims, and skips in the first GUI release.
+
+Progress on 2026-09-24: Phase 0 safety fixes, the local API, and the Phase 2 review screen are implemented. Checkpoint 2 is ready for owner review using the disposable 0526 copy described in [the review handoff](web-review-checkpoint-2.md). Waveform, transcription, and export UI work awaits that review.
+
 ## Outcome and scope
 
 The first release should let one person open an audio file, transcribe it when needed, review SRT candidates, adjust boundaries, listen, export clips, and resume without losing edits. It should make the current keyboard flow available alongside visible controls and direct waveform interaction.

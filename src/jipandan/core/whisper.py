@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import os
+import math
+import tempfile
 import threading
 from pathlib import Path
+
+from jipandan.core.srt import parse_srt, srt_time_to_seconds
 
 # Textual (and other TUIs) expose stderr.fileno() == -1. tqdm then tries to
 # create a multiprocessing lock for progress bars, which crashes with
@@ -44,6 +48,14 @@ def describe_transcribe_call(
     entropy_thold: float,
 ) -> tuple[str, dict[str, object]]:
     """Return (resolved_model_repo, kwargs) passed to mlx_whisper.transcribe()."""
+    if not model_name.strip():
+        raise ValueError("Model is required")
+    if not math.isfinite(temperature) or temperature < 0:
+        raise ValueError("Temperature must be a nonnegative finite number")
+    if not math.isfinite(entropy_thold) or entropy_thold <= 0:
+        raise ValueError("Entropy threshold must be a positive finite number")
+    if max_context < 0:
+        raise ValueError("Max context must be nonnegative")
     transcribe_kwargs: dict[str, object] = {
         "verbose": True,
         "temperature": temperature,
@@ -85,22 +97,50 @@ def transcribe_to_text(
     segments = result.get("segments", [])
 
     output_text.parent.mkdir(parents=True, exist_ok=True)
-    with output_text.open("w", encoding="utf-8") as f:
-        if output_format == "srt":
-            for idx, segment in enumerate(segments, start=1):
-                f.write(f"{idx}\n")
-                f.write(
-                    f"{_format_srt_timestamp(float(segment['start']))} --> "
-                    f"{_format_srt_timestamp(float(segment['end']))}\n"
-                )
-                f.write(f"{segment['text'].strip()}\n\n")
-        else:
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=output_text.parent,
+            prefix=f".{output_text.name}.", suffix=".tmp", delete=False,
+        ) as f:
+            temporary_path = Path(f.name)
+            if not segments:
+                raise ValueError("Transcription returned no segments")
             for segment in segments:
-                f.write(
-                    f"{float(segment['start']):08.3f} "
-                    f"{float(segment['end']):08.3f} "
-                    f"{segment['text'].strip()}\n"
-                )
+                start = float(segment["start"])
+                end = float(segment["end"])
+                if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
+                    raise ValueError("Transcription contains invalid segment times")
+                if not str(segment["text"]).strip():
+                    raise ValueError("Transcription contains an empty segment")
+            if output_format == "srt":
+                for idx, segment in enumerate(segments, start=1):
+                    f.write(f"{idx}\n")
+                    f.write(
+                        f"{_format_srt_timestamp(float(segment['start']))} --> "
+                        f"{_format_srt_timestamp(float(segment['end']))}\n"
+                    )
+                    f.write(f"{segment['text'].strip()}\n\n")
+            else:
+                for segment in segments:
+                    f.write(
+                        f"{float(segment['start']):08.3f} "
+                        f"{float(segment['end']):08.3f} "
+                        f"{segment['text'].strip()}\n"
+                    )
+            f.flush()
+            os.fsync(f.fileno())
+        if output_format == "srt":
+            parsed = parse_srt(temporary_path)
+            if len(parsed) != len(segments) or any(
+                srt_time_to_seconds(entry.end) <= srt_time_to_seconds(entry.start)
+                for entry in parsed
+            ):
+                raise ValueError("Transcription produced an invalid SRT")
+        os.replace(temporary_path, output_text)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def _format_srt_timestamp(seconds: float) -> str:

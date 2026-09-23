@@ -42,6 +42,17 @@ Pros: Asian IMEs are handled better by browsers. If you're having trouble typing
 uv run jipandan-serve raw.mp3
 ```
 
+### Local web GUI preview
+
+The new review screen is available for testing while the TUI remains the recommended full workflow. Build its frontend once, then launch the loopback server:
+
+```bash
+cd frontend && npm install && npm run build && cd ..
+uv run jipandan-web raw.mp3
+```
+
+The GUI currently handles opening audio, reviewing SRT candidates, marking, filtering, renaming, duplication, bulk skip, and undo. Waveform trimming, transcription, and export are still under development. Use a copy of a session for testing.
+
 ### 3. CLI (legacy)
 
 ```bash

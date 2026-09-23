@@ -172,11 +172,14 @@ class ClipListController:
     def _item_would_be_visible(self, candidate: ClipCandidate) -> bool:
         if candidate.clip_id in self._processed_hidden:
             return False
-        if self.search_query:
-            return self._candidate_matches_search(candidate)
-        if candidate.clip_id in self._pinned_processed_visible:
-            return True
-        return self._candidate_matches_filter(candidate)
+        if self.hide_processed and candidate.status != "pending":
+            return False
+        if not self._candidate_matches_search(candidate):
+            return False
+        return (
+            candidate.clip_id in self._pinned_processed_visible
+            or self._candidate_matches_filter(candidate)
+        )
 
     def set_search_query(self, query: str) -> None:
         self.search_query = _normalize_search_query(query)

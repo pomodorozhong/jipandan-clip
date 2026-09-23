@@ -250,6 +250,11 @@ class TranscribeWizardScreen(Screen):
         if event.button.id == "confirm":
             if self._transcribe_started:
                 return
+            try:
+                self._read_options()
+            except ValueError as exc:
+                self.query_one("#args-preview", Static).update(f"Invalid arguments: {exc}")
+                return
             self._transcribe_started = True
             self._begin_transcribe()
             return
@@ -291,16 +296,24 @@ class TranscribeWizardScreen(Screen):
         elapsed = time.monotonic() - self._start_time
         self.query_one("#elapsed", Static).update(f"Elapsed: {_format_elapsed(elapsed)}")
 
+    def _read_options(self) -> tuple[str, str | None, float, int, float]:
+        model = self.query_one("#model", Input).value.strip() or "large-v3"
+        language = self.query_one("#language", Input).value.strip() or None
+        temperature = float(self.query_one("#temperature", Input).value.strip() or "0.0")
+        max_context_text = self.query_one("#max_context", Input).value.strip() or "0"
+        max_context = int(max_context_text)
+        entropy_thold = float(self.query_one("#entropy_thold", Input).value.strip() or "3.0")
+        describe_transcribe_call(
+            model_name=model, language=language, temperature=temperature,
+            max_context=max_context, entropy_thold=entropy_thold,
+        )
+        return model, language, temperature, max_context, entropy_thold
+
     @work(thread=True, exclusive=True)
     def run_transcribe(self) -> None:
         try:
             # Re-parse arguments at run time (the preview already validates).
-            model = self.query_one("#model", Input).value.strip() or "large-v3"
-            language_raw = self.query_one("#language", Input).value.strip()
-            language = language_raw or None
-            temperature = float(self.query_one("#temperature", Input).value.strip() or "0.0")
-            max_context = int(float(self.query_one("#max_context", Input).value.strip() or "0"))
-            entropy_thold = float(self.query_one("#entropy_thold", Input).value.strip() or "3.0")
+            model, language, temperature, max_context, entropy_thold = self._read_options()
 
             repo, kwargs = describe_transcribe_call(
                 model_name=model,
@@ -352,6 +365,11 @@ class TranscribeWizardScreen(Screen):
             self._elapsed_timer.stop()
             self._elapsed_timer = None
         self._append_output(f"\nTranscription failed:\n{message}\n")
+        self._transcribe_started = False
+        self.query_one("#args-panel").display = True
+        confirm = self.query_one("#confirm", Button)
+        confirm.label = "Retry transcription"
+        confirm.disabled = False
 
 
 # Backwards-compatible alias (older code may still import TranscribeScreen).
