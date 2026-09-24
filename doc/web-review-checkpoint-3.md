@@ -1,5 +1,7 @@
 # Checkpoint 3: try waveform editing
 
+**Status:** Approved by the owner on 2026-09-24. This checklist records the reviewed build.
+
 This review uses a fresh disposable copy of `raw/0526.mp3`, `raw/0526.srt`, and `raw/0526.jipandan.json` in `tmp/web-waveform-0526/`. Its exported clips, if any, will go inside that folder. The original recording, session, SRT, and `2026-05-26/` exports are untouched.
 
 The review build is at <http://127.0.0.1:8766/>. If the server is not running, launch it from the repository root:

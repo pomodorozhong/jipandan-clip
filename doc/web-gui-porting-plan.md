@@ -1,37 +1,34 @@
 # Local web GUI porting plan
 
-Prepared 2026-09-23. This plan proposes a native browser interface for clip review while retaining the existing Python audio pipeline. It is a plan, not an implementation or a commitment to deploy a public service.
+Build a local browser interface that can open audio, transcribe when needed, review and trim clips, and export MP3s without losing edits. Reuse the Python audio pipeline and keep the TUI available during migration.
 
-Checkpoint 1 decisions (2026-09-24): keep saved clips missing from a changed SRT until explicitly removed; generate a new export filename when one exists; search within the selected status filter; undo recent marks, trims, and skips in the first GUI release.
+**Current state:** Phases 0–3 and checkpoints 1–3 are complete. Phase 4A is planned but has not started; checkpoint 4 will review rendered export previews before final export publication. The [review guide](your-web-gui-review-guide.md) covers the remaining hands-on checkpoints.
 
-Progress on 2026-09-24: Phase 0 safety fixes, the local API, and the Phase 2 review screen are implemented. Checkpoint 2 was reviewed using the disposable 0526 copy described in [the review handoff](web-review-checkpoint-2.md).
+## Scope
 
-The checkpoint 2 follow-up established visible shortcut labels, status chips only in All, Trimmed chips beside duration in filtered views, and separate count pills on the filters. All three refinements are approved in [the follow-up checklist](web-review-ui-refinements.md), so checkpoint 3 can proceed.
-
-Phase 3 now has bounded waveform windows, browser playback, overview and fine handle dragging, signed offsets, 10/100 ms nudges, and immediate revisioned saves. The Start and End fine views are stacked, nudge buttons show their shortcut keys, and the title and clip list stay fixed while timing controls scroll. [Checkpoint 3](web-review-checkpoint-3.md) is ready for owner listening and trim review before export behavior is finalized.
-
-## Outcome and scope
-
-The first release should let one person open an audio file, transcribe it when needed, review SRT candidates, adjust boundaries, listen, export clips, and resume without losing edits. It should make the current keyboard flow available alongside visible controls and direct waveform interaction.
-
-**Default product boundary:** Run a Python server bound to localhost and open the GUI in the user's browser. Audio, SRT, session JSON, caches, and exported clips remain on the local machine. Keep the TUI command working during migration. Remote hosting, accounts, collaboration, and mobile editing are later decisions; the current MLX Whisper path is Mac-oriented.
+Run a Python server bound to localhost and open the GUI in the browser. Audio, SRT, session JSON, caches, and exported clips remain on the local machine. Remote hosting, accounts, collaboration, and mobile editing are later decisions; the current MLX Whisper path is Mac-oriented.
 
 The existing `jipandan-serve` command is a browser-hosted terminal. It should remain available during transition, but it is not the target GUI. Its `textual-serve` and xterm.js layer would not be reused as the application UI.
 
 ## Your review checkpoints
 
-The owner will interrupt development at four planned points to inspect a concrete build or settle a product rule. The nontechnical tasks and feedback format are in [Your guide to reviewing the web GUI](your-web-gui-review-guide.md). Prepare a runnable build, a safe copy of test data, one launch instruction, and a short list of changes before each hands-on review. Do not ask the owner to inspect code or perform routine automated checks.
+Each checkpoint needs a runnable build, safe test copy, one launch instruction, and a short list of changes. The tasks and feedback format are in [Your guide to reviewing the web GUI](your-web-gui-review-guide.md). Do not ask the owner to inspect code or perform routine automated checks.
 
 | Checkpoint | Place in this plan | Feedback needed before dependent work proceeds |
 | --- | --- | --- |
 | 1. Set the rules | Before Phase 0 changes settle persistence and export behavior | Decide how to handle removed SRT entries, existing export filenames, search scope, and expected undo behavior. |
 | 2. Try the review screen | End of Phase 2, before the waveform UI is built on it | Confirm the list, filters, search, marking, rename, bulk actions, and reload flow work naturally. |
-| 3. Try waveform editing | End of Phase 3, before export UI behavior is finalized | Confirm real clip boundaries can be found, heard, adjusted precisely, and saved. |
-| 4. Finish a real session | End of Phase 4, before cutover decisions | Confirm transcription through final exported MP3 works on representative audio, including one failure and retry. |
+| 3. Try waveform editing — complete | End of Phase 3 | The owner approved the listening and trim flow. |
+| 4. Try rendered previews | End of Phase 4A, before final export publication UI is fixed | Compare export modes and rendered audio; confirm that option placement, stale-preview feedback, title, and filename are clear. |
+| 5. Finish a real session | End of Phase 4B, before cutover decisions | Confirm transcription through final exported MP3 works on representative audio, including one failure and retry. |
 
 Treat feedback at any point as a change request for the active phase: record the observation, fix material workflow or audio problems, and offer the same task again when ready. Continue independent engineering while waiting, but do not lock in a dependent interaction or switch the recommended interface before its checkpoint is resolved. This keeps the owner's involvement focused on decisions and lived use rather than every implementation step.
 
 ## Decisions to implement against
+
+**Settled product rules:** Keep saved clips missing from a changed SRT until explicitly removed; automatically choose a new filename on export collision; search within the selected filter; and undo recent marks, trims, and skips from one Undo action.
+
+**Interaction rule for remaining screens:** Show keyboard shortcuts on their buttons, show status and counts only where they help a decision, place each action once beside its task, and avoid nested decorative panels or duplicate controls. Keep the clip list and title steady while long detail content scrolls. The review and trimming sections below record the approved specifics.
 
 | Area | Proposed choice | Reason / boundary |
 | --- | --- | --- |
@@ -41,7 +38,7 @@ Treat feedback at any point as a change request for the active phase: record the
 | Process model | One local server plus a bounded background job manager for FFmpeg and transcription | Long operations must outlive a request, expose progress and failure, and have controlled concurrency. Avoid treating heavyweight transcription as a short response background task. |
 | Updates | HTTP for mutations; server-sent events for job/status updates, with reconnect and polling fallback | Most updates travel from server to browser. WebSockets are unnecessary for the initial single-user flow. |
 | Persistence | One authoritative server-side session; atomic save after each accepted mutation; revision checks | A tab close must not discard the last edit, and stale tabs must not overwrite newer work. |
-| Playback | Browser `<audio>` for ordinary source preview and rendered export preview | Gives native playback, seek, and volume controls. Export preview remains FFmpeg-rendered so the user hears the actual output. |
+| Playback | Browser `<audio>` for source and rendered export audio, with task-specific visible controls | Source seek comes from clicking the waveform; export preview plays FFmpeg-rendered audio so the user hears the actual output. |
 
 The stack choices are proposals. Vite supports a React TypeScript template; Tailwind has a Vite integration; FastAPI supports server-sent events. Check versions at implementation time rather than pinning them in this planning document. [Vite guide](https://vite.dev/guide/), [Tailwind Vite guide](https://tailwindcss.com/docs/installation), [FastAPI SSE guide](https://fastapi.tiangolo.com/tutorial/server-sent-events/).
 
@@ -76,31 +73,34 @@ Browsers can read files chosen by the user, but that is different from accessing
 
 - Show model, language, temperature, context, and threshold settings with field validation before starting. Keep the settings visible while the job runs.
 - Show elapsed time, current phase, recent log output, failure reason, and Retry. Support Cancel if the underlying job can be stopped safely; otherwise label it Stop after current operation.
+- Keep the settings, active job status, and retry action in one clear work area. Show status where it changes the next decision; avoid repeated status badges or nested cards around every setting.
 - Write SRT to a job-specific temporary file. Parse and validate it before an atomic replacement of the final SRT. A failed or interrupted job must not make a partial SRT look complete.
 - On completion, present the number of entries and an **Open review** action. Preserve the log for inspection after failure.
 
 ### 3. Review and organize
 
 - Use a two-pane desktop layout: a clip list on the left and waveform/player/details on the right. On narrow screens, use a list/detail view with a persistent Back control.
-- Each list row shows clip index, title, status, duration, and whether its bounds differ from the SRT. The header shows visible count and counts by status.
-- Filter chips for Unsorted, Group 1, Group 2, Exported, and All. Search narrows the selected filter; its scope is displayed beside the search box. “Hide processed” is explicit and independent.
-- Keep next/previous clip, Group 1, Group 2, Skip, undo skip, duplicate, rename, jump to index, and bulk skip through current. Give bulk skip a confirmation with the exact affected count and an undo action.
-- Keep keyboard shortcuts for experienced users, but do not trigger review shortcuts while a title or search input is active. Put shortcuts in a discoverable help panel and tooltips.
+- Each list row shows clip index, title, and duration. All shows a status chip; filtered views omit that redundant status and show a restrained Trimmed chip beside duration only when needed. Keep the same row height either way. The header shows visible count and separate count pills on status filters.
+- Filter buttons for Unsorted, Group 1, Group 2, Exported, and All. Search narrows the selected filter; its scope is clear in the search field. “Hide processed” is explicit and independent.
+- Keep next/previous clip, Group 1, Group 2, Skip, duplicate, rename, jump to index, and bulk skip through selected. Put one Undo in the header; put bulk skip with list controls and confirm the exact affected count and scope.
+- Keep keyboard shortcuts for experienced users, but do not trigger review shortcuts while a title or search input is active. Show the key on each relevant button, with a complete help dialog as backup.
 - Save each status/title/duplicate change on the server before treating it as committed. Show Saved, Saving, and Save failed states. Preserve the current filter and selected clip across reloads.
+- Keep the list and selected clip title stationary while the long detail controls scroll independently.
 
 ### 4. Listen and trim
 
-- Draw a waveform from the server's existing envelope data. Render it in canvas or SVG with start/end handles, current playhead, time ticks, and a zoomed boundary view. Cache envelope resolutions keyed by audio identity and viewport.
-- Let users drag handles for coarse changes, then use numeric signed offsets or the existing 100 ms and 10 ms nudge steps. Show original and current timestamps, offsets, and duration at all times. Enforce nonnegative start and a minimum positive duration in the server service.
-- Support Play/Pause, seek, replay from start, and boundary audition. Use browser audio for source playback, but do not assume a seek is sample accurate: browser media seeking can land at a supported position. Verify final timing against the rendered export preview. [MDN `currentTime`](https://developer.mozilla.org/en-US/docs/Web/API/HTMLMediaElement/currentTime).
+- Draw a waveform from the server's existing envelope data. Render separate Overview and Fine panels with the same background and border, without a containing waveform card. Fine shows Start above End; each has its own handle, nudge buttons, and signed offset. Cache envelope resolutions keyed by audio identity and viewport.
+- Let users drag handles for coarse changes, then use numeric signed offsets or 100 ms and 10 ms nudge steps. Put the shortcut badge on each nudge button. Show original and current timestamps, offsets, and duration where the fine adjustment happens. Enforce nonnegative start and a minimum positive duration in the server service.
+- Put Play/Pause, Replay, and boundary audition immediately below Classification. Click a waveform to place the playhead; do not add a second seek slider. Use browser audio for source playback, but do not assume a seek is sample accurate: browser media seeking can land at a supported position. Verify final timing against the rendered export preview. [MDN `currentTime`](https://developer.mozilla.org/en-US/docs/Web/API/HTMLMediaElement/currentTime).
 - Keep drag motion local for responsiveness; send the final accepted boundary on pointer release. Keyboard and numeric edits should save promptly. A failed save restores or clearly marks the unsaved value.
 
 ### 5. Preview and export
 
 - Preserve As is, Trim edges, and Trim all modes, with start/stop threshold controls and explanations. Show the unprocessed duration, rendered duration, and difference.
 - Each preview request captures a clip revision and exact export options. Give it a unique job directory and immutable output path. If the user changes options or clip bounds, mark the old preview stale and never publish it as the new selection.
-- Play the rendered preview in the browser. Let the user edit the export title, replay, return to options, or confirm export. Display an actionable error if preview rendering fails; exporting without a preview should require a clear choice.
-- Publish from the exact preview artifact, or re-render from the same captured revision and options. Write to a temporary destination and replace the final file only after success. If a filename already exists, show an explicit Replace / Choose another title decision.
+- Keep options, render state, playback, and export controls in a shallow sequence of peer sections. Each action should sit with the options or result it affects; show any keyboard shortcut on the button. Avoid duplicate progress displays and controls that repeat an interaction already available in the preview player.
+- Play the rendered preview in the browser. Let the user edit the export title, replay, return to options, or confirm export. Display an actionable error if preview rendering fails; exporting without a preview should require a clear choice. Show when the preview is stale after an edit.
+- Publish from the exact preview artifact, or re-render from the same captured revision and options. Write to a temporary destination and move the final file into place only after success. If a filename already exists, automatically choose a new filename without replacing the existing MP3; show the proposed name before export and the actual path afterward.
 - After completion, show the output path and an Open/Reveal action available in the local app context. Mark the clip Exported only after the file exists and the session save succeeds.
 
 ## API and state contracts
@@ -141,9 +141,9 @@ The Python service should own the shared operations: open/merge, status transiti
 
 Fix the six review findings. Extract session mutations, merge proposal, and export preview identity into framework-independent functions or services. Add focused tests for destructive merge prevention, immediate persistence, bulk skip, filter/search composition, transcription retry state, and concurrent preview paths.
 
-**Owner checkpoint 1:** Resolve the four behavior questions in the companion guide before implementing irreversible merge or overwrite behavior. Use the owner's typical and difficult recordings as later test cases, working from copies.
+**Owner checkpoint 1 — complete:** The four behavior decisions are recorded above. Use the owner's typical recording and difficult clips as later test cases, working from copies.
 
-**Gate:** The TUI still performs its existing flow; the review's reproduced failures are gone; concurrent preview jobs cannot address the same working files; the chosen merge and overwrite rules are recorded.
+**Gate:** The TUI still performs its existing flow; the review's reproduced failures are gone; concurrent preview jobs cannot address the same working files; the chosen merge and filename-collision rules are recorded.
 
 ### Phase 1 — Local API and session lifecycle
 
@@ -155,7 +155,7 @@ Add the local server command, validated audio opening, API schemas, revisioned m
 
 Set up `frontend/` with npm, Vite, React, TypeScript, and Tailwind. Build launch, list, status/filter/search, details, rename, duplicate, undo, and keyboard parity. Add Saved/Saving/Error feedback. Use the API as the sole source of persisted state.
 
-**Owner checkpoint 2:** Give the owner a working review screen and let them classify a small set of real clips without coaching. Resolve blocking navigation, terminology, and save-state findings before building the waveform editor on this layout.
+**Owner checkpoint 2 — complete:** The owner classified real clips and refined shortcut labels, contextual chips, and filter counts. Those choices are now part of the interaction rule and review requirements above.
 
 **Gate:** A user can finish the complete classification pass without the TUI. Browser tests cover keyboard focus, IME title entry, filter/search scope, bulk skip, reload, and narrow layout; the owner's material findings are addressed or explicitly tracked.
 
@@ -163,27 +163,35 @@ Set up `frontend/` with npm, Vite, React, TypeScript, and Tailwind. Build launch
 
 Serve source audio and envelope data. Build seek, playhead, coarse drag, fine boundary view, numeric offsets, and keyboard nudges. Keep visual state and audio state synchronized after clip selection changes.
 
-**Owner checkpoint 3:** Have the owner trim difficult real clips with dragging, fine nudges, and listening. Resolve any mismatch between displayed boundaries, heard audio, and saved values before finalizing the export interaction.
+**Owner checkpoint 3 — complete:** The owner approved the waveform and playback flow after reviewing the [checkpoint 3 build](web-review-checkpoint-3.md).
 
 **Gate:** Boundary operations are accurate to the stored millisecond unit, never create invalid durations, and survive immediate reload. Long recordings remain responsive without loading the full waveform into browser memory; the owner can reach the intended boundaries without falling back to the TUI.
 
-### Phase 4 — Transcription and export jobs
+### Phase 4A — Export options and rendered preview
 
-Add transcription settings/progress/retry and the three export modes with isolated previews, rendered playback, title editing, publication, and file conflict handling. Add job event reconnect and interrupted-job recovery.
+After checkpoint 3's material waveform findings are resolved, build the three export modes, threshold controls, captured option/revision identity, isolated preview jobs, rendered playback, title editing, stale-preview handling, and useful failure/retry states. Keep the preview UI focused: one place for options, one result area, visible action keys where applicable, and no extra surface or seek control that repeats the player. This phase may establish the shared job manager and event transport, but must not publish final MP3s through an unreviewed flow.
 
-**Owner checkpoint 4:** Give the owner a safe end-to-end test session. Ask them to compare rendered previews with final MP3s and exercise a prepared failure and retry. Fix wrong-audio, lost-work, and blocked-flow findings before the cutover decision.
+**Owner checkpoint 4:** Prepare rendered previews for representative clips in a disposable workspace, including a silence-sensitive example and a safe stale-preview or render-failure case. Ask the owner to compare As is, Trim edges, and Trim all by listening, adjust an option, inspect the title and proposed filename, and say whether the options, result, and next action are clear. Resolve material layout, wording, and audio findings on the same checkpoint before finalizing publication UI. Transcription engine and job recovery work can continue while this review is open; final export interaction waits.
 
-**Gate:** Fresh audio can go from transcription to exported clip in one browser session. Tests cover failed and retried transcription, option changes during rendering, simultaneous previews, export failure, and confirmation before replacing an existing output. The owner has listened to representative outputs and can complete the flow.
+**Gate:** Preview jobs for different clips or options cannot collide; a changed option invalidates the old preview; rendered audio corresponds to the displayed options and captured clip revision. The owner can choose a mode, find its controls and any shortcut at a glance, understand the result without TUI guidance, and identify the single next action.
+
+### Phase 4B — Transcription and final export
+
+After checkpoint 4's material findings are resolved, add transcription settings/progress/retry, final export publication from the reviewed preview state, automatic collision-free filenames, output reveal, job event reconnect, and interrupted-job recovery. Keep a single clear job status and retry action in context. Before publishing, show the proposed output name and directory; after publishing, show the actual result. An existing MP3 must remain untouched.
+
+**Owner checkpoint 5:** Give the owner a safe end-to-end copy of the typical 0526 session and any difficult example they provide. Ask them to compare rendered previews with final MP3s, exercise a prepared failure and retry, verify automatic new naming on a collision, reopen the session, and judge whether they would use the GUI for the next real session. Fix wrong-audio, lost-work, and blocked-flow findings and repeat this checkpoint as needed before cutover.
+
+**Gate:** Fresh audio can go from transcription to exported clip in one browser session. Tests cover failed and retried transcription, option changes during rendering, simultaneous previews, export failure, automatic filename collision handling without overwrite, and recovery after reload. The owner has listened to representative outputs and can complete the flow.
 
 ### Phase 5 — Parity, packaging, and cutover
 
 Compare the GUI and TUI feature list against real recordings, verify macOS setup, document the new command, and package the built frontend with the Python app. Only change the README's recommended interface after the GUI meets the gates above. Retain `jipandan` and `jipandan-serve` while users migrate.
 
-**Gate:** A fresh install can launch the GUI with one documented command; bundled assets load without a separate development server; TUI sessions open in the GUI without data loss; the same session format can still be read by the TUI or has a documented migration path. The owner agrees the GUI is ready to become the recommended interface.
+**Gate:** A fresh install can launch the GUI with one documented command; bundled assets load without a separate development server; TUI sessions open in the GUI without data loss; the same session format can still be read by the TUI or has a documented migration path. The final interface follows the interaction rule above across review, transcription, and export. The checkpoint 5 review supports making the GUI the recommended interface; retain the TUI otherwise.
 
 ## Testing and operational checks
 
-- **Core:** Deterministic tests for merge proposals, atomic save recovery, trim invariants, status transitions, filenames, preview keys, and output conflict handling.
+- **Core:** Deterministic tests for merge proposals, atomic save recovery, trim invariants, status transitions, automatic unique filenames, preview keys, and output conflict handling.
 - **API:** Request/response tests for input validation, revisions, local path restrictions, job transitions, reconnect, and media seeking/range behavior.
 - **Browser:** End-to-end tests for open → transcribe → review → trim → preview → export → reload, plus keyboard shortcuts, focused text inputs, IME composition, error/retry, and tab-close behavior.
 - **Media:** Short fixtures with known speech and silence, plus at least one long recording for waveform and seeking performance. Compare the rendered preview with the exported file.
