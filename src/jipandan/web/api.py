@@ -6,12 +6,13 @@ import secrets
 import mimetypes
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from jipandan.web.service import InvalidEdit, SessionConflict, SessionNotReady, SessionService
+from jipandan.web.waveform import WaveformDecodeError
 
 
 class OpenAudio(BaseModel):
@@ -78,6 +79,10 @@ def create_app(
     async def not_ready_handler(request: Request, exc: SessionNotReady):
         return JSONResponse({"detail": str(exc)}, status_code=409)
 
+    @app.exception_handler(WaveformDecodeError)
+    async def waveform_error_handler(request: Request, exc: WaveformDecodeError):
+        return JSONResponse({"detail": str(exc)}, status_code=503)
+
     @app.get("/api/bootstrap")
     def bootstrap():
         return {"token": app.state.token}
@@ -132,6 +137,15 @@ def create_app(
     @app.post("/api/session/undo")
     def undo(request: RevisionRequest):
         return app.state.service.undo(request.expected_revision)
+
+    @app.get("/api/waveforms/{clip_id}")
+    def waveform(
+        clip_id: str,
+        start_ms: int = Query(ge=0),
+        end_ms: int = Query(gt=0),
+        buckets: int = Query(default=800, ge=64, le=1600),
+    ):
+        return app.state.service.waveform(clip_id, start_ms, end_ms, buckets)
 
     @app.get("/api/audio")
     def opened_audio(token: str):

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, bootstrap, uploadAudio, type Clip, type Session, type Status } from "./api";
+import { api, audioUrl, bootstrap, uploadAudio, type Clip, type Session, type Status } from "./api";
+import WaveformEditor from "./WaveformEditor";
 
 type Filter = "unsorted" | "group1" | "group2" | "exported" | "all";
 type SaveState = "saved" | "saving" | "failed";
@@ -16,15 +17,6 @@ const labels: Record<Status, string> = {
   pending: "Unsorted", group1: "Group 1", group2: "Group 2",
   exported: "Exported", skipped: "Skipped",
 };
-
-function formatTime(ms: number): string {
-  const total = Math.max(0, Math.round(ms));
-  const hours = Math.floor(total / 3600000);
-  const minutes = Math.floor((total % 3600000) / 60000);
-  const seconds = Math.floor((total % 60000) / 1000);
-  const milli = total % 1000;
-  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(milli).padStart(3, "0")}`;
-}
 
 function formatDuration(ms: number): string {
   if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
@@ -286,8 +278,8 @@ export default function App() {
 
   if (initializing) return <main className="flex min-h-screen items-center justify-center subtle">Opening Jipandan…</main>;
 
-  return <div className="flex min-h-screen flex-col">
-    <header className="flex flex-wrap items-center justify-between gap-3 border-b line px-4 py-3 md:px-7">
+  return <div className={`flex flex-col ${session?.audio ? "h-dvh min-h-0 overflow-hidden" : "min-h-screen"}`}>
+    <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b line px-4 py-3 md:px-7">
       <div className="flex items-center gap-3">
         <div aria-hidden="true" className="flex size-9 items-center justify-center rounded-xl bg-[#b7d69d] text-xl font-bold text-[#263c2b]">J</div>
         <div>
@@ -307,7 +299,7 @@ export default function App() {
       </div>
     </header>
 
-    {error && <div role="alert" className="border-b border-[#a96053] bg-[#482d2a] px-5 py-3 text-sm text-[#ffe3dc]">
+    {error && <div role="alert" className="shrink-0 border-b border-[#a96053] bg-[#482d2a] px-5 py-3 text-sm text-[#ffe3dc]">
       {error} <button className="ml-3 underline" onClick={() => setError("")}>Dismiss</button>
     </div>}
 
@@ -330,22 +322,22 @@ export default function App() {
       </label>
       <p className="subtle mt-4 text-sm">You can also launch directly with <code className="accent">uv run jipandan-web /path/to/audio.mp3</code>.</p>
     </main> : <>
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b line px-4 py-2 text-xs md:px-7">
+      <div className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-1 border-b line px-4 py-2 text-xs md:px-7">
         <span><span className="subtle">Duration</span> <span className="mono">{formatDuration(session.duration_ms ?? 0)}</span></span>
         <span><span className="subtle">SRT</span> {session.srt_exists ? "Found" : "Missing"}</span>
         <span className="hidden min-w-0 truncate lg:inline"><span className="subtle">Session</span> {session.session_path ?? "Not created"}</span>
         <span className="hidden min-w-0 truncate xl:inline"><span className="subtle">Exports</span> {session.clip_dir}</span>
       </div>
-      {hasMergeChanges && <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#7c6845] bg-[#3c3525] px-4 py-2 text-sm md:px-7">
+      {hasMergeChanges && <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[#7c6845] bg-[#3c3525] px-4 py-2 text-sm md:px-7">
         <span>The SRT changed since this session was saved. Your reviewed clips are still here.</span>
         <ActionButton onClick={() => setShowMerge(true)}>Review SRT changes</ActionButton>
       </div>}
-      {session.needs_transcription ? <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center px-5 py-12">
+      {session.needs_transcription ? <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center overflow-auto px-5 py-12">
         <h1 className="mb-3 text-3xl font-semibold">No SRT yet</h1>
         <p className="subtle">Transcription will be available in the next build. You can use the existing <code>transcribe</code> command, then reopen this audio.</p>
-      </main> : <main className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[minmax(310px,38%)_1fr]">
-        <section className={`${showDetailMobile ? "hidden md:flex" : "flex"} min-h-0 flex-col border-r line`} aria-label="Clip list">
-          <div className="border-b line p-4 md:p-5">
+      </main> : <main className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden md:grid-cols-[minmax(310px,38%)_1fr]">
+        <section className={`${showDetailMobile ? "hidden md:flex" : "flex"} min-h-0 flex-col overflow-hidden border-r line`} aria-label="Clip list">
+          <div className="shrink-0 border-b line p-4 md:p-5">
             <div className="mb-3 flex items-baseline justify-between gap-3">
               <h1 className="text-xl font-semibold">Clips</h1>
               <span className="subtle text-sm mono">{visible.length} visible / {session.candidates.length} total</span>
@@ -373,8 +365,14 @@ export default function App() {
               <input type="checkbox" checked={hideProcessed} onChange={(event) => setHideProcessed(event.target.checked)} />
               Hide exported and skipped
             </label>
+            <div className="mt-3 border-t line pt-3">
+              <ActionButton onClick={() => setShowBulk(true)} disabled={bulkPending.length === 0 || busy} tone="danger"
+                title="Skip unsorted clips in this view through the selected clip">
+                Skip through #{selected?.clip_id ?? "–"} · {bulkPending.length}
+              </ActionButton>
+            </div>
           </div>
-          <div className="panel-scroll max-h-[calc(100vh-315px)] min-h-32 flex-1 overflow-auto md:max-h-[calc(100vh-265px)]" role="listbox" aria-label="Clips">
+          <div className="panel-scroll min-h-0 flex-1 overflow-auto" role="listbox" aria-label="Clips">
             {visible.length === 0 ? <p className="subtle px-5 py-8 text-sm">No clips match this view.</p> : visible.map((clip) => {
               const changed = clip.start_ms !== clip.original_start_ms || clip.end_ms !== clip.original_end_ms;
               return <button key={clip.clip_id} type="button" role="option" aria-selected={clip.clip_id === effectiveSelectedId}
@@ -396,9 +394,9 @@ export default function App() {
           </div>
         </section>
 
-        <section className={`${showDetailMobile ? "flex" : "hidden md:flex"} min-h-0 flex-col`} aria-label="Clip details">
+        <section className={`${showDetailMobile ? "flex" : "hidden md:flex"} min-h-0 flex-col overflow-hidden`} aria-label="Clip details">
           {selected ? <>
-            <div className="border-b line px-4 py-4 md:px-7 md:py-5">
+            <div className="shrink-0 border-b line px-4 py-4 md:px-7 md:py-5">
               <button type="button" onClick={() => setShowDetailMobile(false)} className="accent mb-3 text-sm md:hidden">← Back to clips</button>
               <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
                 <span className="accent mono text-sm font-semibold tracking-wider">CLIP #{selected.clip_id}</span>
@@ -427,8 +425,8 @@ export default function App() {
                 }} disabled={busy} title="Duplicate (D)" shortcut="D">Duplicate</ActionButton>
               </div>
             </div>
-            <div className="panel-scroll flex-1 overflow-auto px-4 py-5 md:px-7">
-              <div className="mb-6">
+            <div className="panel-scroll min-h-0 flex-1 overflow-auto px-4 py-5 md:px-7">
+              <div className="mb-4">
                 <h3 className="subtle mb-3 text-xs font-semibold uppercase tracking-[.15em]">Classification</h3>
                 <div className="flex flex-wrap gap-2">
                   {(["group1", "group2", "skipped", "pending"] as Status[]).map((status) =>
@@ -440,28 +438,16 @@ export default function App() {
                     </ActionButton>)}
                 </div>
               </div>
-              <div className="surface mb-6 rounded-xl p-4">
-                <div className="mb-4 flex items-center justify-between gap-2">
-                  <h3 className="font-medium">Source segment</h3>
-                  <span className="subtle text-xs">Trim controls arrive in the waveform build</span>
-                </div>
-                <div className="grid gap-4 text-sm sm:grid-cols-2">
-                  <div><span className="subtle block text-xs">Start</span><span className="mono">{formatTime(selected.start_ms)}</span></div>
-                  <div><span className="subtle block text-xs">End</span><span className="mono">{formatTime(selected.end_ms)}</span></div>
-                  <div><span className="subtle block text-xs">Original start</span><span className="mono">{formatTime(selected.original_start_ms)}</span></div>
-                  <div><span className="subtle block text-xs">Original end</span><span className="mono">{formatTime(selected.original_end_ms)}</span></div>
-                </div>
-                <div className="mt-4 border-t line pt-3 text-sm"><span className="subtle">Current duration</span> <strong className="mono ml-2">{formatDuration(selected.end_ms - selected.start_ms)}</strong></div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <ActionButton onClick={() => {
-                  if (session.revision === null) return;
-                  void mutate(() => api<Session>("/session/undo", "POST", { expected_revision: session.revision }));
-                }} disabled={!session.can_undo || busy} title="Undo last change (U)" shortcut="U">Undo last change</ActionButton>
-                <ActionButton onClick={() => setShowBulk(true)} disabled={bulkPending.length === 0 || busy} tone="danger">
-                  Skip through current · {bulkPending.length}
-                </ActionButton>
-              </div>
+              <WaveformEditor key={selected.clip_id} clip={selected}
+                durationMs={session.duration_ms ?? selected.end_ms} audioSrc={audioUrl()} busy={busy}
+                shortcutsPaused={showHelp || showBulk || showJump || showMerge || editingTitle}
+                onSave={async (startMs, endMs) => {
+                  if (session.revision === null) return false;
+                  const next = await mutate(() => api<Session>(`/clips/${encodeURIComponent(selected.clip_id)}`, "PATCH", {
+                    expected_revision: session.revision, start_ms: startMs, end_ms: endMs,
+                  }));
+                  return Boolean(next);
+                }} />
             </div>
           </> : <div className="subtle flex flex-1 items-center justify-center p-6 text-center">Select a clip to review its details.</div>}
         </section>
@@ -521,9 +507,11 @@ export default function App() {
 
     {showHelp && <Dialog title="Keyboard shortcuts" onClose={() => setShowHelp(false)}>
       <div className="grid grid-cols-[6rem_1fr] gap-y-2 text-sm">
-        {[["J / K", "Next / previous clip"], ["1 / 2", "Mark Group 1 / Group 2"],
+        {[["Space", "Play / pause clip"], ["J / K", "Next / previous clip"], ["1 / 2", "Mark Group 1 / Group 2"],
           ["X", "Skip clip"], ["U", "Undo recent change"], ["D", "Duplicate clip"],
           ["R", "Rename title"], ["G", "Jump to index"], ["/", "Search titles"],
+          [", / .", "Nudge start − / + 10 ms (Shift: 100 ms)"],
+          ["[ / ]", "Nudge end − / + 10 ms (Shift: 100 ms)"],
           ["?", "Show this help"]].map(([key, action]) => <div key={key} className="contents">
             <kbd className="accent mono">{key}</kbd><span>{action}</span>
           </div>)}

@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -21,10 +22,13 @@ def copy_file(source: Path, destination: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--reset", action="store_true", help="Replace an existing disposable test copy")
+    parser.add_argument("--name", default="web-review-0526", help="Test folder name under tmp/")
     args = parser.parse_args()
+    if not re.fullmatch(r"[a-z][a-z0-9-]*", args.name):
+        parser.error("--name must be a simple lowercase folder name")
     root = Path(__file__).resolve().parents[1]
     source = root / "raw"
-    target = root / "tmp" / "web-review-0526"
+    target = root / "tmp" / args.name
     target.mkdir(parents=True, exist_ok=True)
     paths = [source / f"0526{suffix}" for suffix in (".mp3", ".srt", ".jipandan.json")]
     if not args.reset and any((target / path.name).exists() for path in paths):

@@ -43,6 +43,13 @@ export interface Session {
   changed_clip_ids?: string[];
 }
 
+export interface WaveformWindow {
+  start_ms: number;
+  end_ms: number;
+  mins: number[];
+  maxs: number[];
+}
+
 let token = "";
 
 export async function bootstrap(): Promise<void> {
@@ -55,9 +62,10 @@ export function audioUrl(): string {
   return `/api/audio?token=${encodeURIComponent(token)}`;
 }
 
-export async function api<T>(path: string, method = "GET", body?: unknown): Promise<T> {
+export async function api<T>(path: string, method = "GET", body?: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(`/api${path}`, {
     method,
+    signal,
     headers: {
       "content-type": "application/json",
       ...(method !== "GET" ? { "x-jipandan-token": token } : {}),

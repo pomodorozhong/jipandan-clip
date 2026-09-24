@@ -1,12 +1,15 @@
 import tempfile
 import os
 import json
+import subprocess
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
 from fastapi.testclient import TestClient
 
+from jipandan.core.waveform_envelope import WaveformEnvelopeCache
 from jipandan.web.api import create_app
 from jipandan.web.service import SessionService
 
@@ -90,6 +93,54 @@ class WebApiTests(unittest.TestCase):
             "/api/session/undo", json={"expected_revision": 2}, headers=self.headers,
         )
         self.assertEqual(undone.json()["counts"]["pending"], 2)
+
+    def test_millisecond_trim_survives_reload_and_rejects_invalid_duration(self):
+        self.open()
+        trimmed = self.client.patch(
+            "/api/clips/1", json={"expected_revision": 1, "start_ms": 1101, "end_ms": 1907},
+            headers=self.headers,
+        )
+        self.assertEqual(trimmed.status_code, 200)
+        self.assertEqual(trimmed.json()["candidates"][0]["start_ms"], 1101)
+        self.assertEqual(trimmed.json()["candidates"][0]["end_ms"], 1907)
+        reopened = SessionService(self.root / "clips")
+        self.assertEqual(reopened.open_audio(self.audio)["candidates"][0]["end_ms"], 1907)
+        invalid = self.client.patch(
+            "/api/clips/1", json={"expected_revision": 2, "start_ms": 1900, "end_ms": 1909},
+            headers=self.headers,
+        )
+        self.assertEqual(invalid.status_code, 422)
+        self.assertEqual(self.service.snapshot()["revision"], 2)
+
+    def test_waveform_windows_are_bounded_and_cached_by_source_identity(self):
+        self.open()
+        envelope = WaveformEnvelopeCache(
+            times=np.array([0.25, 0.75]), mins=np.array([-0.25, -0.5]),
+            maxs=np.array([0.4, 0.8]), duration=1.0, buckets=2,
+        )
+        with patch("jipandan.web.waveform.build_envelope_from_audio_slice", return_value=envelope) as decode:
+            path = "/api/waveforms/1?start_ms=1000&end_ms=2000&buckets=800"
+            first = self.client.get(path)
+            self.assertEqual(first.status_code, 200, first.text)
+            self.assertEqual(first.json()["mins"], [-0.25, -0.5])
+            self.assertEqual(first.json()["maxs"], [0.4, 0.8])
+            decode.assert_called_once_with(self.audio.resolve(), 1.0, 1.0, 800)
+            self.assertEqual(self.client.get(path).status_code, 200)
+            self.assertEqual(decode.call_count, 1)
+            self.audio.write_bytes(b"B" * 4097)
+            self.assertEqual(self.client.get(path).status_code, 200)
+            self.assertEqual(decode.call_count, 2)
+        self.assertEqual(self.client.get("/api/waveforms/1?start_ms=0&end_ms=10001").status_code, 422)
+        self.assertEqual(self.client.get("/api/waveforms/1?start_ms=2000&end_ms=1000").status_code, 422)
+        self.assertEqual(self.client.get("/api/waveforms/unknown?start_ms=0&end_ms=1000").status_code, 422)
+        self.assertEqual(self.client.get("/api/waveforms/1?start_ms=0&end_ms=1000&buckets=2000").status_code, 422)
+        self.service.duration_ms = 200_000
+        self.assertEqual(self.client.get("/api/waveforms/1?start_ms=0&end_ms=120001").status_code, 422)
+        with patch("jipandan.web.waveform.build_envelope_from_audio_slice",
+                   side_effect=subprocess.CalledProcessError(1, ["ffmpeg"])):
+            unavailable = self.client.get("/api/waveforms/1?start_ms=2000&end_ms=3000")
+        self.assertEqual(unavailable.status_code, 503)
+        self.assertIn("Could not decode", unavailable.json()["detail"])
 
     def test_srt_merge_requires_explicit_removal(self):
         self.open()

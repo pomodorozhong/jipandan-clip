@@ -22,6 +22,7 @@ from jipandan.core.models import (
     Session,
 )
 from jipandan.core.srt import seconds_to_ffmpeg_timestamp, srt_time_to_seconds
+from jipandan.web.waveform import MAX_BUCKETS, MAX_WINDOW_MS, MIN_BUCKETS, WaveformCache
 
 
 class SessionConflict(Exception):
@@ -64,6 +65,23 @@ class SessionService:
             upload_dir = base / "uploads"
         self.upload_dir = upload_dir
         self._undo: list[tuple[str, dict[str, ClipCandidate]]] = []
+        self._waveforms = WaveformCache()
+
+    def waveform(self, clip_id: str, start_ms: int, end_ms: int, buckets: int) -> dict:
+        with self._lock:
+            session = self._ready()
+            if session.get_candidate(clip_id) is None:
+                raise InvalidEdit("Clip not found")
+            if (
+                start_ms < 0 or end_ms <= start_ms
+                or end_ms - start_ms > MAX_WINDOW_MS
+                or self.duration_ms is None or end_ms > self.duration_ms
+            ):
+                raise InvalidEdit("Waveform window must be within the audio and at most 120 seconds")
+            if not MIN_BUCKETS <= buckets <= MAX_BUCKETS:
+                raise InvalidEdit("Waveform resolution is out of range")
+            audio = session.audio
+        return self._waveforms.get(audio, start_ms, end_ms, buckets)
 
     def import_audio(self, filename: str, source: BinaryIO) -> dict:
         name = Path(filename).name

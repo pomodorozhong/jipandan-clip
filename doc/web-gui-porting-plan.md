@@ -4,9 +4,11 @@ Prepared 2026-09-23. This plan proposes a native browser interface for clip revi
 
 Checkpoint 1 decisions (2026-09-24): keep saved clips missing from a changed SRT until explicitly removed; generate a new export filename when one exists; search within the selected status filter; undo recent marks, trims, and skips in the first GUI release.
 
-Progress on 2026-09-24: Phase 0 safety fixes, the local API, and the Phase 2 review screen are implemented. Checkpoint 2 is ready for owner review using the disposable 0526 copy described in [the review handoff](web-review-checkpoint-2.md). Waveform, transcription, and export UI work awaits that review.
+Progress on 2026-09-24: Phase 0 safety fixes, the local API, and the Phase 2 review screen are implemented. Checkpoint 2 was reviewed using the disposable 0526 copy described in [the review handoff](web-review-checkpoint-2.md).
 
 The checkpoint 2 follow-up established visible shortcut labels, status chips only in All, Trimmed chips beside duration in filtered views, and separate count pills on the filters. All three refinements are approved in [the follow-up checklist](web-review-ui-refinements.md), so checkpoint 3 can proceed.
+
+Phase 3 now has bounded waveform windows, browser playback, overview and fine handle dragging, signed offsets, 10/100 ms nudges, and immediate revisioned saves. The Start and End fine views are stacked, nudge buttons show their shortcut keys, and the title and clip list stay fixed while timing controls scroll. [Checkpoint 3](web-review-checkpoint-3.md) is ready for owner listening and trim review before export behavior is finalized.
 
 ## Outcome and scope
 

@@ -629,6 +629,7 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "mlx-whisper" },
+    { name = "numpy" },
     { name = "python-multipart" },
     { name = "textual" },
     { name = "textual-plot" },
@@ -648,6 +649,7 @@ dev = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.117" },
     { name = "mlx-whisper", specifier = ">=0.4.3" },
+    { name = "numpy", specifier = ">=2.0" },
     { name = "python-multipart", specifier = ">=0.0.32" },
     { name = "textual", specifier = ">=1.0.0" },
     { name = "textual-plot", specifier = ">=0.10.0" },
