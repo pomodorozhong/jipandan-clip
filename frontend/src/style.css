@@ -26,5 +26,13 @@ input:focus-visible, button:focus-visible { outline: 2px solid #b4e2b6; outline-
 .status-group2 { background: #93bde2; }
 .status-exported { background: #c2a7d6; }
 .status-skipped { background: #80918a; }
+.shortcut-key { display: inline-flex; min-width: 1.25rem; align-items: center; justify-content: center; border: 1px solid currentColor; border-radius: .3rem; padding: .05rem .3rem; color: inherit; font-size: .68rem; font-weight: 700; line-height: 1.35; opacity: .75; }
+.clip-tag { display: inline-flex; align-items: center; border: 1px solid; border-radius: .4rem; padding: .15rem .45rem; font-size: .68rem; font-weight: 650; line-height: 1.2; white-space: nowrap; }
+.clip-tag-pending { background: #534c2e; border-color: #847749; color: #f5e7a9; }
+.clip-tag-group1 { background: #254d38; border-color: #498c61; color: #c1f3cd; }
+.clip-tag-group2 { background: #284762; border-color: #4c80a8; color: #c4e7ff; }
+.clip-tag-exported { background: #4d375a; border-color: #825e9c; color: #e9cbf8; }
+.clip-tag-skipped { background: #36413e; border-color: #66756e; color: #d6e0da; }
+.clip-tag-trimmed { background: #59402b; border-color: #a16d3e; color: #ffd5a0; }
 .panel-scroll { scrollbar-color: #54705c transparent; scrollbar-width: thin; }
 .mono { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }

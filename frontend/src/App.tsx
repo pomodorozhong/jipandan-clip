@@ -42,9 +42,9 @@ function visibleClips(clips: Clip[], filter: Filter, query: string, hideProcesse
   });
 }
 
-function ActionButton({ children, onClick, disabled, tone = "normal", title }: {
+function ActionButton({ children, onClick, disabled, tone = "normal", title, shortcut }: {
   children: React.ReactNode; onClick: () => void; disabled?: boolean;
-  tone?: "normal" | "accent" | "danger"; title?: string;
+  tone?: "normal" | "accent" | "danger"; title?: string; shortcut?: string;
 }) {
   const toneClass = tone === "accent"
     ? "bg-[#b7d69d] text-[#1d2d20] hover:bg-[#d4ecbe]"
@@ -52,7 +52,9 @@ function ActionButton({ children, onClick, disabled, tone = "normal", title }: {
       ? "bg-[#5d3938] text-[#ffe2db] hover:bg-[#754542]"
       : "soft-surface text-[#e7eee7] hover:bg-[#354b3b]";
   return <button type="button" title={title} disabled={disabled} onClick={onClick}
-    className={`rounded-lg px-3 py-2 text-sm font-medium transition-colors ${toneClass}`}>{children}</button>;
+    className={`inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${toneClass}`}>
+    <span>{children}</span>{shortcut && <kbd aria-hidden="true" className="shortcut-key">{shortcut}</kbd>}
+  </button>;
 }
 
 function Dialog({ title, children, onClose }: {
@@ -300,8 +302,8 @@ export default function App() {
         {session?.audio && <ActionButton onClick={() => {
           if (session.revision === null) return;
           void mutate(() => api<Session>("/session/undo", "POST", { expected_revision: session.revision }));
-        }} disabled={!session.can_undo || busy} title="Undo recent change (U)">Undo</ActionButton>}
-        <ActionButton onClick={() => setShowHelp(true)} title="Keyboard shortcuts">Shortcuts <span className="subtle">?</span></ActionButton>
+        }} disabled={!session.can_undo || busy} title="Undo recent change (U)" shortcut="U">Undo</ActionButton>}
+        <ActionButton onClick={() => setShowHelp(true)} title="Keyboard shortcuts" shortcut="?">Shortcuts</ActionButton>
       </div>
     </header>
 
@@ -348,27 +350,29 @@ export default function App() {
               <h1 className="text-xl font-semibold">Clips</h1>
               <span className="subtle text-sm mono">{visible.length} visible / {session.candidates.length} total</span>
             </div>
-            <div className="mb-3 flex flex-wrap gap-1" role="group" aria-label="Status filter">
+            <div className="mb-3 flex flex-wrap gap-1 md:grid md:grid-cols-2 xl:grid-cols-6 2xl:flex" role="group" aria-label="Status filter">
               {filters.map((item) => <button key={item.key} type="button" onClick={() => setFilter(item.key)}
                 aria-pressed={filter === item.key}
-                className={`rounded-lg px-2.5 py-1.5 text-xs font-medium ${filter === item.key ? "bg-[#b7d69d] text-[#1b291f]" : "soft-surface subtle hover:text-white"}`}>
-                {item.label} <span className="mono opacity-75">{item.key === "all" ? session.candidates.length : session.counts[item.key === "unsorted" ? "pending" : item.key]}</span>
+                aria-label={`${item.label}, ${item.key === "all" ? session.candidates.length : session.counts[item.key === "unsorted" ? "pending" : item.key]} clips`}
+                className={`inline-flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-xs font-medium ${item.key === "exported" || item.key === "all" ? "xl:col-span-3" : "xl:col-span-2"} 2xl:col-auto ${filter === item.key ? "bg-[#b7d69d] text-[#1b291f]" : "soft-surface subtle hover:text-white"}`}>
+                <span>{item.label}</span><span aria-hidden="true" className={`mono min-w-6 rounded-full px-1.5 py-0.5 text-center text-[11px] font-semibold leading-none ${filter === item.key ? "bg-[#1b291f]/15" : "bg-[#415447] text-[#edf2ee]"}`}>
+                  {item.key === "all" ? session.candidates.length : session.counts[item.key === "unsorted" ? "pending" : item.key]}
+                </span>
               </button>)}
             </div>
             <div className="flex gap-2">
-              <input ref={searchRef} type="search" value={query} onChange={(event) => setQuery(event.target.value)}
-                aria-label="Search clip titles" placeholder={`Search within ${filters.find((item) => item.key === filter)?.label}…`}
-                className="min-w-0 flex-1 rounded-lg border line bg-[#101816] px-3 py-2 text-sm" />
-              <button type="button" onClick={() => setShowJump(true)} className="soft-surface rounded-lg px-3 text-sm" title="Jump to clip index">Go to #</button>
+              <div className="relative min-w-0 flex-1">
+                <input ref={searchRef} type="search" value={query} onChange={(event) => setQuery(event.target.value)}
+                  aria-label="Search clip titles" placeholder={`Search within ${filters.find((item) => item.key === filter)?.label}…`}
+                  className="w-full rounded-lg border line bg-[#101816] px-3 py-2 pr-10 text-sm" />
+                <kbd aria-hidden="true" className="shortcut-key pointer-events-none absolute right-3 top-1/2 -translate-y-1/2">/</kbd>
+              </div>
+              <ActionButton onClick={() => setShowJump(true)} title="Jump to clip index (G)" shortcut="G">Go to #</ActionButton>
             </div>
             <label className="subtle mt-3 flex items-center gap-2 text-xs">
               <input type="checkbox" checked={hideProcessed} onChange={(event) => setHideProcessed(event.target.checked)} />
               Hide exported and skipped
             </label>
-            <div className="subtle mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
-              <span>Unsorted {session.counts.pending}</span><span>Group 1 {session.counts.group1}</span>
-              <span>Group 2 {session.counts.group2}</span><span>Exported {session.counts.exported}</span>
-            </div>
           </div>
           <div className="panel-scroll max-h-[calc(100vh-315px)] min-h-32 flex-1 overflow-auto md:max-h-[calc(100vh-265px)]" role="listbox" aria-label="Clips">
             {visible.length === 0 ? <p className="subtle px-5 py-8 text-sm">No clips match this view.</p> : visible.map((clip) => {
@@ -376,13 +380,16 @@ export default function App() {
               return <button key={clip.clip_id} type="button" role="option" aria-selected={clip.clip_id === effectiveSelectedId}
                 data-selected={clip.clip_id === effectiveSelectedId} onClick={() => { setSelectedId(clip.clip_id); setShowDetailMobile(true); }}
                 className="clip-row flex w-full items-start gap-3 border-b border-[#29362f] px-4 py-3 text-left transition-colors md:px-5">
-                <span className={`status-dot status-${clip.status} mt-2`} aria-hidden="true" />
+                {filter === "all" && <span className={`status-dot status-${clip.status} mt-2`} aria-hidden="true" />}
                 <span className="min-w-0 flex-1">
                   <span className="flex items-baseline gap-2"><span className="subtle mono shrink-0 text-xs">#{clip.clip_id}</span>
                     <span className="truncate text-sm font-medium" title={clip.title}>{clip.title}</span></span>
-                  <span className="subtle mt-1 flex items-center gap-2 text-xs"><span>{labels[clip.status]}</span>
-                    {changed && <span className="accent">Trimmed</span>}</span>
+                  {filter === "all" && <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    <span className={`clip-tag clip-tag-${clip.status}`}>{labels[clip.status]}</span>
+                    {changed && <span className="clip-tag clip-tag-trimmed">Trimmed</span>}
+                  </span>}
                 </span>
+                {filter !== "all" && changed && <span className="clip-tag clip-tag-trimmed shrink-0">Trimmed</span>}
                 <span className="subtle mono shrink-0 text-xs">{formatDuration(clip.end_ms - clip.start_ms)}</span>
               </button>;
             })}
@@ -407,17 +414,17 @@ export default function App() {
                 <ActionButton onClick={() => setEditingTitle(false)}>Cancel</ActionButton>
               </div> : <div className="flex items-start gap-3">
                 <h2 className="min-w-0 flex-1 break-words text-2xl font-semibold leading-snug">{selected.title}</h2>
-                <ActionButton onClick={() => { setTitleDraft(selected.title); setEditingTitle(true); }} title="Rename (R)">Rename</ActionButton>
+                <ActionButton onClick={() => { setTitleDraft(selected.title); setEditingTitle(true); }} title="Rename (R)" shortcut="R">Rename</ActionButton>
               </div>}
               <div className="mt-4 flex flex-wrap gap-2">
-                <ActionButton onClick={() => moveSelection(-1)} disabled={selectedPosition <= 0} title="Previous clip (K)">← Previous</ActionButton>
-                <ActionButton onClick={() => moveSelection(1)} disabled={selectedPosition >= visible.length - 1} title="Next clip (J)">Next →</ActionButton>
+                <ActionButton onClick={() => moveSelection(-1)} disabled={selectedPosition <= 0} title="Previous clip (K)" shortcut="K">← Previous</ActionButton>
+                <ActionButton onClick={() => moveSelection(1)} disabled={selectedPosition >= visible.length - 1} title="Next clip (J)" shortcut="J">Next →</ActionButton>
                 <ActionButton onClick={() => {
                   if (session.revision === null) return;
                   void mutate(() => api<Session>(`/clips/${encodeURIComponent(selected.clip_id)}/duplicate`, "POST", {
                     expected_revision: session.revision,
                   })).then((next) => { if (next?.created_clip_id) setSelectedId(next.created_clip_id); });
-                }} disabled={busy} title="Duplicate (D)">Duplicate</ActionButton>
+                }} disabled={busy} title="Duplicate (D)" shortcut="D">Duplicate</ActionButton>
               </div>
             </div>
             <div className="panel-scroll flex-1 overflow-auto px-4 py-5 md:px-7">
@@ -427,7 +434,8 @@ export default function App() {
                   {(["group1", "group2", "skipped", "pending"] as Status[]).map((status) =>
                     <ActionButton key={status} tone={selected.status === status ? "accent" : "normal"}
                       onClick={() => patchSelected({ status })} disabled={busy || selected.status === status}
-                      title={`${labels[status]}${status === "group1" ? " (1)" : status === "group2" ? " (2)" : status === "skipped" ? " (X)" : ""}`}>
+                      title={`${labels[status]}${status === "group1" ? " (1)" : status === "group2" ? " (2)" : status === "skipped" ? " (X)" : ""}`}
+                      shortcut={status === "group1" ? "1" : status === "group2" ? "2" : status === "skipped" ? "X" : undefined}>
                       {labels[status]}
                     </ActionButton>)}
                 </div>
@@ -449,7 +457,7 @@ export default function App() {
                 <ActionButton onClick={() => {
                   if (session.revision === null) return;
                   void mutate(() => api<Session>("/session/undo", "POST", { expected_revision: session.revision }));
-                }} disabled={!session.can_undo || busy} title="Undo last change (U)">Undo last change</ActionButton>
+                }} disabled={!session.can_undo || busy} title="Undo last change (U)" shortcut="U">Undo last change</ActionButton>
                 <ActionButton onClick={() => setShowBulk(true)} disabled={bulkPending.length === 0 || busy} tone="danger">
                   Skip through current · {bulkPending.length}
                 </ActionButton>

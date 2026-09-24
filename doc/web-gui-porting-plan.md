@@ -6,6 +6,8 @@ Checkpoint 1 decisions (2026-09-24): keep saved clips missing from a changed SRT
 
 Progress on 2026-09-24: Phase 0 safety fixes, the local API, and the Phase 2 review screen are implemented. Checkpoint 2 is ready for owner review using the disposable 0526 copy described in [the review handoff](web-review-checkpoint-2.md). Waveform, transcription, and export UI work awaits that review.
 
+The checkpoint 2 follow-up established visible shortcut labels, status chips only in All, Trimmed chips beside duration in filtered views, and separate count pills on the filters. All three refinements are approved in [the follow-up checklist](web-review-ui-refinements.md), so checkpoint 3 can proceed.
+
 ## Outcome and scope
 
 The first release should let one person open an audio file, transcribe it when needed, review SRT candidates, adjust boundaries, listen, export clips, and resume without losing edits. It should make the current keyboard flow available alongside visible controls and direct waveform interaction.
