@@ -2,6 +2,7 @@ import tempfile
 import os
 import json
 import subprocess
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -238,6 +239,69 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(stale.status_code, 409)
         self.assertEqual(stale.json()["session"]["candidates"][0]["status"], "group1")
         second_client.close()
+
+    def test_preview_jobs_are_isolated_and_stale_after_trim(self):
+        self.open()
+        outputs = []
+
+        def render(_audio, candidate, options, output):
+            outputs.append(output)
+            output.write_bytes(f"{candidate.clip_id}:{options.mode}".encode())
+
+        with patch("jipandan.web.preview.render_export_preview", side_effect=render), \
+             patch("jipandan.web.preview.probe_duration_seconds", return_value=0.8):
+            jobs = []
+            for clip_id, mode in (("1", "as_is"), ("2", "trim_all")):
+                response = self.client.post("/api/previews", json={
+                    "clip_id": clip_id, "expected_revision": 1, "mode": mode,
+                    "title": f"Preview {clip_id}",
+                }, headers=self.headers)
+                self.assertEqual(response.status_code, 200, response.text)
+                jobs.append(response.json()["id"])
+            for job_id in jobs:
+                for _ in range(100):
+                    state = self.client.get(f"/api/previews/{job_id}").json()
+                    if state["state"] == "completed":
+                        break
+                    time.sleep(0.01)
+                self.assertEqual(state["state"], "completed", state)
+                self.assertFalse(state["stale"])
+                self.assertEqual(self.client.get(
+                    f"/api/previews/{job_id}/audio?token={self.token}").status_code, 200)
+            self.assertEqual(len(set(outputs)), 2)
+            self.assertEqual(len({path.parent for path in outputs}), 2)
+            self.assertEqual(outputs[0].read_bytes(), b"1:as_is")
+            self.assertEqual(outputs[1].read_bytes(), b"2:trim_all")
+            trimmed = self.client.patch("/api/clips/1", json={
+                "expected_revision": 1, "start_ms": 1100,
+            }, headers=self.headers)
+            self.assertEqual(trimmed.status_code, 200)
+            self.assertTrue(self.client.get(f"/api/previews/{jobs[0]}").json()["stale"])
+            self.assertFalse(self.client.get(f"/api/previews/{jobs[1]}").json()["stale"])
+            self.assertEqual(self.client.get(
+                f"/api/previews/{jobs[0]}/audio?token={self.token}").status_code, 409)
+
+    def test_preview_failure_reports_retryable_error(self):
+        self.open()
+        with patch("jipandan.web.preview.render_export_preview", side_effect=RuntimeError("decode failed")):
+            response = self.client.post("/api/previews", json={
+                "clip_id": "1", "expected_revision": 1, "mode": "trim_edges", "title": "First",
+            }, headers=self.headers)
+            self.assertEqual(response.status_code, 200)
+            job_id = response.json()["id"]
+            for _ in range(100):
+                state = self.client.get(f"/api/previews/{job_id}").json()
+                if state["state"] == "failed":
+                    break
+                time.sleep(0.01)
+            self.assertEqual(state["state"], "failed")
+            self.assertIn("decode failed", state["error"])
+            self.assertEqual(self.client.get(
+                f"/api/previews/{job_id}/audio?token={self.token}").status_code, 409)
+            self.assertEqual(self.client.post("/api/previews", json={
+                "clip_id": "1", "expected_revision": 1, "mode": "trim_edges",
+                "title": "First", "start_threshold_db": -100,
+            }, headers=self.headers).status_code, 422)
 
 
 if __name__ == "__main__":

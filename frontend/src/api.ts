@@ -50,6 +50,27 @@ export interface WaveformWindow {
   maxs: number[];
 }
 
+export type ExportMode = "as_is" | "trim_edges" | "trim_all";
+
+export interface PreviewJob {
+  id: string;
+  clip_id: string;
+  session_revision: number;
+  start_ms: number;
+  end_ms: number;
+  mode: ExportMode;
+  start_threshold_db: number;
+  stop_threshold_db: number;
+  title: string;
+  clip_title: string;
+  proposed_filename: string;
+  state: "queued" | "running" | "completed" | "failed";
+  duration_ms: number | null;
+  waveform: WaveformWindow | null;
+  error: string | null;
+  stale: boolean;
+}
+
 let token = "";
 
 export async function bootstrap(): Promise<void> {
@@ -60,6 +81,10 @@ export async function bootstrap(): Promise<void> {
 
 export function audioUrl(): string {
   return `/api/audio?token=${encodeURIComponent(token)}`;
+}
+
+export function previewUrl(jobId: string): string {
+  return `/api/previews/${encodeURIComponent(jobId)}/audio?token=${encodeURIComponent(token)}`;
 }
 
 export async function api<T>(path: string, method = "GET", body?: unknown, signal?: AbortSignal): Promise<T> {

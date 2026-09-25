@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import logging
 import math
 import os
 import shutil
@@ -14,7 +15,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import BinaryIO, Callable
 
-from jipandan.core.ffmpeg import probe_duration_seconds
+from jipandan.core.ffmpeg import ExportOptions, probe_duration_seconds
 from jipandan.core.models import (
     ClipCandidate,
     ConcurrentSessionChange,
@@ -23,6 +24,9 @@ from jipandan.core.models import (
 )
 from jipandan.core.srt import seconds_to_ffmpeg_timestamp, srt_time_to_seconds
 from jipandan.web.waveform import MAX_BUCKETS, MAX_WINDOW_MS, MIN_BUCKETS, WaveformCache
+from jipandan.web.preview import PreviewJobs
+
+logger = logging.getLogger(__name__)
 
 
 class SessionConflict(Exception):
@@ -53,7 +57,8 @@ def clip_payload(candidate: ClipCandidate) -> dict:
 
 
 class SessionService:
-    def __init__(self, clip_dir: Path | None = None, upload_dir: Path | None = None) -> None:
+    def __init__(self, clip_dir: Path | None = None, upload_dir: Path | None = None,
+                 preview_dir: Path | None = None) -> None:
         self._lock = threading.RLock()
         self.audio: Path | None = None
         self.srt: Path | None = None
@@ -66,6 +71,61 @@ class SessionService:
         self.upload_dir = upload_dir
         self._undo: list[tuple[str, dict[str, ClipCandidate]]] = []
         self._waveforms = WaveformCache()
+        self._previews = PreviewJobs((preview_dir or Path("tmp/web-previews")).resolve())
+
+    def start_preview(
+        self, clip_id: str, expected_revision: int, *, mode: str,
+        start_threshold_db: float, stop_threshold_db: float, title: str,
+    ) -> dict:
+        if mode not in {"as_is", "trim_edges", "trim_all"}:
+            raise InvalidEdit("Choose an export mode")
+        if not title.strip():
+            raise InvalidEdit("Export title cannot be empty")
+        for value in (start_threshold_db, stop_threshold_db):
+            if not math.isfinite(value) or not -90 <= value <= -5:
+                raise InvalidEdit("Thresholds must be between -90 and -5 dB")
+        with self._lock:
+            session = self._check_revision(expected_revision)
+            candidate = session.get_candidate(clip_id)
+            if candidate is None:
+                raise InvalidEdit("Clip not found")
+            options = ExportOptions(mode=mode, start_threshold_db=start_threshold_db,
+                                    stop_threshold_db=stop_threshold_db)
+            try:
+                job = self._previews.start(session.audio, candidate, session.revision, options, title.strip())
+            except ValueError as exc:
+                raise InvalidEdit(str(exc)) from exc
+            return self._preview_payload(job)
+
+    def _preview_payload(self, job) -> dict:
+        session = self.session
+        candidate = session.get_candidate(job.candidate.clip_id) if session else None
+        stale = self._previews.is_stale(job, self.audio, candidate)
+        clip_dir = session.clip_dir if session else self.default_clip_dir
+        return job.snapshot(
+            stale=stale,
+            proposed_filename=self._previews.proposed_filename(job, clip_dir),
+        )
+
+    def preview(self, job_id: str) -> dict:
+        with self._lock:
+            job = self._previews.get(job_id)
+            if job is None:
+                raise InvalidEdit("Preview not found")
+            return self._preview_payload(job)
+
+    def preview_audio(self, job_id: str) -> Path:
+        with self._lock:
+            job = self._previews.get(job_id)
+            if job is None:
+                raise InvalidEdit("Preview not found")
+            if self._previews.is_stale(job, self.audio,
+                                       self.session.get_candidate(job.candidate.clip_id) if self.session else None):
+                raise SessionConflict("Preview is stale; wait for the updated render")
+            with job.lock:
+                if job.state != "completed" or not job.output.is_file():
+                    raise SessionNotReady("Preview is not ready")
+            return job.output
 
     def waveform(self, clip_id: str, start_ms: int, end_ms: int, buckets: int) -> dict:
         with self._lock:
@@ -225,7 +285,29 @@ class SessionService:
             return clip_id
 
         snapshot, _ = self._mutate(expected_revision, change, undo_ids=[clip_id])
+        self._prewarm_grouped_clip(clip_id)
         return snapshot
+
+    def _prewarm_grouped_clip(self, clip_id: str) -> None:
+        """Queue the default render for a grouped clip without delaying its edit."""
+        with self._lock:
+            session = self.session
+            if session is None or session.audio is None:
+                return
+            candidate = session.get_candidate(clip_id)
+            if candidate is None or candidate.status not in {"group1", "group2"}:
+                return
+            audio = session.audio
+            revision = session.revision
+            candidate = copy.deepcopy(candidate)
+        try:
+            self._previews.start(
+                audio, candidate, revision,
+                ExportOptions(mode="trim_edges", start_threshold_db=-40, stop_threshold_db=-50),
+                candidate.title,
+            )
+        except Exception:
+            logger.exception("Could not prewarm export preview for clip %s", clip_id)
 
     def duplicate(self, clip_id: str, expected_revision: int) -> dict:
         def change(session: Session) -> str:

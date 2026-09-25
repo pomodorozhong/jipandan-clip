@@ -40,6 +40,14 @@ class MergeRequest(RevisionRequest):
     remove_indexes: list[int] = Field(default_factory=list)
 
 
+class PreviewRequest(RevisionRequest):
+    clip_id: str
+    mode: str
+    start_threshold_db: float = -40.0
+    stop_threshold_db: float = -50.0
+    title: str = Field(min_length=1, max_length=180)
+
+
 def create_app(
     service: SessionService | None = None,
     *,
@@ -146,6 +154,24 @@ def create_app(
         buckets: int = Query(default=800, ge=64, le=1600),
     ):
         return app.state.service.waveform(clip_id, start_ms, end_ms, buckets)
+
+    @app.post("/api/previews")
+    def start_preview(request: PreviewRequest):
+        return app.state.service.start_preview(
+            request.clip_id, request.expected_revision, mode=request.mode,
+            start_threshold_db=request.start_threshold_db,
+            stop_threshold_db=request.stop_threshold_db, title=request.title,
+        )
+
+    @app.get("/api/previews/{job_id}")
+    def get_preview(job_id: str):
+        return app.state.service.preview(job_id)
+
+    @app.get("/api/previews/{job_id}/audio")
+    def preview_audio(job_id: str, token: str):
+        if not secrets.compare_digest(token, app.state.token):
+            raise HTTPException(status_code=403, detail="Request token required")
+        return FileResponse(app.state.service.preview_audio(job_id), media_type="audio/mpeg")
 
     @app.get("/api/audio")
     def opened_audio(token: str):

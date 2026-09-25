@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Export comparison modal — design concept</title>
+<style>
+:root{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#edf2ee;background:#101816}
+*{box-sizing:border-box}body{margin:0;overflow:hidden}
+.canvas{position:relative;width:1200px;height:800px;overflow:hidden;background:#101816;transform:scale(2);transform-origin:top left}
+.appbar{height:66px;border-bottom:1px solid #34423b;display:flex;align-items:center;gap:12px;padding:0 28px;color:#dce7dc}
+.logo{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:#d2e5b2;color:#223122;font-weight:800}
+.appname{font-size:15px;font-weight:700}.appname span{color:#a9b8ab;font-weight:400}
+.background{display:grid;grid-template-columns:390px 1fr;height:734px;color:#91a298;filter:blur(.3px)}
+.backleft{border-right:1px solid #34423b;padding:26px 20px}.backright{padding:28px}
+.backhead{width:150px;height:22px;background:#26372e;border-radius:5px;margin-bottom:22px}
+.backpill{display:inline-block;width:46%;height:30px;background:#2a3b30;border-radius:6px;margin:0 4px 10px 0}
+.backrow{display:flex;align-items:center;height:42px;border-bottom:1px solid #29362f;font-size:13px}
+.backright .backhead{width:235px;height:30px}.backblock{height:145px;border:1px solid #35443a;border-radius:12px;background:#1b2922;margin-top:24px}
+.veil{position:absolute;inset:0;background:#050b08cc}
+.modal{position:absolute;top:34px;left:50px;width:1100px;height:732px;background:#192420;border:1px solid #45584a;border-radius:18px;box-shadow:0 28px 80px #000a;overflow:hidden}
+.top{height:80px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid #34423b}
+.eyebrow{font-size:11px;letter-spacing:.17em;text-transform:uppercase;color:#b7d69d;font-weight:800;margin-bottom:5px}
+h1{font-size:22px;line-height:1.15;margin:0;letter-spacing:-.02em}
+.topright{display:flex;align-items:center;gap:19px}.context{font-size:12px;color:#a8b7a9}.close{font-size:26px;line-height:1;color:#b0c0b1}
+.settings{height:142px;border-bottom:1px solid #34423b;padding:15px 28px 17px;background:#1b2821}
+.section-title{font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:#b5c4b5;font-weight:800;margin:0}
+.setting-top{display:flex;align-items:center;gap:19px;margin-top:11px}
+.modes{display:flex;gap:4px;padding:3px;background:#101b16;border:1px solid #34483b;border-radius:9px;width:350px;height:34px;flex:none}
+.mode{flex:1;text-align:center;display:grid;place-items:center;font-size:12px;font-weight:650;border-radius:6px;color:#b1c0b2}.mode.selected{background:#c5dda9;color:#1f3021}
+.desc{font-size:12px;color:#b2c0b1;margin:0}
+.setting-bottom{display:flex;align-items:end;gap:12px;margin-top:13px}
+.field{flex:none}.field.threshold{width:115px}.field.titlefield{flex:1}
+.fieldlabel{display:block;font-size:11px;color:#cbd8cb;font-weight:650;margin-bottom:5px}
+.input{height:35px;background:#101816;border:1px solid #465a4b;border-radius:7px;padding:8px 11px;font-size:12px;color:#f0f4ee}.input .unit{float:right;color:#8fa094}
+.autostatus{height:35px;display:flex;align-items:center;gap:7px;color:#b9d7aa;font-size:12px;font-weight:650;flex:none}.autostatus::before{content:"";width:8px;height:8px;border-radius:50%;background:#b7d69d}
+.compare{height:437px;padding:17px 28px 19px}
+.compare-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}.instruction{color:#a3b2a4;font-size:11px}
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:14px;height:371px}
+.card{border:1px solid #40584a;background:#1b2b23;border-radius:12px;padding:17px 16px 13px;overflow:hidden}
+.card.reference{border-color:#618a9c;background:#1c2b32}.card.candidate{border-color:#8eb36c;background:#203225;box-shadow:inset 0 0 0 1px #486b40}
+.card-head{height:48px;display:flex;align-items:flex-start;justify-content:space-between}
+.card-eyebrow{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#9fb1a5;font-weight:800;margin-bottom:5px}.candidate .card-eyebrow{color:#bdd7a8}
+.card-title{font-size:16px;font-weight:700}.chip{font-size:11px;font-weight:700;padding:6px 9px;border-radius:6px;background:#33453e;color:#d1e0d7}.candidate .chip{background:#2d4d32;color:#cae8b9}
+.controls{display:flex;align-items:center;gap:6px;height:36px}
+.play{height:34px;min-width:72px;display:flex;align-items:center;justify-content:center;gap:7px;background:#c8ddba;color:#1e3021;border-radius:7px;font-size:12px;font-weight:750}.candidate .play{background:#b7d69d}
+.triangle{width:0;height:0;border-left:8px solid #1e3021;border-top:5px solid transparent;border-bottom:5px solid transparent}
+.minor{height:34px;display:flex;align-items:center;padding:0 9px;background:#304538;border-radius:7px;font-size:11px;font-weight:650;white-space:nowrap}
+.clock{margin-left:auto;white-space:nowrap;font-size:11px;font-variant-numeric:tabular-nums;color:#f0f4ee;font-weight:700}.clock em{font-style:normal;color:#91a496;font-weight:400}
+.wavebox{height:155px;margin-top:14px;background:#101b16;border:1px solid #405748;border-radius:9px;overflow:hidden}.reference .wavebox{border-color:#3e5952}.wavebox svg{display:block;width:100%;height:100%}
+.waveinfo{display:flex;justify-content:space-between;margin:8px 1px 0;font-size:10px;color:#9aac9e}
+.card-foot{border-top:1px solid #405648;margin-top:15px;padding-top:11px;display:flex;align-items:center;justify-content:space-between}
+.duration small{display:block;font-size:10px;color:#9bac9e;margin-bottom:4px}.duration strong{font-size:16px;font-variant-numeric:tabular-nums}.footnote{font-size:11px;color:#aebeb0}.candidate .footnote{color:#bedba9}
+.footer{height:73px;border-top:1px solid #34423b;padding:0 28px;display:flex;align-items:center;justify-content:space-between;gap:24px;background:#17211d}
+.filename small{display:block;color:#9eafa3;font-size:10px;text-transform:uppercase;letter-spacing:.12em;font-weight:750;margin-bottom:5px}.filename strong{display:block;font-size:13px;font-weight:600}
+.summary{display:flex;align-items:center;gap:10px;font-size:12px;color:#aabbaa}.summary strong{color:#cce5af;font-size:14px}.summary .arrow{color:#789182;font-size:17px}
+.compare{padding:13px 28px 14px}
+.compare-head{margin-bottom:8px}
+.cards{grid-template-columns:1fr;grid-template-rows:repeat(2,1fr);gap:10px;height:389px}
+.card{display:grid;grid-template-columns:225px minmax(0,1fr);grid-template-rows:35px 102px 24px;column-gap:18px;padding:11px 16px}
+.card-head{grid-column:1;grid-row:1;display:block;height:auto}
+.card-eyebrow{margin-bottom:3px}
+.card-title{font-size:14px}
+.chip{display:none}
+.controls{grid-column:1;grid-row:2;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:34px 24px;gap:7px;height:auto;align-self:start}
+.play,.minor{height:34px;width:100%;min-width:0;justify-content:center;font-size:11px}
+.minor{padding:0 4px}
+.clock{grid-column:1/3;margin-left:0;justify-self:start;font-size:11px}
+.wavebox{grid-column:2;grid-row:1/3;height:137px;margin:0}
+.waveinfo{grid-column:2;grid-row:3;margin:4px 1px 0}
+.card-foot{grid-column:1;grid-row:2/4;display:block;align-self:end;margin:0;padding:0;border:0}
+.duration small{display:inline;margin-right:8px}.duration strong{font-size:14px}
+.footnote{display:block;margin-top:4px;font-size:10px}
+.card{position:relative}
+.card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px}
+.reference::before{background:#7eb4c7}.candidate::before{background:#b7d69d}
+.reference .card-eyebrow,.reference .card-title{color:#b9dce7}
+.candidate .card-eyebrow,.candidate .card-title{color:#cee8ad}
+.reference .play{background:#b8dbe6;color:#1d3038}
+.reference .triangle{border-left-color:#1d3038}
+.reference .minor{background:#344c55}
+.candidate .play{background:#c9e5a6}
+.candidate .minor{background:#38563c}
+.reference .wavebox{background:#111e24;border-color:#4c7180}
+.candidate .wavebox{background:#132116;border-color:#55774c}
+.reference .duration strong{color:#d3ecf3}
+.candidate .duration strong{color:#d8edb6}
+.hint{display:inline-flex;align-items:center;justify-content:center;min-width:17px;padding:1px 4px;border:1px solid currentColor;border-radius:4px;font-size:9px;font-weight:800;font-family:inherit;line-height:1.3;opacity:.7;white-space:nowrap}
+.mode{display:flex;align-items:center;justify-content:center;gap:8px}
+.play,.minor{gap:6px}
+.closebtn{display:flex;align-items:center;gap:7px;color:#b0c0b1}
+</style>
+</head>
+<body>
+<div class="canvas">
+<div class="appbar"><div class="logo">J</div><div class="appname">Jipandan <span>/ clip review</span></div></div>
+<div class="background"><div class="backleft"><div class="backhead"></div><div class="backpill"></div><div class="backpill"></div><div class="backpill"></div><div class="backpill"></div><div class="backrow">#12　什麼意思</div><div class="backrow">#13　什麼意思!</div><div class="backrow">#14　還是有點太難了</div><div class="backrow">#15　還是有點太難了</div></div><div class="backright"><div class="backhead"></div><div class="backpill"></div><div class="backblock"></div><div class="backblock"></div></div></div>
+<div class="veil"></div>
+<main class="modal">
+<header class="top"><div><div class="eyebrow">Export preview · Clip #14</div><h1>還是有點太難了</h1></div><div class="topright"><span class="context">Compare the original clip with your export</span><div class="closebtn"><span class="close">×</span><kbd class="hint">Esc</kbd></div></div></header>
+<section class="settings"><h2 class="section-title">Export settings</h2><div class="setting-top"><div class="modes"><div class="mode">As is <kbd class="hint">A</kbd></div><div class="mode selected">Trim edges <kbd class="hint">E</kbd></div><div class="mode">Trim all <kbd class="hint">T</kbd></div></div><p class="desc">Remove silence at the start and end; keep pauses in the middle.</p></div><div class="setting-bottom"><div class="field threshold"><span class="fieldlabel">Start threshold</span><div class="input">−40 <span class="unit">dB</span></div></div><div class="field threshold"><span class="fieldlabel">Stop threshold</span><div class="input">−50 <span class="unit">dB</span></div></div><div class="field titlefield"><span class="fieldlabel">Export title</span><div class="input">還是有點太難了</div></div><div class="autostatus">Preview up to date</div></div></section>
+<section class="compare"><div class="compare-head"><h2 class="section-title">Compare audio</h2><span class="instruction">Play either version or click its waveform to seek</span></div><div class="cards">
+<div class="card reference"><div class="card-head"><div><div class="card-eyebrow">Reference · unchanged</div><div class="card-title">As is</div></div><div class="chip">Original selection</div></div><div class="controls"><div class="play"><i class="triangle"></i>Play <kbd class="hint">Q</kbd></div><div class="minor">↺ Replay <kbd class="hint">⇧Q</kbd></div><div class="clock">0:00.72 <em>/ 0:02.10</em></div></div><div class="wavebox"><svg id="reference-wave" viewBox="0 0 480 155" preserveAspectRatio="none" aria-label="As is waveform with playhead"></svg></div><div class="waveinfo"><span>0:00</span><span>Click to seek</span><span>0:02.10</span></div><div class="card-foot"><div class="duration"><small>Selected clip</small><strong>2.10 s</strong></div><div class="footnote">Includes the original edges and pauses</div></div></div>
+<div class="card candidate"><div class="card-head"><div><div class="card-eyebrow">Export candidate · Trim edges</div><div class="card-title">Rendered preview</div></div><div class="chip">● &nbsp;Ready to listen</div></div><div class="controls"><div class="play"><i class="triangle"></i>Play <kbd class="hint">Space</kbd></div><div class="minor">↺ Replay <kbd class="hint">⇧Space</kbd></div><div class="clock">0:00.68 <em>/ 0:01.84</em></div></div><div class="wavebox"><svg id="candidate-wave" viewBox="0 0 480 155" preserveAspectRatio="none" aria-label="Rendered waveform with playhead"></svg></div><div class="waveinfo"><span>0:00</span><span>Click to seek</span><span>0:01.84</span></div><div class="card-foot"><div class="duration"><small>Rendered result</small><strong>1.84 s</strong></div><div class="footnote">0.26 s shorter than reference</div></div></div>
+</div></section>
+<footer class="footer"><div class="filename"><small>Proposed filename</small><strong>014_還是有點太難了.mp3</strong></div><div class="summary"><span>As is <strong>2.10 s</strong></span><span class="arrow">→</span><span>Trim edges <strong>1.84 s</strong></span><span class="arrow">·</span><span>Removed <strong>0.26 s</strong></span></div></footer>
+</main>
+</div>
+<script>
+function waveform(id,candidate){
+ const svg=document.getElementById(id),count=166,playhead=candidate?178:165;
+ let lines='<line x1="0" y1="77.5" x2="480" y2="77.5" stroke="'+(candidate?'#385145':'#3f5c68')+'" stroke-width="1"/>';
+ for(let i=0;i<count;i++){
+  const x=8+i*2.8,source=candidate?i+12:i;
+  const envelope=Math.pow(Math.sin(Math.PI*source/165),.46);
+  const phrase=.31+.51*Math.abs(Math.sin(source*.104+.2))+.13*Math.sin(source*.37);
+  const ripple=.42+.58*Math.abs(Math.sin(source*1.25)*Math.cos(source*.41));
+  const pause=(source>63&&source<76)||(source>126&&source<136)?.16:1;
+  const edge=!candidate&&(i<13||i>149)?.1:1;
+  const amp=Math.max(2,Math.min(61,68*envelope*phrase*ripple*pause*edge));
+  const color=candidate?(x<playhead?'#d1e6b0':'#91bd89'):(x<playhead?'#d1e8ef':'#80b7c8');
+  lines+='<line x1="'+x.toFixed(1)+'" x2="'+x.toFixed(1)+'" y1="'+(77.5-amp).toFixed(1)+'" y2="'+(77.5+amp).toFixed(1)+'" stroke="'+color+'" stroke-width="1.8" stroke-linecap="round"/>';
+ }
+ lines+='<line x1="'+playhead+'" y1="7" x2="'+playhead+'" y2="148" stroke="#f6faf1" stroke-width="2"/><circle cx="'+playhead+'" cy="8" r="4" fill="#f6faf1"/>';
+ svg.innerHTML=lines;
+}
+waveform('reference-wave',false);waveform('candidate-wave',true);
+</script>
+</body>
+</html>

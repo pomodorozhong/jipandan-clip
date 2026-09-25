@@ -2,7 +2,7 @@
 
 Build a local browser interface that can open audio, transcribe when needed, review and trim clips, and export MP3s without losing edits. Reuse the Python audio pipeline and keep the TUI available during migration.
 
-**Current state:** Phases 0–3 and checkpoints 1–3 are complete. Phase 4A is planned but has not started; checkpoint 4 will review rendered export previews before final export publication. The [review guide](your-web-gui-review-guide.md) covers the remaining hands-on checkpoints.
+**Current state:** Phases 0–3 and checkpoints 1–3 are complete. Phase 4A's modal preview build, background pre-render cache, and rendered waveform are ready for [checkpoint 4](web-review-checkpoint-4.md); owner listening and interaction feedback is pending before final export publication. The [review guide](your-web-gui-review-guide.md) covers the remaining hands-on checkpoints.
 
 ## Scope
 
@@ -98,8 +98,10 @@ Browsers can read files chosen by the user, but that is different from accessing
 
 - Preserve As is, Trim edges, and Trim all modes, with start/stop threshold controls and explanations. Show the unprocessed duration, rendered duration, and difference.
 - Each preview request captures a clip revision and exact export options. Give it a unique job directory and immutable output path. If the user changes options or clip bounds, mark the old preview stale and never publish it as the new selection.
+- Use `E` to open the export modal. When a clip enters Group 1 or Group 2, queue the default Trim edges render in the background and persist its MP3 and waveform on disk. Key cached data by the source audio identity, clip timing/title, and exact render options so later edits cannot reuse the wrong result.
+- On modal open, reuse a matching cached render immediately or start one automatically. Show vertically stacked, playable waveforms for the unchanged clip and export candidate. Keep both areas at a fixed height while rendering.
 - Keep options, render state, playback, and export controls in a shallow sequence of peer sections. Each action should sit with the options or result it affects; show any keyboard shortcut on the button. Avoid duplicate progress displays and controls that repeat an interaction already available in the preview player.
-- Play the rendered preview in the browser. Let the user edit the export title, replay, return to options, or confirm export. Display an actionable error if preview rendering fails; exporting without a preview should require a clear choice. Show when the preview is stale after an edit.
+- Play both versions in the browser. Update the candidate automatically when a mode, threshold, or export title changes. Display an actionable error if preview rendering fails; exporting without a preview should require a clear choice. Show when the preview is stale after an edit.
 - Publish from the exact preview artifact, or re-render from the same captured revision and options. Write to a temporary destination and move the final file into place only after success. If a filename already exists, automatically choose a new filename without replacing the existing MP3; show the proposed name before export and the actual path afterward.
 - After completion, show the output path and an Open/Reveal action available in the local app context. Mark the clip Exported only after the file exists and the session save succeeds.
 
@@ -169,11 +171,11 @@ Serve source audio and envelope data. Build seek, playhead, coarse drag, fine bo
 
 ### Phase 4A — Export options and rendered preview
 
-After checkpoint 3's material waveform findings are resolved, build the three export modes, threshold controls, captured option/revision identity, isolated preview jobs, rendered playback, title editing, stale-preview handling, and useful failure/retry states. Keep the preview UI focused: one place for options, one result area, visible action keys where applicable, and no extra surface or seek control that repeats the player. This phase may establish the shared job manager and event transport, but must not publish final MP3s through an unreviewed flow.
+After checkpoint 3's material waveform findings are resolved, build the three export modes, threshold controls, captured option/revision identity, isolated preview jobs, rendered playback, title editing, stale-preview handling, and useful failure states. Group 1 and Group 2 changes also queue the default render into a persistent disk cache. Opening the modal reuses a cache hit or starts the selected render automatically. Two fixed-size, playable waveforms compare the unchanged clip with the export candidate, and settings changes update the candidate automatically. Keep the preview UI focused, with visible action keys and no duplicate player controls. This phase must not publish final MP3s through an unreviewed flow.
 
-**Owner checkpoint 4:** Prepare rendered previews for representative clips in a disposable workspace, including a silence-sensitive example and a safe stale-preview or render-failure case. Ask the owner to compare As is, Trim edges, and Trim all by listening, adjust an option, inspect the title and proposed filename, and say whether the options, result, and next action are clear. Resolve material layout, wording, and audio findings on the same checkpoint before finalizing publication UI. Transcription engine and job recovery work can continue while this review is open; final export interaction waits.
+**Owner checkpoint 4:** Prepare rendered previews for representative clips in a disposable workspace, including a silence-sensitive example and a safe render-failure case. Ask the owner to mark a clip Group 1 or Group 2, open the modal with `E`, and check that a background render is ready or that the fixed-size placeholders remain steady until it is. Compare the stacked As is and export candidate waveforms by listening, try all three modes, adjust an option, inspect the automatically updated title and proposed filename, and say whether the results are clear. Resolve material layout, wording, and audio findings on the same checkpoint before finalizing publication UI. Transcription engine and job recovery work can continue while this review is open; final export interaction waits.
 
-**Gate:** Preview jobs for different clips or options cannot collide; a changed option invalidates the old preview; rendered audio corresponds to the displayed options and captured clip revision. The owner can choose a mode, find its controls and any shortcut at a glance, understand the result without TUI guidance, and identify the single next action.
+**Gate:** Preview jobs for different clips or options cannot collide; a changed option invalidates the old preview; matching disk cache is reused; a missing cache starts automatically; background renders are queued when clips are grouped; waveform display does not shift the layout; rendered audio corresponds to the displayed options and captured clip revision. The owner can choose a mode, find its controls and any shortcut at a glance, understand the result without TUI guidance, and identify the single next action.
 
 ### Phase 4B — Transcription and final export
 

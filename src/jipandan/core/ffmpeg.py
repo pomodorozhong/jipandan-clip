@@ -296,3 +296,29 @@ def export_clip(
         finally:
             temporary_final.unlink(missing_ok=True)
     return final_clip
+
+
+def render_export_preview(
+    input_audio: Path,
+    candidate: ClipCandidate,
+    options: ExportOptions,
+    output: Path,
+) -> None:
+    """Render one immutable export preview without publishing a clip."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="work-", dir=output.parent) as directory:
+        source = Path(directory) / "source.mp3"
+        _extract_audio_slice(input_audio, candidate.start, candidate.duration, source)
+        audio_filter = _audio_filter_for_options(options)
+        if audio_filter is None:
+            shutil.copy2(source, output)
+            return
+        rendered = Path(directory) / "rendered.mp3"
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(source),
+             "-af", audio_filter, str(rendered)],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip()[-500:] or "FFmpeg could not render the preview")
+        os.replace(rendered, output)

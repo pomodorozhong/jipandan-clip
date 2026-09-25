@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, audioUrl, bootstrap, uploadAudio, type Clip, type Session, type Status } from "./api";
 import WaveformEditor from "./WaveformEditor";
+import ExportPreview from "./ExportPreview";
 
 type Filter = "unsorted" | "group1" | "group2" | "exported" | "all";
 type SaveState = "saved" | "saving" | "failed";
@@ -52,13 +53,24 @@ function ActionButton({ children, onClick, disabled, tone = "normal", title, sho
 function Dialog({ title, children, onClose }: {
   title: string; children: React.ReactNode; onClose: () => void;
 }) {
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") { event.preventDefault(); onClose(); }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
   return <div className="fixed inset-0 z-30 flex items-center justify-center bg-[#07100bcf] p-4"
     role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section role="dialog" aria-modal="true" aria-label={title}
       className="surface max-h-[85vh] w-full max-w-lg overflow-auto rounded-2xl p-5 shadow-2xl">
       <div className="mb-4 flex items-start justify-between gap-4">
         <h2 className="text-lg font-semibold">{title}</h2>
-        <button type="button" onClick={onClose} aria-label="Close dialog" className="subtle text-xl">×</button>
+        <button type="button" onClick={onClose} aria-label="Close dialog (Esc)"
+          className="subtle inline-flex items-center gap-2 text-xl">
+          <span aria-hidden="true">×</span><kbd className="shortcut-key text-xs">Esc</kbd>
+        </button>
       </div>
       {children}
     </section>
@@ -85,8 +97,10 @@ export default function App() {
   const [showMerge, setShowMerge] = useState(false);
   const [removeIndexes, setRemoveIndexes] = useState<number[]>([]);
   const [showDetailMobile, setShowDetailMobile] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
+  const detailScrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let alive = true;
@@ -146,6 +160,12 @@ export default function App() {
     session.merge_preview.file_changed
   ));
 
+  useEffect(() => {
+    detailScrollRef.current?.scrollTo(0, 0);
+  }, [effectiveSelectedId]);
+
+  useEffect(() => { setShowExportModal(false); }, [session?.audio]);
+
   const mutate = useCallback(async (work: () => Promise<Session>) => {
     setBusy(true);
     setSaveState("saving");
@@ -191,12 +211,13 @@ export default function App() {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (showHelp || showBulk || showJump || showMerge || editingTitle) return;
+      if (showHelp || showBulk || showJump || showMerge || showExportModal || editingTitle) return;
       if (event.isComposing || event.key === "Process") return;
       const target = event.target as HTMLElement | null;
       if (target && (target.closest("input, textarea, select, [contenteditable='true']"))) return;
       const key = event.key.toLowerCase();
-      if (key === "j" || key === "arrowdown") { event.preventDefault(); moveSelection(1); }
+      if (key === "e" && selected) { event.preventDefault(); setShowExportModal(true); }
+      else if (key === "j" || key === "arrowdown") { event.preventDefault(); moveSelection(1); }
       else if (key === "k" || key === "arrowup") { event.preventDefault(); moveSelection(-1); }
       else if (key === "1") { event.preventDefault(); patchSelected({ status: "group1" }); }
       else if (key === "2") { event.preventDefault(); patchSelected({ status: "group2" }); }
@@ -221,7 +242,7 @@ export default function App() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [showHelp, showBulk, showJump, showMerge, editingTitle, moveSelection, patchSelected,
+  }, [showHelp, showBulk, showJump, showMerge, showExportModal, editingTitle, moveSelection, patchSelected,
     session, selected, effectiveSelectedId, mutate]);
 
   useEffect(() => { if (editingTitle) titleRef.current?.focus(); }, [editingTitle]);
@@ -335,7 +356,8 @@ export default function App() {
       {session.needs_transcription ? <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center overflow-auto px-5 py-12">
         <h1 className="mb-3 text-3xl font-semibold">No SRT yet</h1>
         <p className="subtle">Transcription will be available in the next build. You can use the existing <code>transcribe</code> command, then reopen this audio.</p>
-      </main> : <main className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden md:grid-cols-[minmax(310px,38%)_1fr]">
+      </main> : <>
+      <main className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden md:grid-cols-[minmax(310px,38%)_1fr]">
         <section className={`${showDetailMobile ? "hidden md:flex" : "flex"} min-h-0 flex-col overflow-hidden border-r line`} aria-label="Clip list">
           <div className="shrink-0 border-b line p-4 md:p-5">
             <div className="mb-3 flex items-baseline justify-between gap-3">
@@ -417,6 +439,7 @@ export default function App() {
               <div className="mt-4 flex flex-wrap gap-2">
                 <ActionButton onClick={() => moveSelection(-1)} disabled={selectedPosition <= 0} title="Previous clip (K)" shortcut="K">← Previous</ActionButton>
                 <ActionButton onClick={() => moveSelection(1)} disabled={selectedPosition >= visible.length - 1} title="Next clip (J)" shortcut="J">Next →</ActionButton>
+                <ActionButton onClick={() => setShowExportModal(true)} title="Open export preview (E)" shortcut="E">Export preview</ActionButton>
                 <ActionButton onClick={() => {
                   if (session.revision === null) return;
                   void mutate(() => api<Session>(`/clips/${encodeURIComponent(selected.clip_id)}/duplicate`, "POST", {
@@ -425,7 +448,7 @@ export default function App() {
                 }} disabled={busy} title="Duplicate (D)" shortcut="D">Duplicate</ActionButton>
               </div>
             </div>
-            <div className="panel-scroll min-h-0 flex-1 overflow-auto px-4 py-5 md:px-7">
+            <div ref={detailScrollRef} className="panel-scroll min-h-0 flex-1 overflow-auto px-4 py-5 md:px-7">
               <div className="mb-4">
                 <h3 className="subtle mb-3 text-xs font-semibold uppercase tracking-[.15em]">Classification</h3>
                 <div className="flex flex-wrap gap-2">
@@ -440,7 +463,8 @@ export default function App() {
               </div>
               <WaveformEditor key={selected.clip_id} clip={selected}
                 durationMs={session.duration_ms ?? selected.end_ms} audioSrc={audioUrl()} busy={busy}
-                shortcutsPaused={showHelp || showBulk || showJump || showMerge || editingTitle}
+                shortcutsPaused={showHelp || showBulk || showJump || showMerge || showExportModal || editingTitle}
+                active={!showExportModal}
                 onSave={async (startMs, endMs) => {
                   if (session.revision === null) return false;
                   const next = await mutate(() => api<Session>(`/clips/${encodeURIComponent(selected.clip_id)}`, "PATCH", {
@@ -451,7 +475,10 @@ export default function App() {
             </div>
           </> : <div className="subtle flex flex-1 items-center justify-center p-6 text-center">Select a clip to review its details.</div>}
         </section>
-      </main>}
+      </main>
+      </>}
+      {selected && session.revision !== null && <ExportPreview key={selected.clip_id} clip={selected}
+        revision={session.revision} open={showExportModal} onClose={() => setShowExportModal(false)} />}
     </>}
 
     {showBulk && <Dialog title="Skip through current clip" onClose={() => setShowBulk(false)}>
@@ -509,7 +536,7 @@ export default function App() {
       <div className="grid grid-cols-[6rem_1fr] gap-y-2 text-sm">
         {[["Space", "Play / pause clip"], ["J / K", "Next / previous clip"], ["1 / 2", "Mark Group 1 / Group 2"],
           ["X", "Skip clip"], ["U", "Undo recent change"], ["D", "Duplicate clip"],
-          ["R", "Rename title"], ["G", "Jump to index"], ["/", "Search titles"],
+          ["R", "Rename title"], ["G", "Jump to index"], ["E", "Open export preview"], ["/", "Search titles"],
           [", / .", "Nudge start − / + 10 ms (Shift: 100 ms)"],
           ["[ / ]", "Nudge end − / + 10 ms (Shift: 100 ms)"],
           ["?", "Show this help"]].map(([key, action]) => <div key={key} className="contents">

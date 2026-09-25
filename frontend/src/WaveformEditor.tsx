@@ -171,12 +171,13 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
   </div>;
 }
 
-export default function WaveformEditor({ clip, durationMs, audioSrc, busy, shortcutsPaused, onSave }: {
+export default function WaveformEditor({ clip, durationMs, audioSrc, busy, shortcutsPaused, active = true, onSave }: {
   clip: Clip;
   durationMs: number;
   audioSrc: string;
   busy: boolean;
   shortcutsPaused: boolean;
+  active?: boolean;
   onSave: (startMs: number, endMs: number) => Promise<boolean>;
 }) {
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -194,6 +195,12 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
   const [playing, setPlaying] = useState(false);
   const [saving, setSaving] = useState(false);
   const [localError, setLocalError] = useState("");
+
+  useEffect(() => {
+    if (active) return;
+    auditionStop.current = null;
+    audioRef.current?.pause();
+  }, [active]);
   const overview = useWaveform(clip.clip_id, overviewRange, 1000);
   const startDetail = useWaveform(clip.clip_id, startDetailRange, 800);
   const endDetail = useWaveform(clip.clip_id, endDetailRange, 800);

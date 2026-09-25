@@ -1,6 +1,6 @@
 # Your guide to reviewing the web GUI
 
-This accompanies the [web GUI porting plan](web-gui-porting-plan.md). It describes the points where your inspection will most improve the result. You do not need to read code or test every build. Checkpoints 1–3 are complete; checkpoint 4 is next.
+This accompanies the [web GUI porting plan](web-gui-porting-plan.md). It describes the points where your inspection will most improve the result. You do not need to read code or test every build. Checkpoints 1–3 are complete; the [updated checkpoint 4 build](web-review-checkpoint-4.md) is ready with background rendering, disk cache reuse, and rendered waveforms.
 
 ## Your role at a glance
 
@@ -9,7 +9,7 @@ This accompanies the [web GUI porting plan](web-gui-porting-plan.md). It describ
 | 1. Set the rules — complete | Before Phase 0 | Done | What must never happen to saved work? |
 | 2. Try the review screen — complete | After Phase 2 | Done | Can you sort clips naturally without instructions? |
 | 3. Try waveform editing — complete | After Phase 3 | Done | Can you find, hear, adjust, and save the boundaries you want? |
-| 4. Try rendered previews | After Phase 4A, before final export UI | About 20 minutes | Do the options and rendered result make sense before publishing? |
+| 4. Try rendered previews | After Phase 4A, before final export UI | About 20 minutes | Are background renders, cache reuse, waveforms, and export options clear? |
 | 5. Finish a real session | After Phase 4B, before cutover | About 30 minutes | Does the whole workflow produce clips you would use? |
 
 Your follow-up changes have established a design pattern for the remaining work: show shortcuts on their buttons, remove redundant labels and controls, put each action beside the work it affects, keep long detail panels scrolling independently, and use separate peer panels rather than layers of nested cards. You can keep giving small design corrections during a checkpoint; the developer should update that same build before moving to dependent work.
@@ -39,20 +39,23 @@ The detailed record is in the [checkpoint 2 follow-up](web-review-ui-refinements
 
 You approved the waveform and playback flow after refining shortcut badges, control placement, scrolling, and the separate Overview and Fine panels. The [checkpoint 3 checklist](web-review-checkpoint-3.md) records the reviewed build.
 
-Phase 4A is planned but has not started. If a later export preview reveals a timing mismatch, report the clip ID and approximate timestamp; that finding belongs to the active export review.
+If an export preview reveals a timing mismatch, report the clip ID and approximate timestamp; that finding belongs to the active export review.
 
 ## Checkpoint 4 — Try rendered previews
 
-**The build should be ready:** It can show export modes and options, render a preview from the current clip, play that rendered audio, edit the proposed title, and explain a stale or failed preview. The developer should give you a disposable session with a silence-sensitive clip and a safe stale-preview or render-failure example. This checkpoint does not require final MP3 publication.
+**The build should be ready:** Marking a clip Group 1 or Group 2 queues a default render in the background. Pressing `E` opens the export modal, which reuses a matching disk cache or starts the render automatically. Two stacked waveforms let you play and compare the unchanged clip with the export candidate. Their placeholders keep the same size while rendering. Changing export settings updates the candidate automatically. The modal also lets you edit the proposed title and explains a stale or failed preview. The developer should give you a disposable session with a silence-sensitive clip and a safe render-failure example. This checkpoint does not require final MP3 publication.
+
+The runnable build, safe example, and exact launch instruction are in the [checkpoint 4 checklist](web-review-checkpoint-4.md).
 
 Try these tasks without being coached through the controls:
 
-1. Compare As is, Trim edges, and Trim all on a clip where silence matters.
-2. Change a threshold or clip boundary while a preview exists. Check whether it is clear that the old preview is stale and must be rendered again.
-3. Listen to the rendered result, then find the title, proposed output name, and next action. Notice any duplicated controls, hidden shortcuts, or layers of panels that slow you down.
-4. Try the prepared render failure. Check whether the error and Retry tell you what to do.
+1. Mark a silence-sensitive clip as Group 1 or Group 2. Review another clip briefly, then press `E` to open export preview. Check whether the background Trim edges render and waveform are ready.
+2. Open a clip whose render is still running. Check that the waveform placeholder keeps the same size when the waveform appears.
+3. Compare As is, Trim edges, and Trim all. Play both stacked waveforms and inspect them. Change a threshold or clip boundary while a preview exists; check whether the old candidate stops being playable and a new render starts automatically.
+4. Listen to the rendered result, then find the title, proposed output name, and next action. Notice any duplicated controls, hidden shortcuts, or layers of panels that slow you down.
+5. Try the prepared render failure. Check whether the error explains what to adjust, then change the settings and confirm that a new render starts. If convenient, restart the local server with the same session directory and check that a warmed preview is still ready.
 
-Tell the developer which option produced the sound you expected and where the preview flow was unclear. Final export publication UI should wait for material feedback here; transcription engine and job recovery work can proceed independently.
+Tell the developer which option produced the sound you expected, whether background renders and cache reuse saved time, and where the preview flow was unclear. Use **task / expected / actual / impact** for interaction findings. Final export publication UI should wait for material feedback here; transcription engine and job recovery work can proceed independently.
 
 ## Checkpoint 5 — Finish a real session
 
