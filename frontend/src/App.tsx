@@ -539,13 +539,13 @@ export default function App() {
               <h1 className="text-xl font-semibold">Clips</h1>
               <span className="subtle text-sm mono">{visible.length} visible / {session.candidates.length} total</span>
             </div>
-            <div className="mb-3 flex flex-wrap gap-1 md:grid md:grid-cols-2 xl:grid-cols-6 2xl:flex" role="group" aria-label="Status filter">
+            <div className="mb-3 grid grid-cols-5 overflow-hidden rounded-lg border line bg-[#22312a] p-1" role="group" aria-label="Status filter">
               {filters.map((item) => <button key={item.key} type="button" onClick={() => setFilter(item.key)}
                 aria-pressed={filter === item.key}
                 aria-label={`${item.label}, ${item.key === "all" ? session.candidates.length : session.counts[item.key === "unsorted" ? "pending" : item.key]} ${
                   (item.key === "all" ? session.candidates.length : session.counts[item.key === "unsorted" ? "pending" : item.key]) === 1 ? "clip" : "clips"}`}
-                className={`inline-flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-xs font-medium ${item.key === "exported" || item.key === "all" ? "xl:col-span-3" : "xl:col-span-2"} 2xl:col-auto ${filter === item.key ? "bg-[#b7d69d] text-[#1b291f]" : "soft-surface subtle hover:text-white"}`}>
-                <span>{item.label}</span><span aria-hidden="true" className={`mono min-w-6 rounded-full px-1.5 py-0.5 text-center text-[11px] font-semibold leading-none ${filter === item.key ? "bg-[#1b291f]/15" : "bg-[#415447] text-[#edf2ee]"}`}>
+                className={`flex min-w-0 flex-col items-center justify-center gap-1 rounded-md px-0.5 py-2 text-[10px] leading-tight sm:text-xs ${filter === item.key ? "bg-[#b7d69d] text-[#1b291f] shadow-sm" : "hover:bg-[#304439] hover:text-white"}`}>
+                <span className="whitespace-nowrap font-semibold">{item.label}</span><span aria-hidden="true" className={`mono text-[11px] font-normal leading-none sm:text-xs ${filter === item.key ? "text-[#435d46]" : "text-[#9eafa3]"}`}>
                   {item.key === "all" ? session.candidates.length : session.counts[item.key === "unsorted" ? "pending" : item.key]}
                 </span>
               </button>)}
