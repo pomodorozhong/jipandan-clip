@@ -5,17 +5,10 @@ export default function SettingsScreen({ detectLeadingSilence, showOriginalStart
   onDetectLeadingSilenceChange: (enabled: boolean) => void;
   onShowOriginalStartChange: (enabled: boolean) => void;
 }) {
-  return <main className="panel-scroll mx-auto w-full max-w-3xl flex-1 overflow-auto px-5 py-8 md:px-8">
-    <div className="mb-6">
-      <div>
-        <p className="accent mb-2 text-xs font-semibold uppercase tracking-[.16em]">Preferences</p>
-        <h1 className="text-3xl font-semibold">Settings</h1>
-        <p className="subtle mt-2 text-sm">These settings are saved in this browser.</p>
-      </div>
-    </div>
-
-    <section className="surface rounded-2xl p-5">
-      <h2 className="mb-4 text-lg font-semibold">Clip timing</h2>
+  return <div>
+    <p className="subtle mb-5 text-sm">These settings are saved in this browser.</p>
+    <section>
+      <h3 className="mb-4 text-base font-semibold">Clip timing</h3>
       <label className="flex cursor-pointer items-start gap-3 border-b line pb-4">
         <input type="checkbox" checked={detectLeadingSilence}
           onChange={(event) => onDetectLeadingSilenceChange(event.target.checked)} className="mt-1" />
@@ -33,5 +26,5 @@ export default function SettingsScreen({ detectLeadingSilence, showOriginalStart
         </span>
       </label>
     </section>
-  </main>;
+  </div>;
 }

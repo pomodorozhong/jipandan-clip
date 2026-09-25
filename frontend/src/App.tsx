@@ -464,26 +464,23 @@ export default function App() {
       <div className="flex items-center gap-3">
         <div aria-hidden="true" className="flex size-9 items-center justify-center rounded-xl bg-[#b7d69d] text-xl font-bold text-[#263c2b]">J</div>
         <div>
-          <div className="font-semibold tracking-wide">Jipandan <span className="subtle font-normal">/ {showSettings ? "settings" : "clip review"}</span></div>
+          <div className="font-semibold tracking-wide">Jipandan <span className="subtle font-normal">/ clip review</span></div>
           <div className="subtle text-xs">Local workspace · {session?.audio_name ?? "No audio open"}</div>
         </div>
       </div>
       <div className="flex items-center gap-3 text-sm">
-        {!showSettings && session?.audio && !session.needs_transcription && <span aria-live="polite" className={saveState === "failed" ? "text-[#ffb3a8]" : saveState === "saving" ? "text-[#ead49b]" : "accent"}>
+        {session?.audio && !session.needs_transcription && <span aria-live="polite" className={saveState === "failed" ? "text-[#ffb3a8]" : saveState === "saving" ? "text-[#ead49b]" : "accent"}>
           {saveState === "saving" ? "Saving…" : saveState === "failed" ? "Save failed" : "Saved"}
         </span>}
-        {!showSettings && session?.audio && !session.needs_transcription && <ActionButton onClick={() => {
+        {session?.audio && !session.needs_transcription && <ActionButton onClick={() => {
           if (session.revision === null) return;
           void mutate(() => api<Session>("/session/undo", "POST", { expected_revision: session.revision }));
         }} disabled={!session.can_undo || busy} title="Undo recent change (U)" shortcut="U">Undo</ActionButton>}
-        {!showSettings && !session?.needs_transcription && <ActionButton onClick={() => setShowHelp(true)} title="Keyboard shortcuts" shortcut="?">Shortcuts</ActionButton>}
+        {!session?.needs_transcription && <ActionButton onClick={() => setShowHelp(true)} title="Keyboard shortcuts" shortcut="?">Shortcuts</ActionButton>}
         <ActionButton onClick={() => {
-          if (showSettings) setShowSettings(false);
-          else {
-            setShowSettings(true);
-            setShowHelp(false); setShowJump(false); setShowMerge(false); setShowExportModal(false);
-          }
-        }}>{showSettings ? "Back" : "Settings"}</ActionButton>
+          setShowSettings(true);
+          setShowHelp(false); setShowJump(false); setShowMerge(false); setShowExportModal(false);
+        }}>Settings</ActionButton>
       </div>
     </header>
 
@@ -518,10 +515,7 @@ export default function App() {
       </div>}
     </div>}
 
-    {showSettings ? <SettingsScreen detectLeadingSilence={settings.detectLeadingSilence}
-      showOriginalStart={settings.showOriginalStart}
-      onDetectLeadingSilenceChange={(enabled) => setSettings((current) => ({ ...current, detectLeadingSilence: enabled }))}
-      onShowOriginalStartChange={(enabled) => setSettings((current) => ({ ...current, showOriginalStart: enabled }))} /> : !session?.audio ? <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center px-5 py-12">
+    {!session?.audio ? <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center px-5 py-12">
       <p className="accent mb-3 text-sm font-semibold uppercase tracking-[.2em]">Start a session</p>
       <h1 className="mb-3 text-4xl font-semibold tracking-tight">Open your recording</h1>
       <p className="subtle mb-8 max-w-xl">Enter a local audio path to review its SRT and saved session. The audio stays on this computer.</p>
@@ -694,10 +688,10 @@ export default function App() {
               </div>
               <WaveformEditor key={selected.clip_id} clip={selected}
                 durationMs={session.duration_ms ?? selected.end_ms} audioSrc={audioUrl()} busy={busy}
-                shortcutsPaused={showHelp || showJump || showMerge || showExportModal || editingTitle}
+                shortcutsPaused={showHelp || showJump || showMerge || showExportModal || showSettings || editingTitle}
                 detectLeadingSilence={settings.detectLeadingSilence}
                 showOriginalStart={settings.showOriginalStart}
-                active={!showExportModal}
+                active={!showExportModal && !showSettings}
                 onSave={async (startMs, endMs) => {
                   if (session.revision === null) return false;
                   const next = await mutate(() => api<Session>(`/clips/${encodeURIComponent(selected.clip_id)}`, "PATCH", {
@@ -728,6 +722,13 @@ export default function App() {
           }
         }} />}
     </>}
+
+    {showSettings && <Dialog title="Settings" onClose={() => setShowSettings(false)}>
+      <SettingsScreen detectLeadingSilence={settings.detectLeadingSilence}
+        showOriginalStart={settings.showOriginalStart}
+        onDetectLeadingSilenceChange={(enabled) => setSettings((current) => ({ ...current, detectLeadingSilence: enabled }))}
+        onShowOriginalStartChange={(enabled) => setSettings((current) => ({ ...current, showOriginalStart: enabled }))} />
+    </Dialog>}
 
     {showJump && <Dialog title="Jump to clip index" onClose={() => setShowJump(false)}>
       <p className="subtle mb-3 text-sm">Find the requested index in the current view, or the nearest visible clip.</p>
