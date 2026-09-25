@@ -7,6 +7,7 @@ type TimeRange = { start: number; end: number };
 const MIN_CLIP_MS = 10;
 const KEYBOARD_NUDGE_DEBOUNCE_MS = 300;
 const MAX_WINDOW_MS = 120_000;
+const FINE_WINDOW_MS = 700;
 const PLOT_WIDTH = 1000;
 const PLOT_HEIGHT = 160;
 const NUB_WIDTH = 18;
@@ -30,7 +31,7 @@ function initialRange(clip: Clip, duration: number): TimeRange {
 }
 
 function fineRange(time: number, duration: number): TimeRange {
-  return boundedRange(time - 1000, 2000, duration);
+  return boundedRange(time - FINE_WINDOW_MS / 2, FINE_WINDOW_MS, duration);
 }
 
 function formatClock(ms: number): string {
@@ -294,10 +295,7 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
         clip.original_start_ms >= current.start + margin && clip.original_start_ms <= current.end - margin
       );
       if (clip.start_ms >= current.start + margin && clip.start_ms <= current.end - margin && originalVisible) return current;
-      const low = showOriginalStart ? Math.min(clip.start_ms, clip.original_start_ms) : clip.start_ms;
-      const high = showOriginalStart ? Math.max(clip.start_ms, clip.original_start_ms) : clip.start_ms;
-      const span = Math.min(MAX_WINDOW_MS, Math.max(2000, high - low + 2000));
-      const centered = boundedRange((low + high - span) / 2, span, durationMs);
+      const centered = fineRange(clip.start_ms, durationMs);
       return centered.start === current.start && centered.end === current.end ? current : centered;
     });
   }, [clip.start_ms, clip.original_start_ms, durationMs, showOriginalStart]);
@@ -583,51 +581,53 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
 
     <div className="rounded-xl border border-[#405748] bg-[#1b2b23] p-3">
       <h4 className="mb-2 text-sm font-medium">Fine boundary views</h4>
-      {(["start", "end"] as Edge[]).map((which) => {
-        const detail = which === "start" ? startDetail : endDetail;
-        const range = which === "start" ? startDetailRange : endDetailRange;
-        const offset = which === "start" ? startOffset : endOffset;
-        const setOffset = which === "start" ? setStartOffset : setEndOffset;
-        const keyPair = which === "start" ? [",", "."] : ["[", "]"];
-        return <div key={which} className={which === "end" ? "mt-5 border-t line pt-5" : ""}>
-          <h5 className="mb-2 text-sm font-medium">{which === "start" ? "Start" : "End"} boundary</h5>
-          {detail.error ? <p role="alert" className="text-sm text-[#ffb3a8]">{detail.error} <button type="button" onClick={detail.retry} className="underline">Retry</button></p>
-            : !detail.window ? <p className="subtle py-8 text-center text-sm">Loading fine waveform…</p>
-              : <WaveformPlot label={`Fine ${which} boundary waveform; drag its boundary nub to fine-tune, or drag the waveform background to select a new range`}
-                range={range} waveform={detail.window} startMs={startMs} endMs={endMs}
-                playheadMs={playheadMs} editableEdge={which}
-                originalStartMs={showOriginalStart ? clip.original_start_ms : null}
-                disabled={controlsDisabled}
-                onPreviewRange={previewRange} onCommitRange={commitRange}
-                onPreviewEdge={previewEdge} onCommitEdge={commitEdge} onCancel={cancelPreview} />}
-          <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label={`Nudge ${which} boundary`}>
-            {[-100, -10, 10, 100].map((amount) => {
-              const key = `${Math.abs(amount) === 100 ? "⇧" : ""}${amount < 0 ? keyPair[0] : keyPair[1]}`;
-              return <button key={amount} type="button" onClick={() => nudge(which, amount)}
-                disabled={controlsDisabled} title={`Nudge ${which} boundary ${amount > 0 ? "+" : ""}${amount} ms (${key})`}
-                className="mono inline-flex items-center justify-center gap-2 rounded-lg bg-[#304538] px-3 py-2 text-sm hover:bg-[#3b5543] disabled:opacity-50">
-                <span>{amount > 0 ? "+" : ""}{amount} ms</span><kbd aria-hidden="true" className="shortcut-key">{key}</kbd>
-              </button>;
-            })}
-            {which === "start" && detectLeadingSilence && <button type="button"
-              onClick={() => void commitBounds(clip.original_start_ms, endMs)}
-              disabled={controlsDisabled || startMs === clip.original_start_ms || clip.original_start_ms > endMs - MIN_CLIP_MS}
-              title="Restore the start time from the SRT"
-              className="rounded-lg border line px-3 py-2 text-sm hover:bg-[#304538] disabled:opacity-50">
-              Use original start
-            </button>}
-          </div>
-          <label className="mt-3 block max-w-xs text-sm"><span className="subtle block text-xs">{which === "start" ? "Start" : "End"} offset from SRT (ms)</span>
-            <input type="text" inputMode="numeric" value={offset}
-              onChange={(event) => setOffset(event.target.value)}
-              onBlur={(event) => offsetBlur(which, event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
-                if (event.key === "Escape") { event.preventDefault(); cancelOffset(which, event.currentTarget); }
-              }} disabled={controlsDisabled} className="mt-1 w-full rounded-lg border line bg-[#101816] px-3 py-2 mono" />
-          </label>
-        </div>;
-      })}
+      <div className="grid gap-5 md:grid-cols-2">
+        {(["start", "end"] as Edge[]).map((which) => {
+          const detail = which === "start" ? startDetail : endDetail;
+          const range = which === "start" ? startDetailRange : endDetailRange;
+          const offset = which === "start" ? startOffset : endOffset;
+          const setOffset = which === "start" ? setStartOffset : setEndOffset;
+          const keyPair = which === "start" ? [",", "."] : ["[", "]"];
+          return <div key={which} className="min-w-0">
+            <h5 className="mb-2 text-sm font-medium">Fine {which}</h5>
+            {detail.error ? <p role="alert" className="text-sm text-[#ffb3a8]">{detail.error} <button type="button" onClick={detail.retry} className="underline">Retry</button></p>
+              : !detail.window ? <p className="subtle py-8 text-center text-sm">Loading fine waveform…</p>
+                : <WaveformPlot label={`Fine ${which} boundary waveform; drag its boundary nub to fine-tune, or drag the waveform background to select a new range`}
+                  range={range} waveform={detail.window} startMs={startMs} endMs={endMs}
+                  playheadMs={playheadMs} editableEdge={which}
+                  originalStartMs={showOriginalStart ? clip.original_start_ms : null}
+                  disabled={controlsDisabled}
+                  onPreviewRange={previewRange} onCommitRange={commitRange}
+                  onPreviewEdge={previewEdge} onCommitEdge={commitEdge} onCancel={cancelPreview} />}
+            <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label={`Nudge ${which} boundary`}>
+              {[-100, -10, 10, 100].map((amount) => {
+                const key = `${Math.abs(amount) === 100 ? "⇧" : ""}${amount < 0 ? keyPair[0] : keyPair[1]}`;
+                return <button key={amount} type="button" onClick={() => nudge(which, amount)}
+                  disabled={controlsDisabled} title={`Nudge ${which} boundary ${amount > 0 ? "+" : ""}${amount} ms (${key})`}
+                  className="mono inline-flex items-center justify-center gap-2 rounded-lg bg-[#304538] px-3 py-2 text-sm hover:bg-[#3b5543] disabled:opacity-50">
+                  <span>{amount > 0 ? "+" : ""}{amount} ms</span><kbd aria-hidden="true" className="shortcut-key">{key}</kbd>
+                </button>;
+              })}
+              {which === "start" && detectLeadingSilence && <button type="button"
+                onClick={() => void commitBounds(clip.original_start_ms, endMs)}
+                disabled={controlsDisabled || startMs === clip.original_start_ms || clip.original_start_ms > endMs - MIN_CLIP_MS}
+                title="Restore the start time from the SRT"
+                className="rounded-lg border line px-3 py-2 text-sm hover:bg-[#304538] disabled:opacity-50">
+                Use original start
+              </button>}
+            </div>
+            <label className="mt-3 block max-w-xs text-sm"><span className="subtle block text-xs">{which === "start" ? "Start" : "End"} offset from SRT (ms)</span>
+              <input type="text" inputMode="numeric" value={offset}
+                onChange={(event) => setOffset(event.target.value)}
+                onBlur={(event) => offsetBlur(which, event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
+                  if (event.key === "Escape") { event.preventDefault(); cancelOffset(which, event.currentTarget); }
+                }} disabled={controlsDisabled} className="mt-1 w-full rounded-lg border line bg-[#101816] px-3 py-2 mono" />
+            </label>
+          </div>;
+        })}
+      </div>
       <div className="mt-4 grid gap-2 border-t line pt-3 text-xs sm:grid-cols-2">
         <span><span className="subtle">Current start</span> <strong className="mono ml-1">{formatClock(startMs)}</strong> <span className="subtle mono">({signed(startMs - clip.original_start_ms)})</span></span>
         <span><span className="subtle">Current end</span> <strong className="mono ml-1">{formatClock(endMs)}</strong> <span className="subtle mono">({signed(endMs - clip.original_end_ms)})</span></span>
