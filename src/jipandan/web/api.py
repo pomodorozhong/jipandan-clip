@@ -208,6 +208,18 @@ def create_app(
     def get_transcription(job_id: str):
         return app.state.service.transcription(job_id)
 
+    @app.get("/api/transcriptions/{job_id}/log")
+    def get_transcription_log(job_id: str):
+        job = app.state.service.transcription(job_id)
+        log_file = Path(job["log_file"])
+        if not log_file.is_file():
+            raise HTTPException(status_code=404, detail="Transcription log is not available yet")
+        return FileResponse(
+            log_file,
+            media_type="text/plain",
+            filename=f"transcription-{job_id}.log",
+        )
+
     @app.post("/api/transcriptions/{job_id}/retry")
     def retry_transcription(job_id: str):
         return app.state.service.retry_transcription(job_id)

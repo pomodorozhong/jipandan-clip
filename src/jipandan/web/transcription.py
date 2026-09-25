@@ -9,9 +9,11 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -54,7 +56,11 @@ class TranscriptionJob:
                 lines = handle.read().decode("utf-8", errors="replace").splitlines()[-20:]
         except FileNotFoundError:
             lines = []
-        return {**self.payload(), "log_tail": lines}
+        return {
+            **self.payload(),
+            "log_tail": lines,
+            "log_file": str(self.log.resolve()),
+        }
 
 
 class TranscriptionJobs:
@@ -145,6 +151,10 @@ class TranscriptionJobs:
         settings_path = job.directory / "settings.json"
         settings_path.write_text(json.dumps(job.settings), encoding="utf-8")
         with job.log.open("w", encoding="utf-8") as log:
+            started = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            print(f"[{started}] Transcription job {job.id} started", file=log, flush=True)
+            print(f"Audio file: {job.audio}", file=log, flush=True)
+            print(f"Settings file: {settings_path}", file=log, flush=True)
             process = subprocess.Popen(
                 [sys.executable, "-u", "-m", "jipandan.web.transcribe_worker",
                  str(job.audio), str(job.output), str(settings_path)],
@@ -176,7 +186,9 @@ class TranscriptionJobs:
             if code != 0:
                 lines = job.snapshot()["log_tail"]
                 detail = next((line for line in reversed(lines)
-                               if "Error:" in line or "No Metal device" in line), "")
+                               if any(marker in line for marker in (
+                                   "Error:", "Exception:", "ValueError:", "No Metal device",
+                               ))), "")
                 raise RuntimeError(
                     f"Whisper exited with status {code}. "
                     f"{detail[:300] if detail else 'See the job log for details.'}"
@@ -196,6 +208,19 @@ class TranscriptionJobs:
                 job.finished_at = time.time()
                 self._write(job)
         except Exception as exc:
+            try:
+                with job.log.open("a", encoding="utf-8") as log:
+                    failed = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                    print(
+                        f"\n[{failed}] Supervisor failure: {type(exc).__name__}: {exc}",
+                        file=log,
+                        flush=True,
+                    )
+                    traceback.print_exception(exc, file=log)
+                    log.flush()
+                    os.fsync(log.fileno())
+            except OSError:
+                pass
             with self._lock:
                 if job.state != "cancelled":
                     job.state = "failed"

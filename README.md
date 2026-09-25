@@ -25,6 +25,7 @@ uv run jipandan-web raw.mp3
 You can also run `uv run jipandan-web` first and choose an audio file in the browser. The server listens on loopback only. The built interface ships with the Python package, so running the GUI does not require a separate frontend server or a manual build.
 
 The GUI can transcribe audio, review and trim clips, compare rendered export previews, and save collision-safe MP3s. Session state is saved beside the audio.
+Each transcription keeps its full worker output and traceback in `tmp/web-transcriptions/<job-id>/run.log`; the Transcription screen shows the log path and offers a download link. Zero-duration segments are omitted from the SRT and listed in that log.
 
 To rebuild the frontend while developing it, run:
 

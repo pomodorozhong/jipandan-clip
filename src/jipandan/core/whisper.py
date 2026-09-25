@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import math
+import sys
 import tempfile
 import threading
 from pathlib import Path
@@ -89,12 +90,81 @@ def transcribe_to_text(
         max_context=max_context,
         entropy_thold=entropy_thold,
     )
+    print(f"Whisper model repository: {model_repo}", file=sys.stderr, flush=True)
     result = mlx_whisper.transcribe(
         str(input_audio),
         path_or_hf_repo=model_repo,
         **transcribe_kwargs,
     )
     segments = result.get("segments", [])
+    if not segments:
+        raise ValueError("Transcription returned no segments")
+
+    invalid_times: list[str] = []
+    zero_duration: list[str] = []
+    usable_segments: list[dict] = []
+    for index, segment in enumerate(segments, start=1):
+        raw_start = segment.get("start")
+        raw_end = segment.get("end")
+        try:
+            start = float(raw_start)
+            end = float(raw_end)
+        except (TypeError, ValueError, OverflowError) as exc:
+            invalid_times.append(
+                f"segment={index} start={raw_start!r} end={raw_end!r} "
+                f"issue=not numeric ({type(exc).__name__})"
+            )
+            continue
+        issues = []
+        if not math.isfinite(start) or not math.isfinite(end):
+            issues.append("times must be finite")
+        if start < 0:
+            issues.append("start must be nonnegative")
+        if end < start:
+            issues.append("end must not precede start")
+        if issues:
+            invalid_times.append(
+                f"segment={index} start={start!r} end={end!r} "
+                f"issue={'; '.join(issues)}"
+            )
+            continue
+        if end == start:
+            zero_duration.append(
+                f"segment={index} start={start!r} end={end!r} "
+                "issue=zero duration"
+            )
+            continue
+        if output_format == "srt" and round(end * 1000) <= round(start * 1000):
+            zero_duration.append(
+                f"segment={index} start={start!r} end={end!r} "
+                "issue=duration rounds to zero milliseconds in SRT"
+            )
+            continue
+        usable_segments.append(segment)
+
+    if zero_duration:
+        print(
+            f"TRANSCRIPTION_ZERO_DURATION_FILTER: skipped {len(zero_duration)} segment(s)",
+            file=sys.stderr,
+            flush=True,
+        )
+        for detail in zero_duration:
+            print(f"  {detail}", file=sys.stderr, flush=True)
+    if invalid_times:
+        print(
+            f"TRANSCRIPTION_TIMING_DIAGNOSTIC: {len(invalid_times)} invalid segment(s)",
+            file=sys.stderr,
+            flush=True,
+        )
+        for detail in invalid_times:
+            print(f"  {detail}", file=sys.stderr, flush=True)
+        raise ValueError(
+            "Transcription contains invalid segment times; "
+            "see run.log for segment details"
+        )
+    segments = usable_segments
+    if not segments:
+        raise ValueError("Transcription returned no usable segments after zero-duration filtering")
 
     output_text.parent.mkdir(parents=True, exist_ok=True)
     temporary_path: Path | None = None
@@ -104,13 +174,9 @@ def transcribe_to_text(
             prefix=f".{output_text.name}.", suffix=".tmp", delete=False,
         ) as f:
             temporary_path = Path(f.name)
-            if not segments:
-                raise ValueError("Transcription returned no segments")
             for segment in segments:
                 start = float(segment["start"])
                 end = float(segment["end"])
-                if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
-                    raise ValueError("Transcription contains invalid segment times")
                 if not str(segment["text"]).strip():
                     raise ValueError("Transcription contains an empty segment")
             if output_format == "srt":

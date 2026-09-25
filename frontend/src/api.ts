@@ -64,6 +64,7 @@ export interface TranscriptionJob {
   started_at: number | null;
   finished_at: number | null;
   log_tail: string[];
+  log_file: string;
 }
 
 export interface WaveformWindow {
