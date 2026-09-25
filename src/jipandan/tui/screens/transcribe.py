@@ -110,7 +110,7 @@ class TranscribeWizardScreen(Screen):
         language: str | None = None,
         temperature: float = 0.0,
         max_context: int = 0,
-        entropy_thold: float = 3.0,
+        entropy_thold: float = 2.4,
     ) -> None:
         super().__init__()
         self.audio = audio
@@ -151,7 +151,7 @@ class TranscribeWizardScreen(Screen):
                     yield Label("Max context:", classes="arg-label")
                     yield Input(str(self.max_context), id="max_context")
                 with Horizontal(id="row-entropy_thold", classes="arg-row"):
-                    yield Label("Entropy thold:", classes="arg-label")
+                    yield Label("Comp. ratio:", classes="arg-label")
                     yield Input(str(self.entropy_thold), id="entropy_thold")
             with Vertical(id="log-panel"):
                 yield Label("Verbose output", id="log-title")
@@ -181,7 +181,7 @@ class TranscribeWizardScreen(Screen):
             language = language_raw or None
             temperature = float(self.query_one("#temperature", Input).value.strip() or "0.0")
             max_context = int(float(self.query_one("#max_context", Input).value.strip() or "0"))
-            entropy_thold = float(self.query_one("#entropy_thold", Input).value.strip() or "3.0")
+            entropy_thold = float(self.query_one("#entropy_thold", Input).value.strip() or "2.4")
         except Exception as exc:
             self.query_one("#args-preview", Static).update(f"Invalid arguments: {exc}")
             return
@@ -300,7 +300,7 @@ class TranscribeWizardScreen(Screen):
             language = language_raw or None
             temperature = float(self.query_one("#temperature", Input).value.strip() or "0.0")
             max_context = int(float(self.query_one("#max_context", Input).value.strip() or "0"))
-            entropy_thold = float(self.query_one("#entropy_thold", Input).value.strip() or "3.0")
+            entropy_thold = float(self.query_one("#entropy_thold", Input).value.strip() or "2.4")
 
             repo, kwargs = describe_transcribe_call(
                 model_name=model,
