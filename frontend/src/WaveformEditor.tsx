@@ -547,13 +547,13 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
       onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} />
     <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
       <div className="flex flex-wrap gap-2">
+        <button type="button" onClick={() => void replay()} title="Replay from start (Space)"
+          className="inline-flex items-center gap-2 rounded-lg bg-[#b7d69d] px-3 py-2 text-sm font-medium text-[#1b291f] hover:bg-[#c8e5af]">
+          <span aria-hidden="true" className="text-base leading-none">↻</span><span>Replay from start</span><kbd aria-hidden="true" className="shortcut-key">Space</kbd>
+        </button>
         <button type="button" onClick={() => void play()} className="soft-surface inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm"
           aria-label={playing ? "Pause audio" : "Play clip"} title="Play or pause (Shift+Space)">
-          <span>{playing ? "Pause" : "Play clip"}</span><kbd aria-hidden="true" className="shortcut-key">Shift+Space</kbd>
-        </button>
-        <button type="button" onClick={() => void replay()} title="Replay from start (Space)"
-          className="soft-surface inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm">
-          <span>Replay from start</span><kbd aria-hidden="true" className="shortcut-key">Space</kbd>
+          <span aria-hidden="true" className="text-xs leading-none">{playing ? "❚❚" : "▶"}</span><span>{playing ? "Pause" : "Play clip"}</span><kbd aria-hidden="true" className="shortcut-key">Shift+Space</kbd>
         </button>
         <button type="button" onClick={() => void audition("start")} className="soft-surface rounded-lg px-3 py-2 text-sm">Hear start</button>
         <button type="button" onClick={() => void audition("end")} className="soft-surface rounded-lg px-3 py-2 text-sm">Hear end</button>
