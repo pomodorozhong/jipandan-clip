@@ -58,7 +58,8 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
     let alive = true;
     const timer = window.setInterval(() => {
       void api<PreviewJob>(`/previews/${job.id}`).then((next) => {
-        if (alive) setJob(next);
+        if (alive) setJob((previous) => previous && previous.id === next.id && previous.waveform
+          ? { ...next, waveform: previous.waveform } : next);
       }).catch((cause) => {
         if (alive) setError(cause instanceof Error ? cause.message : String(cause));
       });
@@ -93,17 +94,24 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
     job.stop_threshold_db !== (mode === "as_is" ? -50 : stop) ||
     job.title !== title.trim()
   ));
+  const waveformStale = Boolean(job && (
+    job.stale || job.start_ms !== clip.start_ms || job.end_ms !== clip.end_ms ||
+    job.clip_title !== clip.title || job.mode !== mode ||
+    job.start_threshold_db !== (mode === "as_is" ? -40 : start) ||
+    job.stop_threshold_db !== (mode === "as_is" ? -50 : stop)
+  ));
   const referenceStale = Boolean(referenceJob && (
     referenceJob.stale || referenceJob.start_ms !== clip.start_ms ||
     referenceJob.end_ms !== clip.end_ms || referenceJob.clip_title !== clip.title
   ));
   const candidateReady = Boolean(job?.state === "completed" && !stale && job.duration_ms);
+  const waveformReady = Boolean(job?.state === "completed" && !waveformStale && job.duration_ms);
   const referenceReady = Boolean(referenceJob?.state === "completed" && !referenceStale && referenceJob.duration_ms);
   const selectedDuration = clip.end_ms - clip.start_ms;
   const referenceDuration = referenceReady ? referenceJob?.duration_ms ?? selectedDuration : selectedDuration;
-  const candidateDuration = candidateReady ? job?.duration_ms ?? 0 : 0;
+  const candidateDuration = waveformReady ? job?.duration_ms ?? 0 : 0;
   const sharedPeak = Math.max(peak(referenceReady ? referenceJob?.waveform ?? null : null),
-    peak(candidateReady ? job?.waveform ?? null : null));
+    peak(waveformReady ? job?.waveform ?? null : null));
 
   function chooseMode(next: ExportMode) {
     setMode(next);
@@ -148,7 +156,6 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
     }
     const delay = candidateWasOpen.current ? 450 : 0;
     candidateWasOpen.current = true;
-    candidatePlayer.current?.pause();
     setError("");
     if (!validThresholds || !title.trim()) {
       setRequesting(false);
@@ -163,7 +170,8 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
         stop_threshold_db: mode === "as_is" ? -50 : stop,
         title: title.trim(),
       }, controller.signal).then((next) => {
-        if (!controller.signal.aborted) setJob(next);
+        if (!controller.signal.aborted) setJob((previous) => previous && previous.id === next.id && previous.waveform
+          ? { ...next, waveform: previous.waveform } : next);
       }).catch((cause) => {
         if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : String(cause));
       }).finally(() => {

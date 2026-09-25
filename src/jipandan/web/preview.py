@@ -23,7 +23,7 @@ from jipandan.core.models import ClipCandidate
 from jipandan.core.srt import srt_time_to_seconds
 from jipandan.core.waveform_envelope import build_envelope_from_audio_slice
 
-PREVIEW_CACHE_VERSION = 1
+PREVIEW_CACHE_VERSION = 2
 PREVIEW_WAVEFORM_BUCKETS = 400
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ class PreviewJobs:
     ) -> PreviewJob:
         identity = self.source_identity(audio)
         normalized_title = title.strip()
-        cache_key = self._cache_key(audio, identity, candidate, options, normalized_title)
+        cache_key = self._cache_key(audio, identity, candidate, options)
         with self._lock:
             existing_id = self._jobs_by_key.get(cache_key)
             if existing_id is not None:
@@ -93,8 +93,11 @@ class PreviewJobs:
                         reusable = existing.state in {"queued", "running"} or (
                             existing.state == "completed" and existing.output.is_file()
                         )
-                    if reusable:
-                        return existing
+                        if reusable:
+                            # The title affects the proposed export filename, not the rendered
+                            # audio or waveform. Reuse the render and update its export label.
+                            existing.title = normalized_title
+                            return existing
 
             job_id = uuid.uuid4().hex
             job = PreviewJob(
@@ -120,7 +123,7 @@ class PreviewJobs:
     @staticmethod
     def _cache_key(
         audio: Path, identity: tuple[int, int], candidate: ClipCandidate,
-        options: ExportOptions, title: str,
+        options: ExportOptions,
     ) -> str:
         inputs = {
             "version": PREVIEW_CACHE_VERSION,
@@ -132,7 +135,6 @@ class PreviewJobs:
             "clip_duration": candidate.duration,
             "clip_title": candidate.title,
             "original_start": candidate.original_start,
-            "export_title": title,
             "mode": options.mode,
             "start_threshold_db": float(options.start_threshold_db),
             "stop_threshold_db": float(options.stop_threshold_db),
