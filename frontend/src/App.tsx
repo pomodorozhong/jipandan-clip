@@ -54,7 +54,7 @@ function formatDuration(ms: number): string {
 }
 
 function visibleClips(
-  clips: Clip[], filter: Filter, query: string, hideProcessed: boolean,
+  clips: Clip[], filter: Filter, query: string,
   allStatusFilter: AllStatusFilter = "all",
 ): Clip[] {
   const needle = query.trim().normalize("NFKC").toLocaleLowerCase();
@@ -62,7 +62,6 @@ function visibleClips(
     if (filter === "unsorted" && clip.status !== "pending") return false;
     if (filter !== "unsorted" && filter !== "all" && clip.status !== filter) return false;
     if (filter === "all" && allStatusFilter !== "all" && clip.status !== allStatusFilter) return false;
-    if (hideProcessed && (clip.status === "exported" || clip.status === "skipped")) return false;
     if (needle && !clip.title.normalize("NFKC").toLocaleLowerCase().includes(needle)) return false;
     return true;
   });
@@ -118,7 +117,6 @@ export default function App() {
   const [allStatusFilter, setAllStatusFilter] = useState<AllStatusFilter>("all");
   const [allOrder, setAllOrder] = useState<AllOrder>("clip-asc");
   const [query, setQuery] = useState("");
-  const [hideProcessed, setHideProcessed] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [error, setError] = useState("");
@@ -171,14 +169,13 @@ export default function App() {
     if (saved) {
       try {
         const preferences = JSON.parse(saved) as {
-          filter?: Filter; selectedId?: string; hideProcessed?: boolean;
+          filter?: Filter; selectedId?: string;
           allStatusFilter?: AllStatusFilter; allOrder?: AllOrder;
         };
         if (preferences.filter && filters.some((item) => item.key === preferences.filter)) {
           setFilter(preferences.filter);
         } else if (session.counts.pending === 0) setFilter("all");
         setSelectedId(preferences.selectedId ?? null);
-        setHideProcessed(preferences.hideProcessed ?? false);
         if (preferences.allStatusFilter === "all" || Object.hasOwn(labels, preferences.allStatusFilter ?? "")) {
           setAllStatusFilter(preferences.allStatusFilter!);
         }
@@ -194,9 +191,9 @@ export default function App() {
   useEffect(() => {
     if (!session?.audio) return;
     localStorage.setItem(`jipandan-review:${session.audio}`, JSON.stringify({
-      filter, selectedId, hideProcessed, allStatusFilter, allOrder,
+      filter, selectedId, allStatusFilter, allOrder,
     }));
-  }, [session?.audio, filter, selectedId, hideProcessed, allStatusFilter, allOrder]);
+  }, [session?.audio, filter, selectedId, allStatusFilter, allOrder]);
 
   useEffect(() => {
     if (!settings.detectLeadingSilence || !session?.audio || session.needs_transcription ||
@@ -258,7 +255,7 @@ export default function App() {
   }, [session?.audio, session?.needs_transcription, leadingSilenceJob?.id, leadingSilenceJob?.state]);
 
   const visible = useMemo(() => {
-    const clips = visibleClips(session?.candidates ?? [], filter, query, hideProcessed, allStatusFilter);
+    const clips = visibleClips(session?.candidates ?? [], filter, query, allStatusFilter);
     if (filter !== "all") return clips;
     const compareClipId = (a: Clip, b: Clip) => a.index - b.index || a.suffix - b.suffix;
     return clips.sort((a, b) => {
@@ -268,7 +265,7 @@ export default function App() {
       if (allOrder === "title-asc") return a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: "base" }) || compareClipId(a, b);
       return compareClipId(a, b);
     });
-  }, [session?.candidates, filter, query, hideProcessed, allStatusFilter, allOrder]);
+  }, [session?.candidates, filter, query, allStatusFilter, allOrder]);
   const effectiveSelectedId = visible.some((clip) => clip.clip_id === selectedId)
     ? selectedId : (visible[0]?.clip_id ?? null);
   const selected = session?.candidates.find((clip) => clip.clip_id === effectiveSelectedId) ?? null;
@@ -311,7 +308,7 @@ export default function App() {
     let nextSelection = effectiveSelectedId;
     if (selected && typeof change.status === "string") {
       const changed = { ...selected, status: change.status as Status };
-      if (visibleClips([changed], filter, query, hideProcessed, allStatusFilter).length === 0) {
+      if (visibleClips([changed], filter, query, allStatusFilter).length === 0) {
         nextSelection = visible[selectedPosition + 1]?.clip_id ??
           visible[selectedPosition - 1]?.clip_id ?? effectiveSelectedId;
       }
@@ -319,7 +316,7 @@ export default function App() {
     void mutate(() => api<Session>(`/clips/${encodeURIComponent(effectiveSelectedId)}`, "PATCH", {
       expected_revision: session.revision, ...change,
     })).then((next) => { if (next) setSelectedId(nextSelection); });
-  }, [session, effectiveSelectedId, selected, filter, query, hideProcessed, allStatusFilter,
+  }, [session, effectiveSelectedId, selected, filter, query, allStatusFilter,
     visible, selectedPosition, mutate]);
 
   const moveSelection = useCallback((delta: number) => {
@@ -577,10 +574,6 @@ export default function App() {
                 </select>
               </label>
             </div>}
-            <label className="subtle mt-3 flex items-center gap-2 text-xs">
-              <input type="checkbox" checked={hideProcessed} onChange={(event) => setHideProcessed(event.target.checked)} />
-              Hide exported and skipped
-            </label>
           </div>
           <div ref={clipListRef} className="panel-scroll min-h-0 flex-1 overflow-auto" role="listbox" aria-label="Clips">
             {visible.length === 0 ? <p className="subtle px-5 py-8 text-sm">No clips match this view.</p> : visible.map((clip) => {
@@ -677,11 +670,10 @@ export default function App() {
           } else if (!advance) {
             setSelectedId(selected.clip_id);
             const exportedClip = next.candidates.find((clip) => clip.clip_id === selected.clip_id);
-            if (exportedClip && !visibleClips([exportedClip], filter, query, hideProcessed, allStatusFilter).length) {
+            if (exportedClip && !visibleClips([exportedClip], filter, query, allStatusFilter).length) {
               setFilter("all");
               setAllStatusFilter("all");
-              setHideProcessed(false);
-              if (!visibleClips([exportedClip], "all", query, false, "all").length) setQuery("");
+              if (!visibleClips([exportedClip], "all", query, "all").length) setQuery("");
             }
           }
         }} />}
