@@ -122,6 +122,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
+  const [showClipMenu, setShowClipMenu] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [showHelp, setShowHelp] = useState(false);
   const [showJump, setShowJump] = useState(false);
@@ -139,6 +140,7 @@ export default function App() {
   const loadedDetectionAdjustment = useRef<{ id: string; adjusted: number } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
+  const clipMenuRef = useRef<HTMLDivElement>(null);
   const detailScrollRef = useRef<HTMLDivElement>(null);
   const clipListRef = useRef<HTMLDivElement>(null);
 
@@ -363,6 +365,24 @@ export default function App() {
     session, selected, effectiveSelectedId, mutate, showSettings]);
 
   useEffect(() => { if (editingTitle) titleRef.current?.focus(); }, [editingTitle]);
+
+  useEffect(() => {
+    if (!showClipMenu) return;
+    function closeMenu(event: MouseEvent) {
+      if (!clipMenuRef.current?.contains(event.target as Node)) setShowClipMenu(false);
+    }
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") { event.preventDefault(); setShowClipMenu(false); }
+    }
+    document.addEventListener("mousedown", closeMenu);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeMenu);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [showClipMenu]);
+
+  useEffect(() => { setShowClipMenu(false); }, [effectiveSelectedId]);
 
   async function openAudio(event: React.FormEvent) {
     event.preventDefault();
@@ -613,21 +633,44 @@ export default function App() {
                   }} aria-label="Clip title" className="min-w-0 flex-1 rounded-lg border line bg-[#101816] px-3 py-2" />
                 <ActionButton onClick={() => void saveTitle()} disabled={busy || !titleDraft.trim()} tone="accent">Save</ActionButton>
                 <ActionButton onClick={() => setEditingTitle(false)}>Cancel</ActionButton>
-              </div> : <div className="flex items-start gap-3">
+              </div> : <div className="flex flex-wrap items-start gap-3">
                 <h2 className="min-w-0 flex-1 break-words text-2xl font-semibold leading-snug">{selected.title}</h2>
-                <ActionButton onClick={() => { setTitleDraft(selected.title); setEditingTitle(true); }} title="Rename (R)" shortcut="R">Rename</ActionButton>
+                <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                  <button type="button" onClick={() => moveSelection(-1)} disabled={selectedPosition <= 0}
+                    aria-label="Previous clip (K)" title="Previous clip (K)"
+                    className="soft-surface inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium hover:bg-[#354b3b]">
+                    <span aria-hidden="true">←</span><kbd aria-hidden="true" className="shortcut-key">K</kbd>
+                  </button>
+                  <button type="button" onClick={() => moveSelection(1)} disabled={selectedPosition >= visible.length - 1}
+                    aria-label="Next clip (J)" title="Next clip (J)"
+                    className="soft-surface inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium hover:bg-[#354b3b]">
+                    <span aria-hidden="true">→</span><kbd aria-hidden="true" className="shortcut-key">J</kbd>
+                  </button>
+                  <ActionButton onClick={() => setShowExportModal(true)} title="Open export preview (E)" shortcut="E" tone="accent">Export</ActionButton>
+                  <div ref={clipMenuRef} className="relative">
+                    <button type="button" onClick={() => setShowClipMenu((open) => !open)}
+                      aria-label="More clip actions" aria-expanded={showClipMenu} aria-haspopup="menu" title="More clip actions"
+                      className="soft-surface rounded-lg px-3 py-2 text-sm font-medium hover:bg-[#354b3b]">…</button>
+                    {showClipMenu && <div role="menu" aria-label="More clip actions"
+                      className="surface absolute right-0 top-full z-20 mt-1 min-w-40 rounded-lg p-1 shadow-xl">
+                      <button type="button" role="menuitem" onClick={() => {
+                        setShowClipMenu(false); setTitleDraft(selected.title); setEditingTitle(true);
+                      }} className="flex w-full items-center justify-between gap-4 rounded-md px-3 py-2 text-left text-sm hover:bg-[#304439]">
+                        Rename <kbd aria-hidden="true" className="shortcut-key">R</kbd>
+                      </button>
+                      <button type="button" role="menuitem" disabled={busy} onClick={() => {
+                        setShowClipMenu(false);
+                        if (session.revision === null) return;
+                        void mutate(() => api<Session>(`/clips/${encodeURIComponent(selected.clip_id)}/duplicate`, "POST", {
+                          expected_revision: session.revision,
+                        })).then((next) => { if (next?.created_clip_id) setSelectedId(next.created_clip_id); });
+                      }} className="flex w-full items-center justify-between gap-4 rounded-md px-3 py-2 text-left text-sm hover:bg-[#304439]">
+                        Duplicate <kbd aria-hidden="true" className="shortcut-key">D</kbd>
+                      </button>
+                    </div>}
+                  </div>
+                </div>
               </div>}
-              <div className="mt-2 flex flex-wrap gap-2">
-                <ActionButton onClick={() => moveSelection(-1)} disabled={selectedPosition <= 0} title="Previous clip (K)" shortcut="K">← Previous</ActionButton>
-                <ActionButton onClick={() => moveSelection(1)} disabled={selectedPosition >= visible.length - 1} title="Next clip (J)" shortcut="J">Next →</ActionButton>
-                <ActionButton onClick={() => setShowExportModal(true)} title="Open export preview (E)" shortcut="E">Export preview</ActionButton>
-                <ActionButton onClick={() => {
-                  if (session.revision === null) return;
-                  void mutate(() => api<Session>(`/clips/${encodeURIComponent(selected.clip_id)}/duplicate`, "POST", {
-                    expected_revision: session.revision,
-                  })).then((next) => { if (next?.created_clip_id) setSelectedId(next.created_clip_id); });
-                }} disabled={busy} title="Duplicate (D)" shortcut="D">Duplicate</ActionButton>
-              </div>
             </div>
             <div ref={detailScrollRef} className="panel-scroll min-h-0 flex-1 overflow-auto px-4 py-5 md:px-7">
               <div className="mb-4">
