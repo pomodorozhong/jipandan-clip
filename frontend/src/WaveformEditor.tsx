@@ -66,7 +66,7 @@ function useWaveform(clipId: string, range: TimeRange, buckets: number) {
 }
 
 function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, editableEdge,
-  originalStartMs, disabled, onPreview, onCommit, onCancel, onSeek }: {
+  originalStartMs, disabled, onPreviewRange, onCommitRange, onPreviewEdge, onCommitEdge, onCancel }: {
   label: string;
   range: TimeRange;
   waveform: WaveformWindow | null;
@@ -76,13 +76,14 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
   originalStartMs: number | null;
   editableEdge?: Edge;
   disabled: boolean;
-  onPreview: (edge: Edge, time: number) => void;
-  onCommit: (edge: Edge, time: number) => void;
+  onPreviewRange: (start: number, end: number) => void;
+  onCommitRange: (start: number, end: number) => void;
+  onPreviewEdge: (edge: Edge, time: number) => void;
+  onCommitEdge: (edge: Edge, time: number) => void;
   onCancel: () => void;
-  onSeek: (time: number) => void;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
-  const dragging = useRef<Edge | null>(null);
+  const dragging = useRef<{ kind: "range"; start: number } | { kind: "edge"; edge: Edge } | null>(null);
   const points = useMemo(() => {
     if (!waveform?.mins.length) return "";
     const count = Math.min(waveform.mins.length, waveform.maxs.length);
@@ -110,32 +111,48 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
   }
 
   function pointerDown(event: React.PointerEvent<SVGSVGElement>) {
-    if (disabled) return;
+    if (disabled || event.button !== 0) return;
     const point = position(event.clientX);
-    const startDistance = inRange(startMs) ? Math.abs(point.x - startX / PLOT_WIDTH * event.currentTarget.clientWidth) : Infinity;
-    const endDistance = inRange(endMs) ? Math.abs(point.x - endX / PLOT_WIDTH * event.currentTarget.clientWidth) : Infinity;
-    const nearest: Edge = editableEdge ?? (startDistance <= endDistance ? "start" : "end");
-    const distance = nearest === "start" ? startDistance : endDistance;
-    if (distance <= 18) {
-      event.preventDefault();
-      dragging.current = nearest;
-      event.currentTarget.setPointerCapture(event.pointerId);
-      onPreview(nearest, point.time);
+    const startDistance = inRange(startMs)
+      ? Math.abs(point.x - startX / PLOT_WIDTH * event.currentTarget.clientWidth)
+      : Infinity;
+    const endDistance = inRange(endMs)
+      ? Math.abs(point.x - endX / PLOT_WIDTH * event.currentTarget.clientWidth)
+      : Infinity;
+    const nearestEdge: Edge = editableEdge ?? (startDistance <= endDistance ? "start" : "end");
+    const edgeDistance = nearestEdge === "start" ? startDistance : endDistance;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    if (edgeDistance <= 18) {
+      dragging.current = { kind: "edge", edge: nearestEdge };
+      onPreviewEdge(nearestEdge, point.time);
     } else {
-      onSeek(point.time);
+      dragging.current = { kind: "range", start: point.time };
+      onPreviewRange(point.time, endMs);
     }
   }
 
   function pointerMove(event: React.PointerEvent<SVGSVGElement>) {
-    if (dragging.current) onPreview(dragging.current, position(event.clientX).time);
+    const drag = dragging.current;
+    if (!drag) return;
+    const point = position(event.clientX);
+    if (drag.kind === "edge") onPreviewEdge(drag.edge, point.time);
+    else onPreviewRange(drag.start, point.time);
   }
 
   function pointerUp(event: React.PointerEvent<SVGSVGElement>) {
-    const edge = dragging.current;
-    if (!edge) return;
+    const drag = dragging.current;
+    if (!drag) return;
     dragging.current = null;
-    event.currentTarget.releasePointerCapture(event.pointerId);
-    onCommit(edge, position(event.clientX).time);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    const time = position(event.clientX).time;
+    if (drag.kind === "edge") onCommitEdge(drag.edge, time);
+    else {
+      onPreviewRange(drag.start, time);
+      onCommitRange(drag.start, time);
+    }
   }
 
   function pointerCancel() {
@@ -151,7 +168,7 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
       className="block h-36 w-full cursor-crosshair rounded-lg border border-[#46584c] bg-[#101a17] touch-none">
       {[250, 500, 750].map((x) => <line key={x} x1={x} y1="0" x2={x} y2={PLOT_HEIGHT} stroke="#526259" strokeWidth="1" opacity="0.35" />)}
       <line x1="0" y1={PLOT_HEIGHT / 2} x2={PLOT_WIDTH} y2={PLOT_HEIGHT / 2} stroke="#46584c" strokeWidth="1" />
-      {inRange(startMs) && inRange(endMs) && <rect x={startX} y="0" width={Math.max(0, endX - startX)} height={PLOT_HEIGHT} fill="#b7d69d" opacity="0.08" />}
+      {inRange(startMs) && inRange(endMs) && <rect x={Math.min(startX, endX)} y="0" width={Math.abs(endX - startX)} height={PLOT_HEIGHT} fill="#b7d69d" opacity="0.08" />}
       {points && <path d={points} stroke="#a8c9b0" strokeWidth="1.5" fill="none" />}
       {originalStartMs !== null && inRange(originalStartMs) && <g>
         <title>Original SRT start</title>
@@ -286,12 +303,16 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
       : [currentStart, clamp(position, currentStart + MIN_CLIP_MS, durationMs)];
   }
 
-  function previewEdge(edgeToMove: Edge, time: number) {
-    const [nextStart, nextEnd] = boundsFor(edgeToMove, time);
+  function previewRange(nextStart: number, nextEnd: number) {
     setStartMs(nextStart);
     setEndMs(nextEnd);
     setStartOffset(String(nextStart - clip.original_start_ms));
     setEndOffset(String(nextEnd - clip.original_end_ms));
+  }
+
+  function previewEdge(edgeToMove: Edge, time: number) {
+    const [nextStart, nextEnd] = boundsFor(edgeToMove, time);
+    previewRange(nextStart, nextEnd);
   }
 
   async function commitBounds(nextStart: number, nextEnd: number) {
@@ -334,6 +355,10 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
 
   function commitEdge(edgeToMove: Edge, time: number) {
     const [nextStart, nextEnd] = boundsFor(edgeToMove, time);
+    void commitBounds(nextStart, nextEnd);
+  }
+
+  function commitRange(nextStart: number, nextEnd: number) {
     void commitBounds(nextStart, nextEnd);
   }
 
@@ -515,12 +540,12 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
       </div>
       {overview.error ? <p role="alert" className="text-sm text-[#ffb3a8]">{overview.error} <button type="button" onClick={overview.retry} className="underline">Retry</button></p>
         : !overview.window ? <p className="subtle py-8 text-center text-sm">Loading waveform…</p>
-          : <WaveformPlot label="Overview waveform; drag the start or end handle, or click to seek"
+          : <WaveformPlot label="Overview waveform; drag a boundary handle to fine-tune it, or drag the waveform to select a new range"
             range={overviewRange} waveform={overview.window} startMs={startMs} endMs={endMs}
             playheadMs={playheadMs} originalStartMs={showOriginalStart ? clip.original_start_ms : null}
-            disabled={controlsDisabled} onPreview={previewEdge}
-            onCommit={commitEdge} onCancel={cancelPreview} onSeek={seek} />}
-      <p className="subtle mt-1 text-xs">Drag the amber start or pink end handle. Click elsewhere in the waveform to seek.</p>
+            disabled={controlsDisabled} onPreviewRange={previewRange} onCommitRange={commitRange}
+            onPreviewEdge={previewEdge} onCommitEdge={commitEdge} onCancel={cancelPreview} />}
+      <p className="subtle mt-1 text-xs">Drag the amber or pink handle to adjust one boundary. Drag elsewhere from the new start to the new end. Use Play or Replay to audition.</p>
     </div>
 
     <div className="rounded-xl border border-[#405748] bg-[#1b2b23] p-3">
@@ -535,11 +560,13 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
           <h5 className="mb-2 text-sm font-medium">{which === "start" ? "Start" : "End"} boundary</h5>
           {detail.error ? <p role="alert" className="text-sm text-[#ffb3a8]">{detail.error} <button type="button" onClick={detail.retry} className="underline">Retry</button></p>
             : !detail.window ? <p className="subtle py-8 text-center text-sm">Loading fine waveform…</p>
-              : <WaveformPlot label={`Fine ${which} boundary waveform; drag the handle, or click to seek`}
+              : <WaveformPlot label={`Fine ${which} boundary waveform; drag its boundary handle to fine-tune, or drag elsewhere to select a new range`}
                 range={range} waveform={detail.window} startMs={startMs} endMs={endMs}
-                playheadMs={playheadMs} originalStartMs={showOriginalStart ? clip.original_start_ms : null}
-                editableEdge={which} disabled={controlsDisabled}
-                onPreview={previewEdge} onCommit={commitEdge} onCancel={cancelPreview} onSeek={seek} />}
+                playheadMs={playheadMs} editableEdge={which}
+                originalStartMs={showOriginalStart ? clip.original_start_ms : null}
+                disabled={controlsDisabled}
+                onPreviewRange={previewRange} onCommitRange={commitRange}
+                onPreviewEdge={previewEdge} onCommitEdge={commitEdge} onCancel={cancelPreview} />}
           <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label={`Nudge ${which} boundary`}>
             {[-100, -10, 10, 100].map((amount) => {
               const key = `${Math.abs(amount) === 100 ? "⇧" : ""}${amount < 0 ? keyPair[0] : keyPair[1]}`;
