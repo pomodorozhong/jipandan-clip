@@ -599,9 +599,9 @@ export default function App() {
 
         <section className={`${showDetailMobile ? "flex" : "hidden md:flex"} min-h-0 flex-col overflow-hidden`} aria-label="Clip details">
           {selected ? <>
-            <div className="shrink-0 border-b line px-4 py-4 md:px-7 md:py-5">
-              <button type="button" onClick={() => setShowDetailMobile(false)} className="accent mb-3 text-sm md:hidden">← Back to clips</button>
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+            <div className="shrink-0 border-b line px-4 py-2 md:px-7 md:py-3">
+              <button type="button" onClick={() => setShowDetailMobile(false)} className="accent mb-2 text-sm md:hidden">← Back to clips</button>
+              <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
                 <span className="accent mono text-sm font-semibold tracking-wider">CLIP #{selected.clip_id}</span>
                 <span className="subtle text-sm mono">{selectedPosition + 1} of {visible.length} in view</span>
               </div>
@@ -617,7 +617,7 @@ export default function App() {
                 <h2 className="min-w-0 flex-1 break-words text-2xl font-semibold leading-snug">{selected.title}</h2>
                 <ActionButton onClick={() => { setTitleDraft(selected.title); setEditingTitle(true); }} title="Rename (R)" shortcut="R">Rename</ActionButton>
               </div>}
-              <div className="mt-4 flex flex-wrap gap-2">
+              <div className="mt-2 flex flex-wrap gap-2">
                 <ActionButton onClick={() => moveSelection(-1)} disabled={selectedPosition <= 0} title="Previous clip (K)" shortcut="K">← Previous</ActionButton>
                 <ActionButton onClick={() => moveSelection(1)} disabled={selectedPosition >= visible.length - 1} title="Next clip (J)" shortcut="J">Next →</ActionButton>
                 <ActionButton onClick={() => setShowExportModal(true)} title="Open export preview (E)" shortcut="E">Export preview</ActionButton>
@@ -631,7 +631,6 @@ export default function App() {
             </div>
             <div ref={detailScrollRef} className="panel-scroll min-h-0 flex-1 overflow-auto px-4 py-5 md:px-7">
               <div className="mb-4">
-                <h3 className="subtle mb-3 text-xs font-semibold uppercase tracking-[.15em]">Classification</h3>
                 <div className="flex flex-wrap gap-2">
                   {(["group1", "group2", "skipped", "pending"] as Status[]).map((status) =>
                     <ActionButton key={status} tone={selected.status === status ? "accent" : "normal"}
