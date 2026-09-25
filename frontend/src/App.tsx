@@ -673,16 +673,24 @@ export default function App() {
               </div>}
             </div>
             <div ref={detailScrollRef} className="panel-scroll min-h-0 flex-1 overflow-auto px-4 py-5 md:px-7">
-              <div className="mb-4">
-                <div className="flex flex-wrap gap-2">
-                  {(["group1", "group2", "skipped", "pending"] as Status[]).map((status) =>
-                    <ActionButton key={status} tone={selected.status === status ? "accent" : "normal"}
-                      onClick={() => patchSelected({ status })} disabled={busy || selected.status === status}
-                      title={`${labels[status]}${status === "group1" ? " (1)" : status === "group2" ? " (2)" : status === "skipped" ? " (X)" : ""}`}
-                      shortcut={status === "group1" ? "1" : status === "group2" ? "2" : status === "skipped" ? "X" : undefined}>
-                      {labels[status]}
-                    </ActionButton>)}
-                </div>
+              <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
+                <label htmlFor="clip-status" className="font-medium">Status</label>
+                <span className="relative inline-flex">
+                  <select id="clip-status" value={selected.status} disabled={busy}
+                    onChange={(event) => patchSelected({ status: event.target.value as Status })}
+                    className="appearance-none rounded-lg border line bg-[#22312a] py-2 pl-3 pr-9 text-[#e7eee7] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b4e2b6]">
+                    {(["group1", "group2", "skipped", "pending"] as Status[]).map((status) =>
+                      <option key={status} value={status}>{labels[status]}</option>)}
+                    {selected.status === "exported" && <option value="exported">Exported</option>}
+                  </select>
+                  <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2"
+                    className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-[#9eafa3]">
+                    <path d="m4 6 4 4 4-4" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </span>
+                <span className="subtle inline-flex flex-wrap items-center gap-1.5 text-xs">
+                  Choose Group 1 <kbd className="shortcut-key">1</kbd>, Group 2 <kbd className="shortcut-key">2</kbd>, or Skipped <kbd className="shortcut-key">X</kbd>
+                </span>
               </div>
               <WaveformEditor key={selected.clip_id} clip={selected}
                 durationMs={session.duration_ms ?? selected.end_ms} audioSrc={audioUrl()} busy={busy}
