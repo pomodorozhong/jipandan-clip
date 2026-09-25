@@ -14,7 +14,25 @@ uv sync
 
 ## Usage
 
-### 1. TUI (recommended)
+### 1. Browser GUI (recommended)
+
+Open an audio file directly in the local browser interface:
+
+```bash
+uv run jipandan-web raw.mp3
+```
+
+You can also run `uv run jipandan-web` first and choose an audio file in the browser. The server listens on loopback only. The built interface ships with the Python package, so running the GUI does not require a separate frontend server or a manual build.
+
+The GUI can transcribe audio, review and trim clips, compare rendered export previews, and save collision-safe MP3s. Session state is saved beside the audio.
+
+To rebuild the frontend while developing it, run:
+
+```bash
+cd frontend && npm ci && npm run build
+```
+
+### 2. TUI
 
 Run the full pipeline in one interactive session.
 
@@ -32,7 +50,7 @@ If no SRT exists, transcription runs first. Then review clips in the TUI:
 
 Session state is saved to `{audio_stem}.jipandan.json`.
 
-### 2. Browser (via `jipandan-serve`)
+### 3. Browser terminal (via `jipandan-serve`)
 
 Use the browser UI if you prefer a web-based review session.
 
@@ -42,18 +60,7 @@ Pros: Asian IMEs are handled better by browsers. If you're having trouble typing
 uv run jipandan-serve raw.mp3
 ```
 
-### Local web GUI preview
-
-The new review screen is available for testing while the TUI remains the recommended full workflow. Build its frontend once, then launch the loopback server:
-
-```bash
-cd frontend && npm install && npm run build && cd ..
-uv run jipandan-web raw.mp3
-```
-
-The GUI now also supports local transcription jobs, rendered export previews, and collision-safe MP3 export. It is still in end-to-end review, so use a copy of a session for testing. The TUI remains the recommended workflow until that review is complete.
-
-### 3. CLI (legacy)
+### 4. CLI (legacy)
 
 ```bash
 # Transcribe audio into timestamped text

@@ -1,6 +1,6 @@
 # Checkpoint 5: finish a local web session
 
-**Status:** Build ready for owner review. The TUI remains the recommended interface until this checkpoint is accepted.
+**Status:** Approved by the owner on 2026-09-25. This end-to-end checkpoint is complete; the browser GUI is now the recommended interface.
 
 This build adds managed Whisper transcription with saved job state, recent logs, Cancel and Retry; it publishes a validated SRT only after success. The export modal now writes the MP3 from the exact rendered preview you heard, chooses a new filename on collision, and saves the clip as Exported. Use **Export** (`Enter`) to stay on the clip and reveal its file in Finder, or **Export & Next** (`⌘ Enter`) to open the next clip's preview without closing the modal. Job updates reconnect automatically and fall back to polling.
 

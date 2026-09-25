@@ -33,6 +33,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "jipandan.cli" = ["serve_templates/*.html"]
+"jipandan.web" = ["static/index.html", "static/assets/*"]
 
 [dependency-groups]
 dev = [

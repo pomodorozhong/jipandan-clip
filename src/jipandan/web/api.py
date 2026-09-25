@@ -70,6 +70,8 @@ def create_app(
     allowed_hosts: set[str] | None = None,
     allowed_origins: set[str] | None = None,
 ) -> FastAPI:
+    static_dir = Path(__file__).resolve().parent / "static"
+
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         try:
@@ -264,16 +266,17 @@ def create_app(
 
     @app.get("/", response_class=HTMLResponse)
     def index():
-        built = Path(__file__).resolve().parents[3] / "frontend" / "dist" / "index.html"
+        built = static_dir / "index.html"
         if built.exists():
             return FileResponse(built)
         return (
             "<!doctype html><html><head><meta charset='utf-8'><title>Jipandan</title></head>"
-            "<body><h1>Jipandan local GUI</h1><p>The review interface is being built. "
+            "<body><h1>Jipandan local GUI</h1><p>The web interface is not built. "
+            "From the repository, run <code>cd frontend &amp;&amp; npm ci &amp;&amp; npm run build</code>. "
             "The local API is available.</p></body></html>"
         )
 
-    assets = Path(__file__).resolve().parents[3] / "frontend" / "dist" / "assets"
+    assets = static_dir / "assets"
     if assets.exists():
         app.mount("/assets", StaticFiles(directory=assets), name="assets")
 

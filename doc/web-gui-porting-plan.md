@@ -2,7 +2,7 @@
 
 Build a local browser interface that can open audio, transcribe when needed, review and trim clips, and export MP3s without losing edits. Reuse the Python audio pipeline and keep the TUI available during migration.
 
-**Current state:** Phases 0–4A and checkpoints 1–4 are complete. The owner approved the rendered preview flow. Phase 4B now has transcription jobs and final export publication in a review build; [checkpoint 5](web-review-checkpoint-5.md) is ready for end-to-end owner review. The [review guide](your-web-gui-review-guide.md) covers that hands-on checkpoint.
+**Current state:** Phases 0–5 and checkpoints 1–5 are complete. The owner approved the end-to-end browser workflow at [checkpoint 5](web-review-checkpoint-5.md). The built frontend is included in the Python package and launches with `uv run jipandan-web [audio_path]`; the [review guide](your-web-gui-review-guide.md) records the completed checkpoints.
 
 ## Scope
 
@@ -20,7 +20,7 @@ Each checkpoint needs a runnable build, safe test copy, one launch instruction, 
 | 2. Try the review screen | End of Phase 2, before the waveform UI is built on it | Confirm the list, filters, search, marking, rename, bulk actions, and reload flow work naturally. |
 | 3. Try waveform editing — complete | End of Phase 3 | The owner approved the listening and trim flow. |
 | 4. Try rendered previews — complete | End of Phase 4A | The owner approved the rendered audio and interaction flow. |
-| 5. Finish a real session | End of Phase 4B, before cutover decisions | Confirm transcription through final exported MP3 works on representative audio, including one failure and retry. |
+| 5. Finish a real session — complete | End of Phase 4B, before cutover decisions | The owner approved transcription through final exported MP3, including failure and retry. |
 
 Treat feedback at any point as a change request for the active phase: record the observation, fix material workflow or audio problems, and offer the same task again when ready. Continue independent engineering while waiting, but do not lock in a dependent interaction or switch the recommended interface before its checkpoint is resolved. This keeps the owner's involvement focused on decisions and lived use rather than every implementation step.
 
@@ -181,15 +181,15 @@ After checkpoint 3's material waveform findings are resolved, build the three ex
 
 After checkpoint 4's material findings are resolved, add transcription settings/progress/retry, final export publication from the reviewed preview state, automatic collision-free filenames, output reveal, job event reconnect, and interrupted-job recovery. Keep a single clear job status and retry action in context. Before publishing, show the proposed output name and directory; after publishing, show the actual result. An existing MP3 must remain untouched.
 
-**Owner checkpoint 5:** Give the owner a safe end-to-end copy of the typical 0526 session and any difficult example they provide. Ask them to compare rendered previews with final MP3s, exercise a prepared failure and retry, verify automatic new naming on a collision, reopen the session, and judge whether they would use the GUI for the next real session. Fix wrong-audio, lost-work, and blocked-flow findings and repeat this checkpoint as needed before cutover.
+**Owner checkpoint 5 — complete:** The owner approved the end-to-end workflow, including transcription failure and retry, rendered preview and final export, filename collision handling, and session reload. See the [checkpoint 5 review record](web-review-checkpoint-5.md).
 
 **Gate:** Fresh audio can go from transcription to exported clip in one browser session. Tests cover failed and retried transcription, option changes during rendering, simultaneous previews, export failure, automatic filename collision handling without overwrite, and recovery after reload. The owner has listened to representative outputs and can complete the flow.
 
-### Phase 5 — Packaging and cutover
+### Phase 5 — Packaging and cutover — complete
 
-Evaluate the GUI against the owner's real workflow and recordings, verify macOS setup, document the new command, and package the built frontend with the Python app. Feature parity with the TUI is not a requirement; document any deliberate differences that matter to a user choosing an interface. Only change the README's recommended interface after the GUI meets the gates above. Retain `jipandan` and `jipandan-serve` while users migrate.
+The built frontend is packaged under `jipandan.web` and served from the installed Python package. The README documents the one-command launch and recommends the GUI after the approved end-to-end review. The TUI and `jipandan-serve` remain available during migration.
 
-**Gate:** A fresh install can launch the GUI with one documented command; bundled assets load without a separate development server; existing TUI sessions open in the GUI without data loss; the same session format can still be read by the TUI or has a documented migration path. The final interface follows the interaction rule above across review, transcription, and export. The checkpoint 5 review supports making the GUI the recommended interface; retain the TUI otherwise.
+**Gate — complete:** A package build includes the Vite assets, which the local server serves without a frontend development server. The reviewed workflow opens saved sessions and supports transcription, editing, preview, export, and reload. The existing session format remains shared with the TUI.
 
 ## Testing and operational checks
 

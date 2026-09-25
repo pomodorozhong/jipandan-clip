@@ -1,6 +1,6 @@
 # Your guide to reviewing the web GUI
 
-This accompanies the [web GUI porting plan](web-gui-porting-plan.md). It describes the points where your inspection will most improve the result. You do not need to read code or test every build. Checkpoints 1–4 are complete; checkpoint 5 is the next hands-on review.
+This accompanies the [web GUI porting plan](web-gui-porting-plan.md). It records the points where your inspection most improved the result. You do not need to read code or test every build. All five checkpoints are complete.
 
 ## Your role at a glance
 
@@ -10,7 +10,7 @@ This accompanies the [web GUI porting plan](web-gui-porting-plan.md). It describ
 | 2. Try the review screen — complete | After Phase 2 | Done | Can you sort clips naturally without instructions? |
 | 3. Try waveform editing — complete | After Phase 3 | Done | Can you find, hear, adjust, and save the boundaries you want? |
 | 4. Try rendered previews — complete | After Phase 4A | Done | The owner approved the rendered preview flow. |
-| 5. Finish a real session | After Phase 4B, before cutover | About 30 minutes | Does the whole workflow produce clips you would use? |
+| 5. Finish a real session — complete | After Phase 4B, before cutover | Done | Does the whole workflow produce clips you would use? |
 
 Your follow-up changes have established a design pattern for the remaining work: show shortcuts on their buttons, remove redundant labels and controls, put each action beside the work it affects, keep long detail panels scrolling independently, and use separate peer panels rather than layers of nested cards. You can keep giving small design corrections during a checkpoint; the developer should update that same build before moving to dependent work.
 
@@ -45,21 +45,9 @@ If an export preview reveals a timing mismatch, report the clip ID and approxima
 
 The owner reviewed the [checkpoint 4 preview build](web-review-checkpoint-4.md) and reported that it was all good. Final MP3 publication was added afterward.
 
-## Checkpoint 5 — Finish a real session
+## Checkpoint 5 — Finish a real session: complete
 
-The runnable build, disposable examples, and exact tasks are in the [checkpoint 5 checklist](web-review-checkpoint-5.md).
-
-**The build should be ready:** It can transcribe when needed, review and trim clips, render export previews, and write final MP3s. The developer should prepare a disposable 0526 session, a safe failure and retry, and an existing filename to test automatic naming.
-
-Use the typical recording copy from opening it to exporting one or two clips. Then:
-
-1. Transcribe a copy without an SRT, or use the prepared transcription example. Check progress, failure, and Retry.
-2. Review and trim a clip, choose an export mode, and listen to its rendered preview.
-3. Export it and compare the final MP3 with the preview. They should match.
-4. Export when the proposed filename already exists. Check that the old MP3 remains and the new output gets a distinct name.
-5. Reopen the session and confirm that classifications, trims, and export status remain.
-
-At this checkpoint, decide whether you would choose the GUI for your next real clipping session. If not, identify the one or two reasons that matter most. The TUI remains available until those are addressed.
+The owner approved the end-to-end browser workflow. The [checkpoint 5 record](web-review-checkpoint-5.md) preserves the reviewed tasks and disposable examples. The GUI is now the recommended interface; the TUI and browser terminal remain available.
 
 ## How to send feedback
 
