@@ -1,11 +1,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, audioUrl, bootstrap, uploadAudio, type Clip, type Session, type Status } from "./api";
+import { api, audioUrl, bootstrap, uploadAudio, type Clip, type LeadingSilenceJob, type Session, type Status } from "./api";
 import WaveformEditor from "./WaveformEditor";
 import ExportPreview from "./ExportPreview";
 import TranscriptionScreen from "./TranscriptionScreen";
+import SettingsScreen from "./SettingsScreen";
 
 type Filter = "unsorted" | "group1" | "group2" | "exported" | "all";
+type AllStatusFilter = "all" | Status;
+type AllOrder = "clip-asc" | "clip-desc" | "start-asc" | "start-desc" | "title-asc";
 type SaveState = "saved" | "saving" | "failed";
+type AppSettings = { detectLeadingSilence: boolean; showOriginalStart: boolean };
+
+const SETTINGS_STORAGE_KEY = "jipandan-settings";
+
+function loadSettings(): AppSettings {
+  try {
+    const stored = localStorage.getItem(SETTINGS_STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored) as Partial<AppSettings>;
+      return {
+        detectLeadingSilence: typeof parsed.detectLeadingSilence === "boolean" ? parsed.detectLeadingSilence : true,
+        showOriginalStart: typeof parsed.showOriginalStart === "boolean" ? parsed.showOriginalStart : false,
+      };
+    }
+  } catch { /* Use defaults when browser storage is unavailable or invalid. */ }
+  return { detectLeadingSilence: true, showOriginalStart: false };
+}
 
 const filters: { key: Filter; label: string }[] = [
   { key: "unsorted", label: "Unsorted" },
@@ -20,16 +40,28 @@ const labels: Record<Status, string> = {
   exported: "Exported", skipped: "Skipped",
 };
 
+const allOrders: { key: AllOrder; label: string }[] = [
+  { key: "clip-asc", label: "Clip number ↑" },
+  { key: "clip-desc", label: "Clip number ↓" },
+  { key: "start-asc", label: "Start time ↑" },
+  { key: "start-desc", label: "Start time ↓" },
+  { key: "title-asc", label: "Title A–Z" },
+];
+
 function formatDuration(ms: number): string {
   if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
   return `${Math.floor(ms / 60000)}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, "0")}`;
 }
 
-function visibleClips(clips: Clip[], filter: Filter, query: string, hideProcessed: boolean): Clip[] {
+function visibleClips(
+  clips: Clip[], filter: Filter, query: string, hideProcessed: boolean,
+  allStatusFilter: AllStatusFilter = "all",
+): Clip[] {
   const needle = query.trim().normalize("NFKC").toLocaleLowerCase();
   return clips.filter((clip) => {
     if (filter === "unsorted" && clip.status !== "pending") return false;
     if (filter !== "unsorted" && filter !== "all" && clip.status !== filter) return false;
+    if (filter === "all" && allStatusFilter !== "all" && clip.status !== allStatusFilter) return false;
     if (hideProcessed && (clip.status === "exported" || clip.status === "skipped")) return false;
     if (needle && !clip.title.normalize("NFKC").toLocaleLowerCase().includes(needle)) return false;
     return true;
@@ -83,6 +115,8 @@ export default function App() {
   const [initializing, setInitializing] = useState(true);
   const [openPath, setOpenPath] = useState("");
   const [filter, setFilter] = useState<Filter>("unsorted");
+  const [allStatusFilter, setAllStatusFilter] = useState<AllStatusFilter>("all");
+  const [allOrder, setAllOrder] = useState<AllOrder>("clip-asc");
   const [query, setQuery] = useState("");
   const [hideProcessed, setHideProcessed] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -92,16 +126,28 @@ export default function App() {
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [showHelp, setShowHelp] = useState(false);
-  const [showBulk, setShowBulk] = useState(false);
   const [showJump, setShowJump] = useState(false);
   const [jumpDraft, setJumpDraft] = useState("");
   const [showMerge, setShowMerge] = useState(false);
   const [removeIndexes, setRemoveIndexes] = useState<number[]>([]);
   const [showDetailMobile, setShowDetailMobile] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [settings, setSettings] = useState<AppSettings>(loadSettings);
+  const [leadingSilenceJob, setLeadingSilenceJob] = useState<LeadingSilenceJob | null>(null);
+  const [dismissedDetectionJobId, setDismissedDetectionJobId] = useState<string | null>(null);
+  const autoDetectionRequest = useRef<string | null>(null);
+  const loadedDetectionJob = useRef<string | null>(null);
+  const loadedDetectionAdjustment = useRef<{ id: string; adjusted: number } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
   const detailScrollRef = useRef<HTMLDivElement>(null);
+  const clipListRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    try { localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings)); }
+    catch { /* Settings still apply for this browser session. */ }
+  }, [settings]);
 
   useEffect(() => {
     let alive = true;
@@ -126,12 +172,19 @@ export default function App() {
       try {
         const preferences = JSON.parse(saved) as {
           filter?: Filter; selectedId?: string; hideProcessed?: boolean;
+          allStatusFilter?: AllStatusFilter; allOrder?: AllOrder;
         };
         if (preferences.filter && filters.some((item) => item.key === preferences.filter)) {
           setFilter(preferences.filter);
         } else if (session.counts.pending === 0) setFilter("all");
         setSelectedId(preferences.selectedId ?? null);
         setHideProcessed(preferences.hideProcessed ?? false);
+        if (preferences.allStatusFilter === "all" || Object.hasOwn(labels, preferences.allStatusFilter ?? "")) {
+          setAllStatusFilter(preferences.allStatusFilter!);
+        }
+        if (allOrders.some((item) => item.key === preferences.allOrder)) {
+          setAllOrder(preferences.allOrder!);
+        }
       } catch {
         if (session.counts.pending === 0) setFilter("all");
       }
@@ -141,21 +194,86 @@ export default function App() {
   useEffect(() => {
     if (!session?.audio) return;
     localStorage.setItem(`jipandan-review:${session.audio}`, JSON.stringify({
-      filter, selectedId, hideProcessed,
+      filter, selectedId, hideProcessed, allStatusFilter, allOrder,
     }));
-  }, [session?.audio, filter, selectedId, hideProcessed]);
+  }, [session?.audio, filter, selectedId, hideProcessed, allStatusFilter, allOrder]);
 
-  const visible = useMemo(
-    () => visibleClips(session?.candidates ?? [], filter, query, hideProcessed),
-    [session?.candidates, filter, query, hideProcessed],
-  );
+  useEffect(() => {
+    if (!settings.detectLeadingSilence || !session?.audio || session.needs_transcription ||
+        session.revision === null || session.leading_silence_detection_complete ||
+        leadingSilenceJob?.state === "queued" || leadingSilenceJob?.state === "running") return;
+    const requestKey = `${session.audio}:${session.revision}`;
+    if (autoDetectionRequest.current === requestKey) return;
+    autoDetectionRequest.current = requestKey;
+    let active = true;
+    void api<LeadingSilenceJob>("/session/leading-silence-detection", "POST")
+      .then((job) => { if (active) setLeadingSilenceJob(job); })
+      .catch((cause) => {
+        if (active) setError(cause instanceof Error ? cause.message : String(cause));
+      });
+    return () => { active = false; };
+  }, [settings.detectLeadingSilence, session?.audio, session?.needs_transcription,
+    session?.revision, session?.leading_silence_detection_complete, leadingSilenceJob?.state]);
+
+  useEffect(() => {
+    if (!session?.audio || session.needs_transcription) {
+      setLeadingSilenceJob(null);
+      return;
+    }
+    let active = true;
+    let timer: number | null = null;
+    async function poll() {
+      try {
+        const job = await api<LeadingSilenceJob | null>("/session/leading-silence-detection");
+        if (!active) return;
+        setLeadingSilenceJob(job);
+        if (job?.state === "running" && job.adjusted > 0 &&
+            (loadedDetectionAdjustment.current?.id !== job.id ||
+             loadedDetectionAdjustment.current.adjusted < job.adjusted)) {
+          const latest = await api<Session>("/session");
+          if (active) {
+            setSession(latest);
+            loadedDetectionAdjustment.current = { id: job.id, adjusted: job.adjusted };
+          }
+        }
+        if (job?.state === "completed" && loadedDetectionJob.current !== job.id) {
+          const latest = await api<Session>("/session");
+          if (active) {
+            setSession(latest);
+            loadedDetectionJob.current = job.id;
+          }
+        }
+        if (job?.state === "queued" || job?.state === "running") {
+          timer = window.setTimeout(() => { void poll(); }, 750);
+        }
+      } catch {
+        if (active) timer = window.setTimeout(() => { void poll(); }, 1500);
+      }
+    }
+    void poll();
+    return () => {
+      active = false;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [session?.audio, session?.needs_transcription, leadingSilenceJob?.id, leadingSilenceJob?.state]);
+
+  const visible = useMemo(() => {
+    const clips = visibleClips(session?.candidates ?? [], filter, query, hideProcessed, allStatusFilter);
+    if (filter !== "all") return clips;
+    const compareClipId = (a: Clip, b: Clip) => a.index - b.index || a.suffix - b.suffix;
+    return clips.sort((a, b) => {
+      if (allOrder === "clip-desc") return compareClipId(b, a);
+      if (allOrder === "start-asc") return a.start_ms - b.start_ms || compareClipId(a, b);
+      if (allOrder === "start-desc") return b.start_ms - a.start_ms || compareClipId(a, b);
+      if (allOrder === "title-asc") return a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: "base" }) || compareClipId(a, b);
+      return compareClipId(a, b);
+    });
+  }, [session?.candidates, filter, query, hideProcessed, allStatusFilter, allOrder]);
   const effectiveSelectedId = visible.some((clip) => clip.clip_id === selectedId)
     ? selectedId : (visible[0]?.clip_id ?? null);
   const selected = session?.candidates.find((clip) => clip.clip_id === effectiveSelectedId) ?? null;
   const selectedPosition = visible.findIndex((clip) => clip.clip_id === effectiveSelectedId);
   const nextVisibleClipId = visible[selectedPosition + 1]?.clip_id ?? null;
-  const throughCurrent = selectedPosition < 0 ? [] : visible.slice(0, selectedPosition + 1);
-  const bulkPending = throughCurrent.filter((clip) => clip.status === "pending");
   const hasMergeChanges = Boolean(session?.merge_preview && (
     session.merge_preview.added.length || session.merge_preview.removed.length ||
     session.merge_preview.timing_changed.length || session.merge_preview.text_changed.length ||
@@ -193,7 +311,7 @@ export default function App() {
     let nextSelection = effectiveSelectedId;
     if (selected && typeof change.status === "string") {
       const changed = { ...selected, status: change.status as Status };
-      if (visibleClips([changed], filter, query, hideProcessed).length === 0) {
+      if (visibleClips([changed], filter, query, hideProcessed, allStatusFilter).length === 0) {
         nextSelection = visible[selectedPosition + 1]?.clip_id ??
           visible[selectedPosition - 1]?.clip_id ?? effectiveSelectedId;
       }
@@ -201,7 +319,7 @@ export default function App() {
     void mutate(() => api<Session>(`/clips/${encodeURIComponent(effectiveSelectedId)}`, "PATCH", {
       expected_revision: session.revision, ...change,
     })).then((next) => { if (next) setSelectedId(nextSelection); });
-  }, [session, effectiveSelectedId, selected, filter, query, hideProcessed,
+  }, [session, effectiveSelectedId, selected, filter, query, hideProcessed, allStatusFilter,
     visible, selectedPosition, mutate]);
 
   const moveSelection = useCallback((delta: number) => {
@@ -213,7 +331,7 @@ export default function App() {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (showHelp || showBulk || showJump || showMerge || showExportModal || editingTitle) return;
+      if (showSettings || showHelp || showJump || showMerge || showExportModal || editingTitle) return;
       if (event.isComposing || event.key === "Process") return;
       const target = event.target as HTMLElement | null;
       if (target && (target.closest("input, textarea, select, [contenteditable='true']"))) return;
@@ -244,8 +362,8 @@ export default function App() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [showHelp, showBulk, showJump, showMerge, showExportModal, editingTitle, moveSelection, patchSelected,
-    session, selected, effectiveSelectedId, mutate]);
+  }, [showHelp, showJump, showMerge, showExportModal, editingTitle, moveSelection, patchSelected,
+    session, selected, effectiveSelectedId, mutate, showSettings]);
 
   useEffect(() => { if (editingTitle) titleRef.current?.focus(); }, [editingTitle]);
 
@@ -254,6 +372,8 @@ export default function App() {
     if (!openPath.trim()) return;
     const next = await mutate(() => api<Session>("/session/open", "POST", { path: openPath.trim() }));
     if (next) {
+      setLeadingSilenceJob(null); setDismissedDetectionJobId(null); loadedDetectionAdjustment.current = null;
+      autoDetectionRequest.current = null; loadedDetectionJob.current = null;
       setQuery(""); setSelectedId(null); setFilter(next.counts.pending > 0 ? "unsorted" : "all");
     }
   }
@@ -262,7 +382,11 @@ export default function App() {
     const file = event.target.files?.[0];
     if (!file) return;
     const next = await mutate(() => uploadAudio(file));
-    if (next) { setQuery(""); setSelectedId(null); setFilter("unsorted"); }
+    if (next) {
+      setLeadingSilenceJob(null); setDismissedDetectionJobId(null); loadedDetectionAdjustment.current = null;
+      autoDetectionRequest.current = null; loadedDetectionJob.current = null;
+      setQuery(""); setSelectedId(null); setFilter("unsorted");
+    }
     event.target.value = "";
   }
 
@@ -283,7 +407,13 @@ export default function App() {
     const target = visible.find((clip) => clip.index === requested) ??
       visible.reduce<Clip | null>((closest, clip) =>
         !closest || Math.abs(clip.index - requested) < Math.abs(closest.index - requested) ? clip : closest, null);
-    if (target) setSelectedId(target.clip_id);
+    if (target) {
+      setSelectedId(target.clip_id);
+      requestAnimationFrame(() => {
+        clipListRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')
+          ?.scrollIntoView({ block: "nearest" });
+      });
+    }
     setShowJump(false);
     setJumpDraft("");
   }
@@ -299,6 +429,17 @@ export default function App() {
     if (next) { setShowMerge(false); setRemoveIndexes([]); }
   }
 
+  async function retryLeadingSilenceDetection() {
+    try {
+      const job = await api<LeadingSilenceJob>("/session/leading-silence-detection", "POST");
+      setLeadingSilenceJob(job);
+      setDismissedDetectionJobId(null);
+      setError("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
   if (initializing) return <main className="flex min-h-screen items-center justify-center subtle">Opening Jipandan…</main>;
 
   return <div className={`flex flex-col ${session?.audio ? "h-dvh min-h-0 overflow-hidden" : "min-h-screen"}`}>
@@ -306,19 +447,26 @@ export default function App() {
       <div className="flex items-center gap-3">
         <div aria-hidden="true" className="flex size-9 items-center justify-center rounded-xl bg-[#b7d69d] text-xl font-bold text-[#263c2b]">J</div>
         <div>
-          <div className="font-semibold tracking-wide">Jipandan <span className="subtle font-normal">/ clip review</span></div>
+          <div className="font-semibold tracking-wide">Jipandan <span className="subtle font-normal">/ {showSettings ? "settings" : "clip review"}</span></div>
           <div className="subtle text-xs">Local workspace · {session?.audio_name ?? "No audio open"}</div>
         </div>
       </div>
       <div className="flex items-center gap-3 text-sm">
-        {session?.audio && !session.needs_transcription && <span aria-live="polite" className={saveState === "failed" ? "text-[#ffb3a8]" : saveState === "saving" ? "text-[#ead49b]" : "accent"}>
+        {!showSettings && session?.audio && !session.needs_transcription && <span aria-live="polite" className={saveState === "failed" ? "text-[#ffb3a8]" : saveState === "saving" ? "text-[#ead49b]" : "accent"}>
           {saveState === "saving" ? "Saving…" : saveState === "failed" ? "Save failed" : "Saved"}
         </span>}
-        {session?.audio && !session.needs_transcription && <ActionButton onClick={() => {
+        {!showSettings && session?.audio && !session.needs_transcription && <ActionButton onClick={() => {
           if (session.revision === null) return;
           void mutate(() => api<Session>("/session/undo", "POST", { expected_revision: session.revision }));
         }} disabled={!session.can_undo || busy} title="Undo recent change (U)" shortcut="U">Undo</ActionButton>}
-        {!session?.needs_transcription && <ActionButton onClick={() => setShowHelp(true)} title="Keyboard shortcuts" shortcut="?">Shortcuts</ActionButton>}
+        {!showSettings && !session?.needs_transcription && <ActionButton onClick={() => setShowHelp(true)} title="Keyboard shortcuts" shortcut="?">Shortcuts</ActionButton>}
+        <ActionButton onClick={() => {
+          if (showSettings) setShowSettings(false);
+          else {
+            setShowSettings(true);
+            setShowHelp(false); setShowJump(false); setShowMerge(false); setShowExportModal(false);
+          }
+        }}>{showSettings ? "Back" : "Settings"}</ActionButton>
       </div>
     </header>
 
@@ -326,7 +474,37 @@ export default function App() {
       {error} <button className="ml-3 underline" onClick={() => setError("")}>Dismiss</button>
     </div>}
 
-    {!session?.audio ? <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center px-5 py-12">
+    {leadingSilenceJob && leadingSilenceJob.id !== dismissedDetectionJobId && <div
+      role="status" aria-live="polite"
+      className={`shrink-0 border-b px-4 py-2 text-sm md:px-7 ${leadingSilenceJob.state === "failed" ? "border-[#a96053] bg-[#482d2a] text-[#ffe3dc]" : leadingSilenceJob.state === "completed" ? "border-[#55744b] bg-[#24372b]" : "border-[#7c6845] bg-[#3c3525]"}`}>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span>
+          {leadingSilenceJob.state === "queued" || leadingSilenceJob.state === "running"
+            ? <>Detecting leading silence · {leadingSilenceJob.progress} of {leadingSilenceJob.total} clips checked · {leadingSilenceJob.adjusted} adjusted so far</>
+            : leadingSilenceJob.state === "completed"
+              ? <>Leading silence detection complete · adjusted {leadingSilenceJob.adjusted} {leadingSilenceJob.adjusted === 1 ? "clip start" : "clip starts"}</>
+              : leadingSilenceJob.state === "failed"
+                ? `Leading silence detection failed: ${leadingSilenceJob.error ?? "Unknown error"}`
+                : "Leading silence detection stopped because the session changed."}
+        </span>
+        <div className="flex items-center gap-3">
+          {leadingSilenceJob.state === "failed" && <button type="button" onClick={() => void retryLeadingSilenceDetection()} className="underline">Retry</button>}
+          {(leadingSilenceJob.state === "completed" || leadingSilenceJob.state === "failed" || leadingSilenceJob.state === "cancelled") &&
+            <button type="button" onClick={() => setDismissedDetectionJobId(leadingSilenceJob.id)} aria-label="Dismiss detection status" className="text-lg leading-none">×</button>}
+        </div>
+      </div>
+      {(leadingSilenceJob.state === "queued" || leadingSilenceJob.state === "running") && <div
+        role="progressbar" aria-label="Leading silence detection progress"
+        aria-valuemin={0} aria-valuemax={leadingSilenceJob.total} aria-valuenow={leadingSilenceJob.progress}
+        className="mt-2 h-1 overflow-hidden rounded-full bg-[#17241c]">
+        <div className="h-full bg-[#b7d69d] transition-[width]" style={{ width: `${leadingSilenceJob.total ? leadingSilenceJob.progress / leadingSilenceJob.total * 100 : 100}%` }} />
+      </div>}
+    </div>}
+
+    {showSettings ? <SettingsScreen detectLeadingSilence={settings.detectLeadingSilence}
+      showOriginalStart={settings.showOriginalStart}
+      onDetectLeadingSilenceChange={(enabled) => setSettings((current) => ({ ...current, detectLeadingSilence: enabled }))}
+      onShowOriginalStartChange={(enabled) => setSettings((current) => ({ ...current, showOriginalStart: enabled }))} /> : !session?.audio ? <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center px-5 py-12">
       <p className="accent mb-3 text-sm font-semibold uppercase tracking-[.2em]">Start a session</p>
       <h1 className="mb-3 text-4xl font-semibold tracking-tight">Open your recording</h1>
       <p className="subtle mb-8 max-w-xl">Enter a local audio path to review its SRT and saved session. The audio stays on this computer.</p>
@@ -384,18 +562,27 @@ export default function App() {
               </div>
               <ActionButton onClick={() => setShowJump(true)} title="Jump to clip index (G)" shortcut="G">Go to #</ActionButton>
             </div>
+            {filter === "all" && <div className="mt-3 grid grid-cols-2 gap-2">
+              <label className="subtle min-w-0 text-xs">Filter status
+                <select value={allStatusFilter} onChange={(event) => setAllStatusFilter(event.target.value as AllStatusFilter)}
+                  aria-label="Filter clips by status" className="mt-1 block w-full rounded-lg border line bg-[#101816] px-2.5 py-2 text-sm text-[#e7eee7]">
+                  <option value="all">All statuses</option>
+                  {Object.entries(labels).map(([status, label]) => <option key={status} value={status}>{label}</option>)}
+                </select>
+              </label>
+              <label className="subtle min-w-0 text-xs">Order by
+                <select value={allOrder} onChange={(event) => setAllOrder(event.target.value as AllOrder)}
+                  aria-label="Order clips" className="mt-1 block w-full rounded-lg border line bg-[#101816] px-2.5 py-2 text-sm text-[#e7eee7]">
+                  {allOrders.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
+                </select>
+              </label>
+            </div>}
             <label className="subtle mt-3 flex items-center gap-2 text-xs">
               <input type="checkbox" checked={hideProcessed} onChange={(event) => setHideProcessed(event.target.checked)} />
               Hide exported and skipped
             </label>
-            <div className="mt-3 border-t line pt-3">
-              <ActionButton onClick={() => setShowBulk(true)} disabled={bulkPending.length === 0 || busy} tone="danger"
-                title="Skip unsorted clips in this view through the selected clip">
-                Skip through #{selected?.clip_id ?? "–"} · {bulkPending.length}
-              </ActionButton>
-            </div>
           </div>
-          <div className="panel-scroll min-h-0 flex-1 overflow-auto" role="listbox" aria-label="Clips">
+          <div ref={clipListRef} className="panel-scroll min-h-0 flex-1 overflow-auto" role="listbox" aria-label="Clips">
             {visible.length === 0 ? <p className="subtle px-5 py-8 text-sm">No clips match this view.</p> : visible.map((clip) => {
               const changed = clip.start_ms !== clip.original_start_ms || clip.end_ms !== clip.original_end_ms;
               return <button key={clip.clip_id} type="button" role="option" aria-selected={clip.clip_id === effectiveSelectedId}
@@ -464,7 +651,9 @@ export default function App() {
               </div>
               <WaveformEditor key={selected.clip_id} clip={selected}
                 durationMs={session.duration_ms ?? selected.end_ms} audioSrc={audioUrl()} busy={busy}
-                shortcutsPaused={showHelp || showBulk || showJump || showMerge || showExportModal || editingTitle}
+                shortcutsPaused={showHelp || showJump || showMerge || showExportModal || editingTitle}
+                detectLeadingSilence={settings.detectLeadingSilence}
+                showOriginalStart={settings.showOriginalStart}
                 active={!showExportModal}
                 onSave={async (startMs, endMs) => {
                   if (session.revision === null) return false;
@@ -488,32 +677,15 @@ export default function App() {
           } else if (!advance) {
             setSelectedId(selected.clip_id);
             const exportedClip = next.candidates.find((clip) => clip.clip_id === selected.clip_id);
-            if (exportedClip && !visibleClips([exportedClip], filter, query, hideProcessed).length) {
+            if (exportedClip && !visibleClips([exportedClip], filter, query, hideProcessed, allStatusFilter).length) {
               setFilter("all");
+              setAllStatusFilter("all");
               setHideProcessed(false);
-              if (!visibleClips([exportedClip], "all", query, false).length) setQuery("");
+              if (!visibleClips([exportedClip], "all", query, false, "all").length) setQuery("");
             }
           }
         }} />}
     </>}
-
-    {showBulk && <Dialog title="Skip through current clip" onClose={() => setShowBulk(false)}>
-      <p className="subtle mb-5 text-sm">This will skip <strong className="text-white">{bulkPending.length} unsorted {bulkPending.length === 1 ? "clip" : "clips"}</strong> in the current filtered view through #{selected?.clip_id}. Grouped and exported clips stay as they are. You can undo this action.</p>
-      <div className="flex justify-end gap-2"><ActionButton onClick={() => setShowBulk(false)}>Cancel</ActionButton>
-        <ActionButton tone="danger" onClick={() => {
-          if (session?.revision === null) return;
-          const nextVisible = visible.slice(selectedPosition + 1).find((clip) => clip.status === "pending");
-          void mutate(() => api<Session>("/clips/bulk-skip", "POST", {
-            expected_revision: session!.revision,
-            clip_ids: throughCurrent.map((clip) => clip.clip_id),
-          })).then((next) => {
-            if (next) {
-              setShowBulk(false);
-              if (filter === "unsorted" && nextVisible) setSelectedId(nextVisible.clip_id);
-            }
-          });
-        }} disabled={busy}>Skip {bulkPending.length}</ActionButton></div>
-    </Dialog>}
 
     {showJump && <Dialog title="Jump to clip index" onClose={() => setShowJump(false)}>
       <p className="subtle mb-3 text-sm">Find the requested index in the current view, or the nearest visible clip.</p>
@@ -550,7 +722,7 @@ export default function App() {
 
     {showHelp && <Dialog title="Keyboard shortcuts" onClose={() => setShowHelp(false)}>
       <div className="grid grid-cols-[6rem_1fr] gap-y-2 text-sm">
-        {[["Space", "Play / pause clip"], ["J / K", "Next / previous clip"], ["1 / 2", "Mark Group 1 / Group 2"],
+        {[["Space", "Play from start"], ["Shift+Space", "Play / pause clip"], ["J / K", "Next / previous clip"], ["1 / 2", "Mark Group 1 / Group 2"],
           ["X", "Skip clip"], ["U", "Undo recent change"], ["D", "Duplicate clip"],
           ["R", "Rename title"], ["G", "Jump to index"], ["E", "Open export preview"],
           ["Enter", "Export (in preview)"], ["⌘ Enter", "Export & Next (in preview)"], ["/", "Search titles"],

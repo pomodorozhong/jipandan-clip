@@ -33,6 +33,8 @@ export interface Session {
   srt: string | null;
   srt_exists: boolean;
   session_path: string | null;
+  srt_fingerprint: string | null;
+  leading_silence_detection_complete: boolean;
   clip_dir: string;
   needs_transcription: boolean;
   transcription: TranscriptionJob | null;
@@ -44,6 +46,15 @@ export interface Session {
   created_clip_id?: string;
   changed_clip_ids?: string[];
   output_path?: string;
+}
+
+export interface LeadingSilenceJob {
+  id: string;
+  state: "queued" | "running" | "completed" | "failed" | "cancelled";
+  progress: number;
+  total: number;
+  adjusted: number;
+  error: string | null;
 }
 
 export interface TranscriptionJob {

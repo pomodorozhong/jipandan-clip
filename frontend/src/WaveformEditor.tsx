@@ -5,6 +5,7 @@ type Edge = "start" | "end";
 type TimeRange = { start: number; end: number };
 
 const MIN_CLIP_MS = 10;
+const KEYBOARD_NUDGE_DEBOUNCE_MS = 300;
 const MAX_WINDOW_MS = 120_000;
 const PLOT_WIDTH = 1000;
 const PLOT_HEIGHT = 160;
@@ -65,13 +66,14 @@ function useWaveform(clipId: string, range: TimeRange, buckets: number) {
 }
 
 function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, editableEdge,
-  disabled, onPreview, onCommit, onCancel, onSeek }: {
+  originalStartMs, disabled, onPreview, onCommit, onCancel, onSeek }: {
   label: string;
   range: TimeRange;
   waveform: WaveformWindow | null;
   startMs: number;
   endMs: number;
   playheadMs: number;
+  originalStartMs: number | null;
   editableEdge?: Edge;
   disabled: boolean;
   onPreview: (edge: Edge, time: number) => void;
@@ -151,6 +153,13 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
       <line x1="0" y1={PLOT_HEIGHT / 2} x2={PLOT_WIDTH} y2={PLOT_HEIGHT / 2} stroke="#46584c" strokeWidth="1" />
       {inRange(startMs) && inRange(endMs) && <rect x={startX} y="0" width={Math.max(0, endX - startX)} height={PLOT_HEIGHT} fill="#b7d69d" opacity="0.08" />}
       {points && <path d={points} stroke="#a8c9b0" strokeWidth="1.5" fill="none" />}
+      {originalStartMs !== null && inRange(originalStartMs) && <g>
+        <title>Original SRT start</title>
+        <line x1={markerX(originalStartMs)} y1="0" x2={markerX(originalStartMs)} y2={PLOT_HEIGHT}
+          stroke="#80b7c8" strokeWidth="2" strokeDasharray="6 4" opacity="0.95" />
+        <text x={clamp(markerX(originalStartMs) + 5, 5, PLOT_WIDTH - 35)} y="14"
+          fill="#a9d6e2" fontSize="11">SRT</text>
+      </g>}
       {(["start", "end"] as Edge[]).map((edge) => {
         const time = edge === "start" ? startMs : endMs;
         if (!inRange(time)) return null;
@@ -171,17 +180,23 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
   </div>;
 }
 
-export default function WaveformEditor({ clip, durationMs, audioSrc, busy, shortcutsPaused, active = true, onSave }: {
+export default function WaveformEditor({ clip, durationMs, audioSrc, busy, shortcutsPaused, active = true,
+  detectLeadingSilence, showOriginalStart, onSave }: {
   clip: Clip;
   durationMs: number;
   audioSrc: string;
   busy: boolean;
   shortcutsPaused: boolean;
   active?: boolean;
+  detectLeadingSilence: boolean;
+  showOriginalStart: boolean;
   onSave: (startMs: number, endMs: number) => Promise<boolean>;
 }) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const savingRef = useRef(false);
+  const keyboardNudgeTimer = useRef<number | null>(null);
+  const pendingKeyboardBounds = useRef<{ startMs: number; endMs: number } | null>(null);
+  const commitBoundsRef = useRef<(startMs: number, endMs: number) => Promise<void>>(async () => {});
   const auditionStop = useRef<number | null>(null);
   const cancelOffsetBlur = useRef(false);
   const [startMs, setStartMs] = useState(clip.start_ms);
@@ -213,13 +228,29 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
   }, [clip.start_ms, clip.end_ms, clip.original_start_ms, clip.original_end_ms]);
 
   useEffect(() => {
+    if (!showOriginalStart) return;
+    setOverviewRange((current) => {
+      const start = Math.min(current.start, clip.original_start_ms);
+      const end = Math.max(current.end, clip.original_start_ms);
+      const next = boundedRange(start, Math.min(MAX_WINDOW_MS, end - start), durationMs);
+      return next.start === current.start && next.end === current.end ? current : next;
+    });
+  }, [showOriginalStart, clip.original_start_ms, durationMs]);
+
+  useEffect(() => {
     setStartDetailRange((current) => {
       const margin = (current.end - current.start) * 0.15;
-      if (clip.start_ms >= current.start + margin && clip.start_ms <= current.end - margin) return current;
-      const centered = fineRange(clip.start_ms, durationMs);
+      const originalVisible = !showOriginalStart || (
+        clip.original_start_ms >= current.start + margin && clip.original_start_ms <= current.end - margin
+      );
+      if (clip.start_ms >= current.start + margin && clip.start_ms <= current.end - margin && originalVisible) return current;
+      const low = showOriginalStart ? Math.min(clip.start_ms, clip.original_start_ms) : clip.start_ms;
+      const high = showOriginalStart ? Math.max(clip.start_ms, clip.original_start_ms) : clip.start_ms;
+      const span = Math.min(MAX_WINDOW_MS, Math.max(2000, high - low + 2000));
+      const centered = boundedRange((low + high - span) / 2, span, durationMs);
       return centered.start === current.start && centered.end === current.end ? current : centered;
     });
-  }, [clip.start_ms, durationMs]);
+  }, [clip.start_ms, clip.original_start_ms, durationMs, showOriginalStart]);
 
   useEffect(() => {
     setEndDetailRange((current) => {
@@ -246,11 +277,13 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
     return () => cancelAnimationFrame(frame);
   }, [playing, endMs]);
 
-  function boundsFor(edgeToMove: Edge, time: number): [number, number] {
+  function boundsFor(
+    edgeToMove: Edge, time: number, currentStart = startMs, currentEnd = endMs,
+  ): [number, number] {
     const position = Math.round(time);
     return edgeToMove === "start"
-      ? [clamp(position, 0, endMs - MIN_CLIP_MS), endMs]
-      : [startMs, clamp(position, startMs + MIN_CLIP_MS, durationMs)];
+      ? [clamp(position, 0, currentEnd - MIN_CLIP_MS), currentEnd]
+      : [currentStart, clamp(position, currentStart + MIN_CLIP_MS, durationMs)];
   }
 
   function previewEdge(edgeToMove: Edge, time: number) {
@@ -262,6 +295,9 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
   }
 
   async function commitBounds(nextStart: number, nextEnd: number) {
+    if (keyboardNudgeTimer.current !== null) window.clearTimeout(keyboardNudgeTimer.current);
+    keyboardNudgeTimer.current = null;
+    pendingKeyboardBounds.current = null;
     if (savingRef.current || busy) return;
     if (!Number.isInteger(nextStart) || !Number.isInteger(nextEnd) ||
         nextStart < 0 || nextEnd > durationMs || nextEnd - nextStart < MIN_CLIP_MS) {
@@ -294,6 +330,8 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
     }
   }
 
+  commitBoundsRef.current = commitBounds;
+
   function commitEdge(edgeToMove: Edge, time: number) {
     const [nextStart, nextEnd] = boundsFor(edgeToMove, time);
     void commitBounds(nextStart, nextEnd);
@@ -306,9 +344,39 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
     setEndOffset(String(clip.end_ms - clip.original_end_ms));
   }
 
-  function nudge(which: Edge, amount: number) {
-    commitEdge(which, (which === "start" ? startMs : endMs) + amount);
+  function nudge(which: Edge, amount: number, fromKeyboard = false) {
+    if (!fromKeyboard) {
+      commitEdge(which, (which === "start" ? startMs : endMs) + amount);
+      return;
+    }
+
+    const current = pendingKeyboardBounds.current ?? { startMs, endMs };
+    const [nextStart, nextEnd] = boundsFor(
+      which,
+      (which === "start" ? current.startMs : current.endMs) + amount,
+      current.startMs,
+      current.endMs,
+    );
+    if (nextStart === current.startMs && nextEnd === current.endMs) return;
+
+    pendingKeyboardBounds.current = { startMs: nextStart, endMs: nextEnd };
+    setStartMs(nextStart);
+    setEndMs(nextEnd);
+    setStartOffset(String(nextStart - clip.original_start_ms));
+    setEndOffset(String(nextEnd - clip.original_end_ms));
+    if (keyboardNudgeTimer.current !== null) window.clearTimeout(keyboardNudgeTimer.current);
+    keyboardNudgeTimer.current = window.setTimeout(() => {
+      keyboardNudgeTimer.current = null;
+      const pending = pendingKeyboardBounds.current;
+      if (pending) void commitBoundsRef.current(pending.startMs, pending.endMs);
+    }, KEYBOARD_NUDGE_DEBOUNCE_MS);
   }
+
+  useEffect(() => () => {
+    if (keyboardNudgeTimer.current !== null) window.clearTimeout(keyboardNudgeTimer.current);
+    const pending = pendingKeyboardBounds.current;
+    if (pending) void commitBoundsRef.current(pending.startMs, pending.endMs);
+  }, []);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -317,7 +385,10 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
       if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
       if (event.code === "Space" && !event.altKey && !event.ctrlKey && !event.metaKey) {
         event.preventDefault();
-        if (!event.repeat) void play();
+        if (!event.repeat) {
+          if (event.shiftKey) void play();
+          else void replay();
+        }
         return;
       }
       const which: Edge = event.code === "BracketLeft" || event.code === "BracketRight" ? "end" : "start";
@@ -325,7 +396,7 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
         : event.code === "Period" || event.code === "BracketRight" ? 1 : 0;
       if (direction) {
         event.preventDefault();
-        nudge(which, direction * (event.shiftKey ? 100 : 10));
+        nudge(which, direction * (event.shiftKey ? 100 : 10), true);
       }
     }
     window.addEventListener("keydown", onKeyDown);
@@ -419,10 +490,13 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
     <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
       <div className="flex flex-wrap gap-2">
         <button type="button" onClick={() => void play()} className="soft-surface inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm"
-          aria-label={playing ? "Pause audio" : "Play clip"} title="Play or pause (Space)">
-          <span>{playing ? "Pause" : "Play clip"}</span><kbd aria-hidden="true" className="shortcut-key">Space</kbd>
+          aria-label={playing ? "Pause audio" : "Play clip"} title="Play or pause (Shift+Space)">
+          <span>{playing ? "Pause" : "Play clip"}</span><kbd aria-hidden="true" className="shortcut-key">Shift+Space</kbd>
         </button>
-        <button type="button" onClick={() => void replay()} className="soft-surface rounded-lg px-3 py-2 text-sm">Replay from start</button>
+        <button type="button" onClick={() => void replay()} title="Replay from start (Space)"
+          className="soft-surface inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm">
+          <span>Replay from start</span><kbd aria-hidden="true" className="shortcut-key">Space</kbd>
+        </button>
         <button type="button" onClick={() => void audition("start")} className="soft-surface rounded-lg px-3 py-2 text-sm">Hear start</button>
         <button type="button" onClick={() => void audition("end")} className="soft-surface rounded-lg px-3 py-2 text-sm">Hear end</button>
       </div>
@@ -443,7 +517,8 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
         : !overview.window ? <p className="subtle py-8 text-center text-sm">Loading waveform…</p>
           : <WaveformPlot label="Overview waveform; drag the start or end handle, or click to seek"
             range={overviewRange} waveform={overview.window} startMs={startMs} endMs={endMs}
-            playheadMs={playheadMs} disabled={controlsDisabled} onPreview={previewEdge}
+            playheadMs={playheadMs} originalStartMs={showOriginalStart ? clip.original_start_ms : null}
+            disabled={controlsDisabled} onPreview={previewEdge}
             onCommit={commitEdge} onCancel={cancelPreview} onSeek={seek} />}
       <p className="subtle mt-1 text-xs">Drag the amber start or pink end handle. Click elsewhere in the waveform to seek.</p>
     </div>
@@ -462,7 +537,8 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
             : !detail.window ? <p className="subtle py-8 text-center text-sm">Loading fine waveform…</p>
               : <WaveformPlot label={`Fine ${which} boundary waveform; drag the handle, or click to seek`}
                 range={range} waveform={detail.window} startMs={startMs} endMs={endMs}
-                playheadMs={playheadMs} editableEdge={which} disabled={controlsDisabled}
+                playheadMs={playheadMs} originalStartMs={showOriginalStart ? clip.original_start_ms : null}
+                editableEdge={which} disabled={controlsDisabled}
                 onPreview={previewEdge} onCommit={commitEdge} onCancel={cancelPreview} onSeek={seek} />}
           <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label={`Nudge ${which} boundary`}>
             {[-100, -10, 10, 100].map((amount) => {
@@ -473,6 +549,13 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
                 <span>{amount > 0 ? "+" : ""}{amount} ms</span><kbd aria-hidden="true" className="shortcut-key">{key}</kbd>
               </button>;
             })}
+            {which === "start" && detectLeadingSilence && <button type="button"
+              onClick={() => void commitBounds(clip.original_start_ms, endMs)}
+              disabled={controlsDisabled || startMs === clip.original_start_ms || clip.original_start_ms > endMs - MIN_CLIP_MS}
+              title="Restore the start time from the SRT"
+              className="rounded-lg border line px-3 py-2 text-sm hover:bg-[#304538] disabled:opacity-50">
+              Use original start
+            </button>}
           </div>
           <label className="mt-3 block max-w-xs text-sm"><span className="subtle block text-xs">{which === "start" ? "Start" : "End"} offset from SRT (ms)</span>
             <input type="text" inputMode="numeric" value={offset}
