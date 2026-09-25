@@ -229,12 +229,12 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
       if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
       if (event.code === "Space") {
         event.preventDefault();
-        if (!event.repeat) event.shiftKey ? candidatePlayer.current?.replay() : candidatePlayer.current?.toggle();
+        if (!event.repeat) event.shiftKey ? candidatePlayer.current?.toggle() : candidatePlayer.current?.replay();
         return;
       }
       if (event.code === "KeyQ") {
         event.preventDefault();
-        if (!event.repeat) event.shiftKey ? referencePlayer.current?.replay() : referencePlayer.current?.toggle();
+        if (!event.repeat) event.shiftKey ? referencePlayer.current?.toggle() : referencePlayer.current?.replay();
         return;
       }
       if (event.shiftKey) return;
@@ -335,7 +335,7 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
             note="Includes the original edges and pauses" startMs={0} endMs={referenceDuration}
             waveform={referenceReady ? referenceJob?.waveform ?? null : null} sharedPeak={sharedPeak}
             src={referenceReady ? previewUrl(referenceJob!.id) : undefined} placeholder={referencePlaceholder}
-            playShortcut="Q" replayShortcut="⇧Q" onActivate={() => candidatePlayer.current?.pause()} />
+            playShortcut="⇧Q" replayShortcut="Q" onActivate={() => candidatePlayer.current?.pause()} />
           {(referenceError || referenceJob?.state === "failed") && <div role="alert" className="flex flex-wrap items-center gap-2 text-xs text-[#ffb3a8]">
             <span>{referenceError || `Reference render failed: ${referenceJob?.error ?? "Unknown error"}`}</span>
             <button type="button" onClick={() => void renderReference()} disabled={referenceRequesting}
@@ -343,13 +343,13 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
           </div>}
           <PreviewPlayer ref={candidatePlayer} variant="candidate" eyebrow={`Export candidate · ${modes.find((item) => item.value === mode)?.label}`}
             title="Rendered preview" durationLabel="Rendered result"
-            durationText={candidateReady ? duration(candidateDuration) : "—"}
+            durationText={waveformReady ? duration(candidateDuration) : "—"}
             note={candidateReady ? difference === 0 ? "Same length as the reference"
               : `${duration(Math.abs(difference))} ${difference < 0 ? "shorter" : "longer"} than the reference`
               : "Updates automatically when settings change"}
-            startMs={0} endMs={candidateDuration} waveform={candidateReady ? job?.waveform ?? null : null}
-            sharedPeak={sharedPeak} src={candidateReady ? previewUrl(job!.id) : undefined}
-            placeholder={candidatePlaceholder} playShortcut="Space" replayShortcut="⇧Space"
+            startMs={0} endMs={candidateDuration} waveform={waveformReady ? job?.waveform ?? null : null}
+            sharedPeak={sharedPeak} src={waveformReady ? previewUrl(job!.id) : undefined}
+            placeholder={candidatePlaceholder} playShortcut="⇧Space" replayShortcut="Space"
             onActivate={() => referencePlayer.current?.pause()} />
           {job?.state === "failed" && !stale && <p role="alert" className="text-xs text-[#ffb3a8]">Render failed: {job.error}. Adjust the settings to retry.</p>}
         </div>
