@@ -11,9 +11,6 @@ from pathlib import Path
 
 import uvicorn
 
-from jipandan.web.api import create_app
-from jipandan.web.service import SessionService
-
 
 def _build_frontend() -> None:
     frontend_dir = Path(__file__).resolve().parents[3] / "frontend"
@@ -46,6 +43,10 @@ def main() -> None:
     args = parser.parse_args()
 
     _build_frontend()
+
+    # Load the app only after its ignored, generated static files are ready.
+    from jipandan.web.api import create_app
+    from jipandan.web.service import SessionService
 
     service = SessionService(clip_dir=args.clip_dir)
     if args.audio is not None:
