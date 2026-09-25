@@ -1,6 +1,9 @@
 import re
+import os
 import shutil
 import subprocess
+import tempfile
+from uuid import uuid4
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -205,6 +208,8 @@ def publish_prebuilt_clip(
     candidate: ClipCandidate,
     clip_dir: Path,
     export_title: str,
+    *,
+    replace_existing: bool = False,
 ) -> Path:
     """Copy a preview-rendered clip into ``clip_dir`` with final metadata."""
     clip_dir.mkdir(parents=True, exist_ok=True)
@@ -212,8 +217,9 @@ def publish_prebuilt_clip(
     final_clip = clip_dir / f"{basename}.mp3"
     if source.resolve() == final_clip.resolve():
         return final_clip
-    _run(
-        [
+    temporary_clip = clip_dir / f".{basename}.{uuid4().hex}.mp3"
+    try:
+        _run([
             "ffmpeg",
             "-y",
             "-loglevel",
@@ -226,10 +232,28 @@ def publish_prebuilt_clip(
             f"title={export_title}",
             "-metadata",
             f"TXXX:ORIGINAL_START_TIME={candidate.original_start}",
-            str(final_clip),
-        ]
-    )
+            str(temporary_clip),
+        ])
+        final_clip = _publish_clip(temporary_clip, final_clip, replace_existing=replace_existing)
+    finally:
+        temporary_clip.unlink(missing_ok=True)
     return final_clip
+
+
+def _publish_clip(source: Path, final_clip: Path, *, replace_existing: bool) -> Path:
+    """Publish a complete MP3, choosing a new filename on collision."""
+    if replace_existing:
+        os.replace(source, final_clip)
+        return final_clip
+    candidate = final_clip
+    number = 2
+    while True:
+        try:
+            os.link(source, candidate)
+            return candidate
+        except FileExistsError:
+            candidate = final_clip.with_name(f"{final_clip.stem} ({number}){final_clip.suffix}")
+            number += 1
 
 
 def export_clip(
@@ -239,6 +263,7 @@ def export_clip(
     export_title: str | None = None,
     export_options: ExportOptions | None = None,
     tmp_dir: Path | None = None,
+    replace_existing: bool = False,
 ) -> Path:
     tmp_root = tmp_dir or Path("tmp")
     tmp_root.mkdir(parents=True, exist_ok=True)
@@ -246,35 +271,54 @@ def export_clip(
 
     title = export_title if export_title is not None else candidate.title
     basename = export_basename(input_audio, candidate.filename_token, title)
-    tmp_clip = tmp_root / f"{basename}.mp3"
     final_clip = clip_dir / f"{basename}.mp3"
-
-    _extract_audio_slice(
-        input_audio,
-        candidate.start,
-        candidate.duration,
-        tmp_clip,
-        metadata=(
-            ("title", title),
-            ("TXXX:ORIGINAL_START_TIME", candidate.original_start),
-        ),
-    )
-    options = export_options or ExportOptions(mode="trim_edges")
-    audio_filter = _audio_filter_for_options(options)
-    if audio_filter is None:
-        shutil.copy2(tmp_clip, final_clip)
-    else:
-        _run(
-            [
-                "ffmpeg",
-                "-y",
-                "-loglevel",
-                "quiet",
-                "-i",
-                str(tmp_clip),
-                "-af",
-                audio_filter,
-                str(final_clip),
-            ]
+    with tempfile.TemporaryDirectory(prefix="export-", dir=tmp_root) as directory:
+        work_dir = Path(directory)
+        tmp_clip = work_dir / "source.mp3"
+        rendered_clip = work_dir / "rendered.mp3"
+        _extract_audio_slice(
+            input_audio, candidate.start, candidate.duration, tmp_clip,
+            metadata=(("title", title), ("TXXX:ORIGINAL_START_TIME", candidate.original_start)),
         )
+        options = export_options or ExportOptions(mode="trim_edges")
+        audio_filter = _audio_filter_for_options(options)
+        if audio_filter is None:
+            shutil.copy2(tmp_clip, rendered_clip)
+        else:
+            _run([
+                "ffmpeg", "-y", "-loglevel", "quiet", "-i", str(tmp_clip),
+                "-af", audio_filter, str(rendered_clip),
+            ])
+        temporary_final = clip_dir / f".{basename}.{uuid4().hex}.mp3"
+        try:
+            shutil.copy2(rendered_clip, temporary_final)
+            final_clip = _publish_clip(temporary_final, final_clip, replace_existing=replace_existing)
+        finally:
+            temporary_final.unlink(missing_ok=True)
     return final_clip
+
+
+def render_export_preview(
+    input_audio: Path,
+    candidate: ClipCandidate,
+    options: ExportOptions,
+    output: Path,
+) -> None:
+    """Render one immutable export preview without publishing a clip."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="work-", dir=output.parent) as directory:
+        source = Path(directory) / "source.mp3"
+        _extract_audio_slice(input_audio, candidate.start, candidate.duration, source)
+        audio_filter = _audio_filter_for_options(options)
+        if audio_filter is None:
+            shutil.copy2(source, output)
+            return
+        rendered = Path(directory) / "rendered.mp3"
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(source),
+             "-af", audio_filter, str(rendered)],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip()[-500:] or "FFmpeg could not render the preview")
+        os.replace(rendered, output)

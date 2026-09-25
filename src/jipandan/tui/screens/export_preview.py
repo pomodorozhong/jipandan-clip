@@ -1,6 +1,8 @@
 import subprocess
 import threading
 import time
+import tempfile
+import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -74,14 +76,20 @@ def build_export_preview_artifacts(
 ) -> ExportPreviewArtifacts:
     preview_title = default_export_title(candidate)
     preview_dir.mkdir(parents=True, exist_ok=True)
-    preview_path = ffmpeg.export_clip(
-        audio,
-        candidate,
-        preview_dir,
-        export_title=preview_title,
-        export_options=options,
-    )
-    preview_seconds = ffmpeg.probe_duration_seconds(preview_path)
+    job_dir = Path(tempfile.mkdtemp(prefix="render-", dir=preview_dir))
+    try:
+        preview_path = ffmpeg.export_clip(
+            audio,
+            candidate,
+            job_dir,
+            export_title=preview_title,
+            export_options=options,
+            tmp_dir=job_dir,
+        )
+        preview_seconds = ffmpeg.probe_duration_seconds(preview_path)
+    except Exception:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise
     if options.mode == "as_is":
         as_is_seconds = preview_seconds
     else:

@@ -1,4 +1,5 @@
 from pathlib import Path
+import hashlib
 
 from textual.app import App
 
@@ -37,7 +38,7 @@ class JipandanApp(App):
     def on_mount(self) -> None:
         session_path = self.audio.with_suffix(".jipandan.json")
 
-        if not self.srt_path.exists():
+        if not self.srt_path.exists() and not session_path.exists():
             self.push_screen(
                 TranscribeWizardScreen(
                     audio=self.audio,
@@ -52,25 +53,38 @@ class JipandanApp(App):
             )
             return
 
-        if self.resume and session_path.exists():
-            session = Session.load(session_path)
-            session.audio = self.audio
-            session.srt = self.srt_path
-            session.clip_dir = self.clip_dir
-            warnings = session.merge_with_srt()
-            for warning in warnings:
-                self.notify(warning, severity="warning")
-            session.save()
-            self.push_screen(ReviewScreen(session))
-            return
-
         if session_path.exists():
             session = Session.load(session_path)
             session.audio = self.audio
             session.srt = self.srt_path
             session.clip_dir = self.clip_dir
-            session.merge_with_srt()
-            session.save()
+            changes = session.srt_merge_preview() if self.srt_path.exists() else None
+            uncertain_text_change = (
+                self.srt_path.exists()
+                and session.srt_fingerprint is None
+                and self.srt_path.stat().st_mtime_ns > session_path.stat().st_mtime_ns
+            )
+            changed_file = (
+                self.srt_path.exists()
+                and session.srt_fingerprint is not None
+                and session.srt_fingerprint
+                != hashlib.sha256(self.srt_path.read_bytes()).hexdigest()
+            )
+            if (changes and any(changes.values())) or uncertain_text_change or changed_file:
+                summary = ", ".join(
+                    f"{len(ids)} {kind}" for kind, ids in (changes or {}).items() if ids
+                )
+                if not summary:
+                    summary = "file content changed"
+                self.notify(
+                    "SRT differs from saved session: " + summary
+                    + ("; text may have changed" if uncertain_text_change else "")
+                    + ". Saved clips were kept; use the web merge review to reconcile.",
+                    severity="warning",
+                    timeout=12,
+                )
+            elif not self.srt_path.exists():
+                self.notify("SRT is missing; saved clips were kept.", severity="warning")
             self.push_screen(ReviewScreen(session))
             return
 

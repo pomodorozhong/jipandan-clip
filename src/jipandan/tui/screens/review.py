@@ -8,7 +8,6 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.timer import Timer
 from textual.widgets import Footer, Header, Input, ListView, Tab, Tabs
 
 from jipandan.core import ffmpeg
@@ -145,7 +144,6 @@ class ReviewScreen(Screen):
         self._waveform_service: WaveformService | None = None
         self._skip_undo_stack: list[tuple[str, ClipStatus]] = []
         self._waveform_bulk_progress: str | None = None
-        self._persist_debounce_timer: Timer | None = None
         self._export_preview_preload_generation = 0
         self._export_preview_preload_key: tuple[object, ...] | None = None
         self._export_preview_preload: ExportPreviewArtifacts | None = None
@@ -375,21 +373,6 @@ class ReviewScreen(Screen):
     def _persist(self) -> None:
         self.session.save()
 
-    def _persist_debounced(self, *, delay_seconds: float = 0.5) -> None:
-        if self._persist_debounce_timer is not None:
-            self._persist_debounce_timer.stop()
-            self._persist_debounce_timer = None
-
-        def save_session() -> None:
-            self._persist_debounce_timer = None
-            self._persist()
-
-        self._persist_debounce_timer = self.set_timer(
-            delay_seconds,
-            save_session,
-            name="persist-debounce",
-        )
-
     def _restore_list_index_if_drifted(self, pinned_index: int | None) -> None:
         self._clip_list.restore_list_index_if_drifted(
             self._list_view(), pinned_index
@@ -498,6 +481,10 @@ class ReviewScreen(Screen):
             return
         dom_index = list_view.index
         preserve = self._clip_list.preserve_after_status_change(list_view, dom_index)
+        current = self._current_candidate()
+        if current is None or current.clip_id not in self._clip_list.filtered_clip_ids:
+            return
+        visible_index = self._clip_list.filtered_clip_ids.index(current.clip_id)
         clip_ids_to_skip = self._clip_list.filtered_clip_ids[: visible_index + 1]
         restored_before_skip = [
             (clip_id, "pending")
@@ -721,7 +708,7 @@ class ReviewScreen(Screen):
             return
         self._detail_panel().update_after_nudge(candidate)
         self.call_after_refresh(self._restore_list_index_if_drifted, pinned_index)
-        self._persist_debounced()
+        self._persist()
 
     def _nudge_end(self, delta: float) -> None:
         if self._detail_panel().is_waveform_image_updating():
@@ -738,7 +725,7 @@ class ReviewScreen(Screen):
             return
         self._detail_panel().update_after_nudge(candidate)
         self.call_after_refresh(self._restore_list_index_if_drifted, pinned_index)
-        self._persist_debounced()
+        self._persist()
 
     def action_play_preview(self) -> None:
         if self._clip_search_focused():

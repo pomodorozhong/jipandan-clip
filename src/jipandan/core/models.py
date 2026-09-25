@@ -1,4 +1,9 @@
 import json
+import fcntl
+import hashlib
+import os
+import shutil
+import tempfile
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Literal
@@ -20,6 +25,10 @@ ZERO_DURATION_BUMP_SECONDS = 1.0
 MIN_CLIP_DURATION_SECONDS = 0.01
 
 
+class ConcurrentSessionChange(RuntimeError):
+    """The on-disk session changed since this copy was opened."""
+
+
 @dataclass
 class ClipCandidate:
     index: int
@@ -31,11 +40,13 @@ class ClipCandidate:
     status: ClipStatus = "pending"
     # 0 for the original SRT-derived clip, 2+ for duplicates ("144-2", "144-3", ...).
     suffix: int = 0
+    source_text: str | None = None
     # Persist the last export settings used for this clip (if any).
     last_export_title: str | None = None
     last_export_mode: str | None = None
     last_export_start_threshold_db: float | None = None
     last_export_stop_threshold_db: float | None = None
+    last_export_path: str | None = None
 
     @property
     def clip_id(self) -> str:
@@ -82,6 +93,8 @@ class Session:
     clip_dir: Path
     candidates: list[ClipCandidate] = field(default_factory=list)
     version: int = SESSION_VERSION
+    revision: int = 0
+    srt_fingerprint: str | None = None
 
     @property
     def session_path(self) -> Path:
@@ -109,6 +122,7 @@ class Session:
                     original_end=srt_time_to_ffmpeg(entry.end),
                     start=start,
                     duration=compute_duration(entry.start, entry.end),
+                    source_text=entry.text,
                 )
             )
         return cls(
@@ -116,6 +130,7 @@ class Session:
             srt=srt_path.resolve(),
             clip_dir=(clip_dir or Path("clip")).resolve(),
             candidates=candidates,
+            srt_fingerprint=hashlib.sha256(srt_path.read_bytes()).hexdigest(),
         )
 
     @classmethod
@@ -131,22 +146,73 @@ class Session:
             clip_dir=Path(data["clip_dir"]),
             candidates=candidates,
             version=data.get("version", SESSION_VERSION),
+            revision=data.get("revision", 0),
+            srt_fingerprint=data.get("srt_fingerprint"),
         )
 
     def save(self) -> None:
-        payload = {
-            "version": self.version,
-            "audio": str(self.audio),
-            "srt": str(self.srt),
-            "clip_dir": str(self.clip_dir),
-            "candidates": [asdict(candidate) for candidate in self.candidates],
-        }
-        self.session_path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+        self.session_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self.session_path.with_name(f".{self.session_path.name}.lock")
+        with lock_path.open("a+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if self.session_path.exists():
+                disk_revision = json.loads(
+                    self.session_path.read_text(encoding="utf-8")
+                ).get("revision", 0)
+                if disk_revision != self.revision:
+                    raise ConcurrentSessionChange(
+                        f"Session is at revision {disk_revision}; opened revision {self.revision}"
+                    )
+            next_revision = self.revision + 1
+            payload = {
+                "version": self.version,
+                "revision": next_revision,
+                "srt_fingerprint": self.srt_fingerprint,
+                "audio": str(self.audio),
+                "srt": str(self.srt),
+                "clip_dir": str(self.clip_dir),
+                "candidates": [asdict(candidate) for candidate in self.candidates],
+            }
+            temporary_path: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=self.session_path.parent,
+                    prefix=f".{self.session_path.name}.", suffix=".tmp", delete=False,
+                ) as handle:
+                    temporary_path = Path(handle.name)
+                    json.dump(payload, handle, indent=2, ensure_ascii=False)
+                    handle.write("\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary_path, self.session_path)
+                self.revision = next_revision
+            finally:
+                if temporary_path is not None:
+                    temporary_path.unlink(missing_ok=True)
 
-    def merge_with_srt(self) -> list[str]:
+    def srt_merge_preview(self) -> dict[str, list[int]]:
+        """Describe SRT changes without changing the saved session."""
+        fresh = Session.from_srt(self.audio, self.srt, self.clip_dir)
+        current = {c.index: c for c in self.candidates if c.suffix == 0}
+        incoming = {c.index: c for c in fresh.candidates}
+        return {
+            "added": sorted(incoming.keys() - current.keys()),
+            "removed": sorted(current.keys() - incoming.keys()),
+            "timing_changed": sorted(
+                index for index in current.keys() & incoming.keys()
+                if (current[index].original_start, current[index].original_end)
+                != (incoming[index].original_start, incoming[index].original_end)
+            ),
+            "text_changed": sorted(
+                index for index in current.keys() & incoming.keys()
+                if current[index].source_text is not None
+                and current[index].source_text != incoming[index].source_text
+            ),
+        }
+
+    def merge_with_srt(
+        self, *, remove_missing: bool = False, remove_missing_indexes: set[int] | None = None
+    ) -> list[str]:
         """Refresh candidates from SRT, preserving status, finetuned times, and duplicates."""
         warnings: list[str] = []
         fresh = Session.from_srt(self.audio, self.srt, self.clip_dir)
@@ -161,45 +227,74 @@ class Session:
                 merged.append(fresh_candidate)
                 continue
             for prior in group:
+                unchanged_bounds = (
+                    prior.start == prior.original_start
+                    and prior.end == prior.original_end
+                )
+                merged_start = fresh_candidate.start if unchanged_bounds else prior.start
+                merged_duration = fresh_candidate.duration if unchanged_bounds else prior.duration
+                merged_title = (
+                    fresh_candidate.title
+                    if prior.source_text is not None and prior.title == prior.source_text
+                    else prior.title
+                )
                 if prior.suffix == 0:
                     merged.append(
                         ClipCandidate(
                             index=fresh_candidate.index,
-                            title=prior.title,
+                            title=merged_title,
                             original_start=fresh_candidate.original_start,
                             original_end=fresh_candidate.original_end,
-                            start=prior.start,
-                            duration=prior.duration,
+                            start=merged_start,
+                            duration=merged_duration,
                             status=prior.status,
                             suffix=0,
+                            source_text=fresh_candidate.source_text,
                             last_export_title=prior.last_export_title,
                             last_export_mode=prior.last_export_mode,
                             last_export_start_threshold_db=prior.last_export_start_threshold_db,
                             last_export_stop_threshold_db=prior.last_export_stop_threshold_db,
+                            last_export_path=prior.last_export_path,
                         )
                     )
                 else:
                     merged.append(
                         ClipCandidate(
                             index=fresh_candidate.index,
-                            title=prior.title,
+                            title=merged_title,
                             original_start=fresh_candidate.original_start,
                             original_end=fresh_candidate.original_end,
-                            start=prior.start,
-                            duration=prior.duration,
+                            start=merged_start,
+                            duration=merged_duration,
                             status=prior.status,
                             suffix=prior.suffix,
+                            source_text=fresh_candidate.source_text,
                             last_export_title=prior.last_export_title,
                             last_export_mode=prior.last_export_mode,
                             last_export_start_threshold_db=prior.last_export_start_threshold_db,
                             last_export_stop_threshold_db=prior.last_export_stop_threshold_db,
+                            last_export_path=prior.last_export_path,
                         )
                     )
 
         fresh_indices = {candidate.index for candidate in fresh.candidates}
         removed_indices = [index for index in existing_by_index if index not in fresh_indices]
         if removed_indices:
-            warnings.append(f"Removed {len(removed_indices)} candidates no longer in SRT.")
+            removed = set(removed_indices) if remove_missing else (remove_missing_indexes or set())
+            if removed:
+                if self.session_path.exists():
+                    backup = self.session_path.with_name(
+                        f"{self.session_path.name}.revision-{self.revision}.bak"
+                    )
+                    shutil.copy2(self.session_path, backup)
+                warnings.append(f"Removed {len(removed & set(removed_indices))} SRT entries after backup.")
+            for index, group in existing_by_index.items():
+                if index not in removed:
+                    merged.extend(group)
+            merged.sort(key=lambda candidate: (candidate.index, candidate.suffix))
+            kept = len(set(removed_indices) - removed)
+            if kept:
+                warnings.append(f"Kept {kept} entries absent from SRT.")
 
         added = [
             candidate.index
@@ -210,6 +305,7 @@ class Session:
             warnings.append(f"Added {len(added)} new candidates from SRT.")
 
         self.candidates = merged
+        self.srt_fingerprint = fresh.srt_fingerprint
         return warnings
 
     def get_candidate(self, clip_id: str) -> ClipCandidate | None:
@@ -251,6 +347,7 @@ class Session:
             duration=source.duration,
             status=duplicate_status,
             suffix=new_suffix,
+            source_text=source.source_text,
             last_export_title=source.last_export_title,
             last_export_mode=source.last_export_mode,
             last_export_start_threshold_db=source.last_export_start_threshold_db,
