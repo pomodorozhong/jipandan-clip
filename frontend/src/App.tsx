@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, audioUrl, bootstrap, uploadAudio, type Clip, type Session, type Status } from "./api";
 import WaveformEditor from "./WaveformEditor";
 import ExportPreview from "./ExportPreview";
+import TranscriptionScreen from "./TranscriptionScreen";
 
 type Filter = "unsorted" | "group1" | "group2" | "exported" | "all";
 type SaveState = "saved" | "saving" | "failed";
@@ -152,6 +153,7 @@ export default function App() {
     ? selectedId : (visible[0]?.clip_id ?? null);
   const selected = session?.candidates.find((clip) => clip.clip_id === effectiveSelectedId) ?? null;
   const selectedPosition = visible.findIndex((clip) => clip.clip_id === effectiveSelectedId);
+  const nextVisibleClipId = visible[selectedPosition + 1]?.clip_id ?? null;
   const throughCurrent = selectedPosition < 0 ? [] : visible.slice(0, selectedPosition + 1);
   const bulkPending = throughCurrent.filter((clip) => clip.status === "pending");
   const hasMergeChanges = Boolean(session?.merge_preview && (
@@ -309,14 +311,14 @@ export default function App() {
         </div>
       </div>
       <div className="flex items-center gap-3 text-sm">
-        {session?.audio && <span aria-live="polite" className={saveState === "failed" ? "text-[#ffb3a8]" : saveState === "saving" ? "text-[#ead49b]" : "accent"}>
+        {session?.audio && !session.needs_transcription && <span aria-live="polite" className={saveState === "failed" ? "text-[#ffb3a8]" : saveState === "saving" ? "text-[#ead49b]" : "accent"}>
           {saveState === "saving" ? "Saving…" : saveState === "failed" ? "Save failed" : "Saved"}
         </span>}
-        {session?.audio && <ActionButton onClick={() => {
+        {session?.audio && !session.needs_transcription && <ActionButton onClick={() => {
           if (session.revision === null) return;
           void mutate(() => api<Session>("/session/undo", "POST", { expected_revision: session.revision }));
         }} disabled={!session.can_undo || busy} title="Undo recent change (U)" shortcut="U">Undo</ActionButton>}
-        <ActionButton onClick={() => setShowHelp(true)} title="Keyboard shortcuts" shortcut="?">Shortcuts</ActionButton>
+        {!session?.needs_transcription && <ActionButton onClick={() => setShowHelp(true)} title="Keyboard shortcuts" shortcut="?">Shortcuts</ActionButton>}
       </div>
     </header>
 
@@ -353,10 +355,8 @@ export default function App() {
         <span>The SRT changed since this session was saved. Your reviewed clips are still here.</span>
         <ActionButton onClick={() => setShowMerge(true)}>Review SRT changes</ActionButton>
       </div>}
-      {session.needs_transcription ? <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center overflow-auto px-5 py-12">
-        <h1 className="mb-3 text-3xl font-semibold">No SRT yet</h1>
-        <p className="subtle">Transcription will be available in the next build. You can use the existing <code>transcribe</code> command, then reopen this audio.</p>
-      </main> : <>
+      {session.needs_transcription ? <TranscriptionScreen key={session.audio} session={session}
+        onReady={(next) => { setSession(next); setFilter("unsorted"); setSelectedId(null); }} /> : <>
       <main className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden md:grid-cols-[minmax(310px,38%)_1fr]">
         <section className={`${showDetailMobile ? "hidden md:flex" : "flex"} min-h-0 flex-col overflow-hidden border-r line`} aria-label="Clip list">
           <div className="shrink-0 border-b line p-4 md:p-5">
@@ -367,7 +367,8 @@ export default function App() {
             <div className="mb-3 flex flex-wrap gap-1 md:grid md:grid-cols-2 xl:grid-cols-6 2xl:flex" role="group" aria-label="Status filter">
               {filters.map((item) => <button key={item.key} type="button" onClick={() => setFilter(item.key)}
                 aria-pressed={filter === item.key}
-                aria-label={`${item.label}, ${item.key === "all" ? session.candidates.length : session.counts[item.key === "unsorted" ? "pending" : item.key]} clips`}
+                aria-label={`${item.label}, ${item.key === "all" ? session.candidates.length : session.counts[item.key === "unsorted" ? "pending" : item.key]} ${
+                  (item.key === "all" ? session.candidates.length : session.counts[item.key === "unsorted" ? "pending" : item.key]) === 1 ? "clip" : "clips"}`}
                 className={`inline-flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-xs font-medium ${item.key === "exported" || item.key === "all" ? "xl:col-span-3" : "xl:col-span-2"} 2xl:col-auto ${filter === item.key ? "bg-[#b7d69d] text-[#1b291f]" : "soft-surface subtle hover:text-white"}`}>
                 <span>{item.label}</span><span aria-hidden="true" className={`mono min-w-6 rounded-full px-1.5 py-0.5 text-center text-[11px] font-semibold leading-none ${filter === item.key ? "bg-[#1b291f]/15" : "bg-[#415447] text-[#edf2ee]"}`}>
                   {item.key === "all" ? session.candidates.length : session.counts[item.key === "unsorted" ? "pending" : item.key]}
@@ -478,7 +479,22 @@ export default function App() {
       </main>
       </>}
       {selected && session.revision !== null && <ExportPreview key={selected.clip_id} clip={selected}
-        revision={session.revision} open={showExportModal} onClose={() => setShowExportModal(false)} />}
+        revision={session.revision} open={showExportModal} nextClipId={nextVisibleClipId}
+        onClose={() => setShowExportModal(false)} onPublished={(next, advance) => {
+          setSession(next);
+          setSaveState("saved");
+          if (advance && nextVisibleClipId) {
+            setSelectedId(nextVisibleClipId);
+          } else if (!advance) {
+            setSelectedId(selected.clip_id);
+            const exportedClip = next.candidates.find((clip) => clip.clip_id === selected.clip_id);
+            if (exportedClip && !visibleClips([exportedClip], filter, query, hideProcessed).length) {
+              setFilter("all");
+              setHideProcessed(false);
+              if (!visibleClips([exportedClip], "all", query, false).length) setQuery("");
+            }
+          }
+        }} />}
     </>}
 
     {showBulk && <Dialog title="Skip through current clip" onClose={() => setShowBulk(false)}>
@@ -536,14 +552,15 @@ export default function App() {
       <div className="grid grid-cols-[6rem_1fr] gap-y-2 text-sm">
         {[["Space", "Play / pause clip"], ["J / K", "Next / previous clip"], ["1 / 2", "Mark Group 1 / Group 2"],
           ["X", "Skip clip"], ["U", "Undo recent change"], ["D", "Duplicate clip"],
-          ["R", "Rename title"], ["G", "Jump to index"], ["E", "Open export preview"], ["/", "Search titles"],
+          ["R", "Rename title"], ["G", "Jump to index"], ["E", "Open export preview"],
+          ["Enter", "Export (in preview)"], ["⌘ Enter", "Export & Next (in preview)"], ["/", "Search titles"],
           [", / .", "Nudge start − / + 10 ms (Shift: 100 ms)"],
           ["[ / ]", "Nudge end − / + 10 ms (Shift: 100 ms)"],
           ["?", "Show this help"]].map(([key, action]) => <div key={key} className="contents">
             <kbd className="accent mono">{key}</kbd><span>{action}</span>
           </div>)}
       </div>
-      <p className="subtle mt-5 text-xs">Shortcuts pause while you type in a search, title, or other input.</p>
+      <p className="subtle mt-5 text-xs">Review shortcuts pause while you type. Enter and ⌘ Enter work in the export title field.</p>
     </Dialog>}
   </div>;
 }

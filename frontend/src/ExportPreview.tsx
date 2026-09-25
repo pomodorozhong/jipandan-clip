@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, previewUrl, type Clip, type ExportMode, type PreviewJob, type WaveformWindow } from "./api";
+import { api, previewUrl, type Clip, type ExportMode, type PreviewJob, type Session, type WaveformWindow } from "./api";
 import PreviewPlayer, { type PreviewPlayerHandle } from "./PreviewPlayer";
 
 const descriptions: Record<ExportMode, string> = {
@@ -26,8 +26,10 @@ function peak(waveform: WaveformWindow | null): number {
   return result;
 }
 
-export default function ExportPreview({ clip, revision, open, onClose }: {
+export default function ExportPreview({ clip, revision, open, nextClipId, onClose, onPublished }: {
   clip: Clip; revision: number; open: boolean; onClose: () => void;
+  nextClipId: string | null;
+  onPublished: (session: Session, advance: boolean) => void;
 }) {
   const [mode, setMode] = useState<ExportMode>("trim_edges");
   const [startDb, setStartDb] = useState("-40");
@@ -39,8 +41,12 @@ export default function ExportPreview({ clip, revision, open, onClose }: {
   const [referenceError, setReferenceError] = useState("");
   const [requesting, setRequesting] = useState(false);
   const [referenceRequesting, setReferenceRequesting] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
+  const [outputPath, setOutputPath] = useState("");
   const referenceStartedFor = useRef("");
   const candidateWasOpen = useRef(false);
+  const exportInFlight = useRef(false);
   const referenceRequestId = useRef(0);
   const referencePlayer = useRef<PreviewPlayerHandle>(null);
   const candidatePlayer = useRef<PreviewPlayerHandle>(null);
@@ -103,6 +109,35 @@ export default function ExportPreview({ clip, revision, open, onClose }: {
     setMode(next);
     if (next === "trim_all") { setStartDb("-30"); setStopDb("-30"); }
     if (next === "trim_edges") { setStartDb("-40"); setStopDb("-50"); }
+  }
+
+  const publish = useCallback(async (advance: boolean) => {
+    if (!candidateReady || !job || exporting || requesting || exportInFlight.current ||
+        (advance && !nextClipId)) return;
+    exportInFlight.current = true;
+    setExporting(true);
+    setExportError("");
+    try {
+      const result = await api<Session>("/exports", "POST", {
+        preview_id: job.id, expected_revision: revision,
+      });
+      setOutputPath(result.output_path ?? "");
+      onPublished(result, advance);
+    } catch (cause) {
+      setExportError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      exportInFlight.current = false;
+      setExporting(false);
+    }
+  }, [candidateReady, job, exporting, requesting, nextClipId, revision, onPublished]);
+
+  async function reveal() {
+    setExportError("");
+    try {
+      await api(`/clips/${encodeURIComponent(clip.clip_id)}/reveal-export`, "POST");
+    } catch (cause) {
+      setExportError(cause instanceof Error ? cause.message : String(cause));
+    }
   }
 
   useEffect(() => {
@@ -171,8 +206,18 @@ export default function ExportPreview({ clip, revision, open, onClose }: {
     function onKeyDown(event: KeyboardEvent) {
       if (event.isComposing || event.key === "Process") return;
       if (event.key === "Escape") { event.preventDefault(); onClose(); return; }
+      if (event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key === "Enter") {
+        event.preventDefault();
+        if (!event.repeat) void publish(true);
+        return;
+      }
       if (event.altKey || event.ctrlKey || event.metaKey) return;
       const target = event.target as HTMLElement | null;
+      if (event.key === "Enter" && !event.shiftKey && !target?.closest("button, a, [role='button']")) {
+        event.preventDefault();
+        if (!event.repeat) void publish(false);
+        return;
+      }
       if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
       if (event.code === "Space") {
         event.preventDefault();
@@ -192,7 +237,7 @@ export default function ExportPreview({ clip, revision, open, onClose }: {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, onClose]);
+  }, [open, onClose, publish]);
 
   if (!open) return null;
 
@@ -302,14 +347,32 @@ export default function ExportPreview({ clip, revision, open, onClose }: {
         </div>
       </div>
 
-      <footer className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-t line bg-[#17211d] px-4 py-4 sm:px-7">
-        <div className="min-w-0"><p className="subtle text-[10px] font-bold uppercase tracking-[.12em]">Proposed filename</p>
-          <p className="mt-1 break-all text-xs font-semibold">{job && !stale ? job.proposed_filename : "Filename updates with the preview"}</p></div>
+      <footer className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-t line bg-[#17211d] px-4 py-4 sm:px-7">
+        <div className="min-w-0 flex-1"><p className="subtle text-[10px] font-bold uppercase tracking-[.12em]">{outputPath ? "Exported file" : "Proposed filename"}</p>
+          <p className="mt-1 break-all text-xs font-semibold">{outputPath || (job && !stale ? job.proposed_filename : "Filename updates with the preview")}</p>
+          <p className="subtle mt-1 break-all text-[11px]">{outputPath
+            ? `Next export: ${job && !stale ? job.proposed_filename : "filename updates with the preview"}`
+            : "Saved in the session’s export directory"}</p>
+          {exportError && <p role="alert" className="mt-2 text-xs text-[#ffb3a8]">{exportError}</p>}
+        </div>
         <div className="subtle flex flex-wrap items-center gap-2 text-xs">
           <span>As is <strong className="text-[#d3ecf3]">{duration(referenceDuration)}</strong></span>
           <span aria-hidden="true">→</span>
           <span>{modes.find((item) => item.value === mode)?.label} <strong className="text-[#d8edb6]">{candidateReady ? duration(candidateDuration) : "—"}</strong></span>
           {candidateReady && <span>· {difference < 0 ? "Shorter" : difference > 0 ? "Longer" : "Difference"} <strong className="text-[#d8edb6]">{duration(Math.abs(difference))}</strong></span>}
+        </div>
+        <div className="flex gap-2">
+          {outputPath && <button type="button" onClick={() => void reveal()}
+            className="rounded-lg border line px-4 py-2 text-sm font-semibold">Reveal file</button>}
+          <button type="button" onClick={() => void publish(false)} disabled={!candidateReady || exporting || requesting}
+            className="rounded-lg border line px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50">
+            Export <kbd aria-hidden="true" className="shortcut-key ml-2">Enter</kbd></button>
+          <button type="button" onClick={() => void publish(true)} disabled={!candidateReady || exporting || requesting || !nextClipId}
+            title={nextClipId ? "Export and open the next clip (Command+Enter)" : "No next clip in this view"}
+            className="rounded-lg bg-[#b7d69d] px-4 py-2 text-sm font-semibold text-[#1d2d20] disabled:cursor-not-allowed disabled:opacity-50">
+            {exporting ? "Exporting…" : "Export & Next"}
+            <kbd aria-hidden="true" className="shortcut-key ml-2">⌘ Enter</kbd>
+          </button>
         </div>
       </footer>
     </section>

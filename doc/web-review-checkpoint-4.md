@@ -1,6 +1,6 @@
 # Checkpoint 4: review cached rendered previews and waveforms
 
-**Status:** Updated build ready for owner review. Final MP3 export is not enabled in this build.
+**Status:** Approved by the owner on 2026-09-25. This document records the preview-only build that was reviewed before final MP3 export was added.
 
 This build uses a disposable copy of `raw/0526.mp3`, its SRT, and its saved session in `tmp/web-preview-0526/`. The original recording, session, and exported clips are untouched. Clip #14 is a useful silence-sensitive example: its selected span is 2.10 seconds, while the default Trim edges preview renders at about 1.79 seconds. Aggressive Trim all settings can remove all playable audio and show a render error.
 

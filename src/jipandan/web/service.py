@@ -7,7 +7,9 @@ import hashlib
 import logging
 import math
 import os
+import re
 import shutil
+import subprocess
 import sys
 import uuid
 import threading
@@ -15,7 +17,9 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import BinaryIO, Callable
 
-from jipandan.core.ffmpeg import ExportOptions, probe_duration_seconds
+from jipandan.core.ffmpeg import ExportOptions, probe_duration_seconds, publish_prebuilt_clip
+from jipandan.core.srt import parse_srt
+from jipandan.core.whisper import describe_transcribe_call
 from jipandan.core.models import (
     ClipCandidate,
     ConcurrentSessionChange,
@@ -25,6 +29,7 @@ from jipandan.core.models import (
 from jipandan.core.srt import seconds_to_ffmpeg_timestamp, srt_time_to_seconds
 from jipandan.web.waveform import MAX_BUCKETS, MAX_WINDOW_MS, MIN_BUCKETS, WaveformCache
 from jipandan.web.preview import PreviewJobs
+from jipandan.web.transcription import TranscriptionJob, TranscriptionJobs
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +43,10 @@ class SessionNotReady(Exception):
 
 
 class InvalidEdit(ValueError):
+    pass
+
+
+class RevealUnavailable(Exception):
     pass
 
 
@@ -58,7 +67,7 @@ def clip_payload(candidate: ClipCandidate) -> dict:
 
 class SessionService:
     def __init__(self, clip_dir: Path | None = None, upload_dir: Path | None = None,
-                 preview_dir: Path | None = None) -> None:
+                 preview_dir: Path | None = None, transcription_dir: Path | None = None) -> None:
         self._lock = threading.RLock()
         self.audio: Path | None = None
         self.srt: Path | None = None
@@ -72,6 +81,81 @@ class SessionService:
         self._undo: list[tuple[str, dict[str, ClipCandidate]]] = []
         self._waveforms = WaveformCache()
         self._previews = PreviewJobs((preview_dir or Path("tmp/web-previews")).resolve())
+        self._transcriptions = TranscriptionJobs(
+            (transcription_dir or Path("tmp/web-transcriptions")).resolve(),
+            self._publish_transcription,
+        )
+
+    def start_transcription(self, audio: str, settings: dict) -> dict:
+        with self._lock:
+            if self.audio is None or str(self.audio) != audio:
+                raise SessionConflict("Opened audio changed; reload before transcribing")
+            if self.session is not None or (self.srt and self.srt.exists()):
+                raise SessionNotReady("This audio already has an SRT or saved session")
+            language = settings.get("language") or None
+            if language is not None and not re.fullmatch(r"[A-Za-z-]{2,16}", language):
+                raise InvalidEdit("Use a short language code such as en or zh")
+            try:
+                describe_transcribe_call(
+                    model_name=settings["model_name"], language=language,
+                    temperature=settings["temperature"], max_context=settings["max_context"],
+                    entropy_thold=settings["entropy_thold"],
+                )
+            except (ValueError, KeyError) as exc:
+                raise InvalidEdit(str(exc)) from exc
+            settings = {**settings, "language": language}
+            try:
+                return self._transcriptions.start(self.audio, settings)
+            except ValueError as exc:
+                raise SessionNotReady(str(exc)) from exc
+
+    def transcription(self, job_id: str) -> dict:
+        with self._lock:
+            job = self._transcriptions.get(job_id)
+            if job is None or job["audio"] != str(self.audio):
+                raise InvalidEdit("Transcription job not found")
+            return job
+
+    def retry_transcription(self, job_id: str) -> dict:
+        previous = self.transcription(job_id)
+        if previous["state"] not in {"failed", "cancelled"}:
+            raise SessionNotReady("Only failed or cancelled jobs can be retried")
+        return self.start_transcription(previous["audio"], previous["settings"])
+
+    def cancel_transcription(self, job_id: str) -> dict:
+        self.transcription(job_id)
+        return self._transcriptions.cancel(job_id)
+
+    def _publish_transcription(self, job: TranscriptionJob) -> int:
+        entries = parse_srt(job.output)
+        if not entries or len({entry.index for entry in entries}) != len(entries):
+            raise ValueError("Transcription did not produce a valid SRT")
+        for entry in entries:
+            if srt_time_to_seconds(entry.end) <= srt_time_to_seconds(entry.start):
+                raise ValueError("Transcription contains invalid clip times")
+        destination = job.audio.with_suffix(".srt")
+        staged = destination.with_name(f".{destination.name}.{job.id}.tmp")
+        with self._lock:
+            if destination.exists() or job.audio.with_suffix(".jipandan.json").exists():
+                raise SessionConflict("An SRT or session was created while transcription ran")
+            try:
+                with job.output.open("rb") as source, staged.open("wb") as target:
+                    shutil.copyfileobj(source, target)
+                    target.flush()
+                    os.fsync(target.fileno())
+                os.link(staged, destination)
+                session = Session.from_srt(job.audio, destination, self.default_clip_dir)
+                session.save()
+            finally:
+                staged.unlink(missing_ok=True)
+            if self.audio == job.audio:
+                self.srt = destination
+                self.session = session
+                self._undo.clear()
+            return len(entries)
+
+    def close(self) -> None:
+        self._transcriptions.close()
 
     def start_preview(
         self, clip_id: str, expected_revision: int, *, mode: str,
@@ -126,6 +210,73 @@ class SessionService:
                 if job.state != "completed" or not job.output.is_file():
                     raise SessionNotReady("Preview is not ready")
             return job.output
+
+    def publish_export(self, job_id: str, expected_revision: int) -> dict:
+        """Publish exactly the reviewed preview and persist its resulting clip state."""
+        with self._lock:
+            current = self._check_revision(expected_revision)
+            job = self._previews.get(job_id)
+            if job is None:
+                raise InvalidEdit("Preview not found")
+            candidate = current.get_candidate(job.candidate.clip_id)
+            if self._previews.is_stale(job, self.audio, candidate):
+                raise SessionConflict("Preview is stale; wait for the updated render")
+            with job.lock:
+                if job.state != "completed" or not job.output.is_file():
+                    raise SessionNotReady("Preview is not ready")
+            try:
+                output = publish_prebuilt_clip(
+                    job.output, current.audio, job.candidate, current.clip_dir, job.title,
+                )
+            except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+                raise SessionNotReady(f"Could not export clip: {exc}") from exc
+            draft = copy.deepcopy(current)
+            exported = draft.get_candidate(job.candidate.clip_id)
+            exported.status = "exported"
+            exported.title = job.title
+            exported.last_export_title = job.title
+            exported.last_export_mode = job.options.mode
+            exported.last_export_start_threshold_db = job.options.start_threshold_db
+            exported.last_export_stop_threshold_db = job.options.stop_threshold_db
+            exported.last_export_path = str(output)
+            try:
+                draft.save()
+            except Exception as exc:
+                output.unlink(missing_ok=True)
+                if isinstance(exc, ConcurrentSessionChange):
+                    self.session = Session.load(current.session_path)
+                    self._undo.clear()
+                    raise SessionConflict(str(exc)) from exc
+                raise
+            self.session = draft
+            result = self.snapshot()
+            result["output_path"] = str(output)
+            return result
+
+    def reveal_export(self, clip_id: str) -> None:
+        with self._lock:
+            session = self._ready()
+            candidate = session.get_candidate(clip_id)
+            if candidate is None or not candidate.last_export_path:
+                raise InvalidEdit("This clip has no saved export")
+            output = Path(candidate.last_export_path).resolve()
+            if not output.is_relative_to(session.clip_dir.resolve()) or not output.is_file():
+                raise InvalidEdit("Exported file is unavailable")
+        if sys.platform == "darwin":
+            try:
+                subprocess.run(["open", "-R", str(output)], check=True, capture_output=True, text=True)
+                subprocess.run(
+                    ["open", "-a", "/System/Library/CoreServices/Finder.app"],
+                    check=True, capture_output=True, text=True,
+                )
+            except (OSError, subprocess.CalledProcessError) as exc:
+                logger.warning("Could not reveal exported file in Finder: %s", exc)
+                raise RevealUnavailable("Could not open Finder from the local server") from exc
+        else:
+            try:
+                subprocess.Popen(["xdg-open", str(output.parent)])
+            except OSError as exc:
+                raise RevealUnavailable("Could not open the export folder") from exc
 
     def waveform(self, clip_id: str, start_ms: int, end_ms: int, buckets: int) -> dict:
         with self._lock:
@@ -209,11 +360,19 @@ class SessionService:
                 "session_path": str(session.session_path) if session else None,
                 "clip_dir": str(session.clip_dir) if session else str(self.default_clip_dir),
                 "needs_transcription": bool(self.audio and session is None),
+                "transcription": self._transcriptions.latest(self.audio),
                 "revision": session.revision if session else None,
                 "candidates": [clip_payload(c) for c in session.candidates] if session else [],
                 "counts": counts,
                 "can_undo": bool(self._undo),
                 "merge_preview": self.merge_preview() if session and self.srt and self.srt.exists() else None,
+            }
+
+    def event_snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "revision": self.session.revision if self.session else None,
+                "transcription": self._transcriptions.latest(self.audio),
             }
 
     def _ready(self) -> Session:

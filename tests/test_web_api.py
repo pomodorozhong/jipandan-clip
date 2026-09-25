@@ -2,6 +2,8 @@ import tempfile
 import os
 import json
 import subprocess
+import shutil
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -28,7 +30,10 @@ class WebApiTests(unittest.TestCase):
         self.srt.write_text(SRT, encoding="utf-8")
         self.probe = patch("jipandan.web.service.probe_duration_seconds", return_value=10.0)
         self.probe.start()
-        self.service = SessionService(self.root / "clips", self.root / "uploads")
+        self.service = SessionService(
+            self.root / "clips", self.root / "uploads",
+            self.root / "previews", self.root / "transcriptions",
+        )
         self.client = TestClient(create_app(self.service, allowed_hosts={"testserver"}))
         self.token = self.client.get("/api/bootstrap").json()["token"]
         self.headers = {"x-jipandan-token": self.token}
@@ -36,7 +41,16 @@ class WebApiTests(unittest.TestCase):
     def tearDown(self):
         self.probe.stop()
         self.client.close()
+        self.service.close()
         self.directory.cleanup()
+
+    def wait_for_job(self, path, expected):
+        for _ in range(200):
+            state = self.client.get(path).json()
+            if state["state"] == expected:
+                return state
+            time.sleep(0.01)
+        self.fail(f"Job did not reach {expected}: {state}")
 
     def open(self):
         result = self.client.post(
@@ -302,6 +316,173 @@ class WebApiTests(unittest.TestCase):
                 "clip_id": "1", "expected_revision": 1, "mode": "trim_edges",
                 "title": "First", "start_threshold_db": -100,
             }, headers=self.headers).status_code, 422)
+
+    def test_publish_reviewed_preview_is_collision_safe_and_stale_preview_is_rejected(self):
+        self.open()
+        valid_mp3 = self.root / "valid.mp3"
+        subprocess.run([
+            "ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+            "sine=frequency=440:duration=0.8", str(valid_mp3),
+        ], check=True)
+
+        def render(_audio, _candidate, _options, output):
+            shutil.copyfile(valid_mp3, output)
+
+        with patch("jipandan.web.preview.render_export_preview", side_effect=render):
+            response = self.client.post("/api/previews", json={
+                "clip_id": "1", "expected_revision": 1, "mode": "as_is", "title": "First",
+            }, headers=self.headers)
+            job_id = response.json()["id"]
+            self.wait_for_job(f"/api/previews/{job_id}", "completed")
+            first = self.client.post("/api/exports", json={
+                "preview_id": job_id, "expected_revision": 1,
+            }, headers=self.headers)
+            self.assertEqual(first.status_code, 200, first.text)
+            first_path = Path(first.json()["output_path"])
+            self.assertTrue(first_path.is_file())
+            self.assertEqual(first.json()["candidates"][0]["status"], "exported")
+            original_bytes = first_path.read_bytes()
+            second = self.client.post("/api/exports", json={
+                "preview_id": job_id, "expected_revision": 2,
+            }, headers=self.headers)
+            self.assertEqual(second.status_code, 200, second.text)
+            second_path = Path(second.json()["output_path"])
+            self.assertNotEqual(first_path, second_path)
+            self.assertEqual(first_path.read_bytes(), original_bytes)
+            self.assertTrue(second_path.is_file())
+            trimmed = self.client.patch("/api/clips/1", json={
+                "expected_revision": 3, "start_ms": 1100,
+            }, headers=self.headers)
+            self.assertEqual(trimmed.status_code, 200)
+            stale = self.client.post("/api/exports", json={
+                "preview_id": job_id, "expected_revision": 4,
+            }, headers=self.headers)
+            self.assertEqual(stale.status_code, 409)
+            self.assertEqual(len(list((self.root / "clips").glob("*.mp3"))), 2)
+
+    def test_reveal_export_activates_finder_and_reports_launch_failure(self):
+        self.open()
+        output = self.root / "clips" / "First export.mp3"
+        output.parent.mkdir()
+        output.write_bytes(b"mp3")
+        self.service.session.get_candidate("1").last_export_path = str(output)
+        with patch("jipandan.web.service.sys.platform", "darwin"), \
+             patch("jipandan.web.service.subprocess.run") as launch:
+            revealed = self.client.post("/api/clips/1/reveal-export", headers=self.headers)
+            self.assertEqual(revealed.status_code, 200, revealed.text)
+            self.assertEqual(launch.call_args_list[0].args[0], ["open", "-R", str(output.resolve())])
+            self.assertEqual(launch.call_args_list[1].args[0], [
+                "open", "-a", "/System/Library/CoreServices/Finder.app",
+            ])
+            launch.side_effect = [None, subprocess.CalledProcessError(1, ["open", "-a"])]
+            unavailable = self.client.post("/api/clips/1/reveal-export", headers=self.headers)
+            self.assertEqual(unavailable.status_code, 503)
+            self.assertIn("Could not open Finder", unavailable.json()["detail"])
+
+    def test_transcription_failure_retry_and_srt_publication(self):
+        self.srt.unlink()
+        state = self.open()
+        self.assertTrue(state["needs_transcription"])
+        settings = {"audio": str(self.audio.resolve()), "model_name": "large-v3",
+                    "language": None, "temperature": 0, "max_context": 0,
+                    "entropy_thold": 3}
+
+        with patch("jipandan.web.transcription.TranscriptionJobs._run_process", return_value=1):
+            started = self.client.post("/api/transcriptions", json=settings, headers=self.headers)
+            self.assertEqual(started.status_code, 200, started.text)
+            failed = self.wait_for_job(f"/api/transcriptions/{started.json()['id']}", "failed")
+            self.assertIn("status 1", failed["error"])
+            self.assertFalse(self.srt.exists())
+
+        def succeed(_manager, job):
+            job.output.write_text(SRT, encoding="utf-8")
+            return 0
+
+        with patch("jipandan.web.transcription.TranscriptionJobs._run_process", succeed):
+            retried = self.client.post(
+                f"/api/transcriptions/{started.json()['id']}/retry", headers=self.headers,
+            )
+            self.assertEqual(retried.status_code, 200, retried.text)
+            completed = self.wait_for_job(f"/api/transcriptions/{retried.json()['id']}", "completed")
+            self.assertEqual(completed["entry_count"], 2)
+            self.assertEqual(self.srt.read_text(encoding="utf-8"), SRT)
+            self.assertEqual(len(self.client.get("/api/session").json()["candidates"]), 2)
+            self.assertEqual(self.client.post(
+                "/api/transcriptions", json=settings, headers=self.headers,
+            ).status_code, 409)
+
+    def test_export_save_failure_removes_new_file_and_keeps_session_unexported(self):
+        self.open()
+
+        def render(_audio, _candidate, _options, output):
+            output.write_bytes(b"preview")
+
+        def publish(_source, _audio, _candidate, clip_dir, _title):
+            clip_dir.mkdir(parents=True, exist_ok=True)
+            output = clip_dir / "new.mp3"
+            output.write_bytes(b"exported")
+            return output
+
+        with patch("jipandan.web.preview.render_export_preview", side_effect=render), \
+             patch("jipandan.web.preview.probe_duration_seconds", return_value=0.8), \
+             patch("jipandan.web.service.publish_prebuilt_clip", side_effect=publish):
+            response = self.client.post("/api/previews", json={
+                "clip_id": "1", "expected_revision": 1, "mode": "as_is", "title": "First",
+            }, headers=self.headers)
+            job_id = response.json()["id"]
+            self.wait_for_job(f"/api/previews/{job_id}", "completed")
+            with patch("jipandan.web.service.Session.save", side_effect=OSError("disk full")):
+                with self.assertRaises(OSError):
+                    self.service.publish_export(job_id, 1)
+            self.assertFalse((self.root / "clips" / "new.mp3").exists())
+            self.assertEqual(self.service.snapshot()["revision"], 1)
+            self.assertEqual(self.service.snapshot()["candidates"][0]["status"], "pending")
+
+    def test_interrupted_transcription_recovers_as_failed(self):
+        self.srt.unlink()
+        self.open()
+        job_dir = self.root / "transcriptions" / "interrupted"
+        job_dir.mkdir(parents=True)
+        (job_dir / "job.json").write_text(json.dumps({
+            "id": "interrupted", "audio": str(self.audio.resolve()), "settings": {},
+            "state": "running", "phase": "Transcribing", "created_at": 1,
+        }), encoding="utf-8")
+        recovered = SessionService(
+            self.root / "clips", self.root / "uploads",
+            self.root / "other-previews", self.root / "transcriptions",
+        )
+        try:
+            self.assertEqual(recovered.open_audio(self.audio)["transcription"]["state"], "failed")
+            self.assertIn("server stopped", recovered.snapshot()["transcription"]["error"])
+        finally:
+            recovered.close()
+
+    def test_cancelled_transcription_does_not_publish_srt(self):
+        self.srt.unlink()
+        state = self.open()
+        entered = threading.Event()
+        release = threading.Event()
+        finished = threading.Event()
+
+        def blocked(_manager, job):
+            entered.set()
+            release.wait(2)
+            job.output.write_text(SRT, encoding="utf-8")
+            finished.set()
+            return 0
+
+        settings = {"audio": state["audio"], "model_name": "large-v3"}
+        with patch("jipandan.web.transcription.TranscriptionJobs._run_process", blocked):
+            started = self.client.post("/api/transcriptions", json=settings, headers=self.headers)
+            self.assertEqual(started.status_code, 200, started.text)
+            self.assertTrue(entered.wait(1))
+            cancelled = self.client.post(
+                f"/api/transcriptions/{started.json()['id']}/cancel", headers=self.headers,
+            )
+            self.assertEqual(cancelled.json()["state"], "cancelled")
+            release.set()
+            self.assertTrue(finished.wait(1))
+            self.assertFalse(self.srt.exists())
 
 
 if __name__ == "__main__":

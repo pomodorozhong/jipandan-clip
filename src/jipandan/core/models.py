@@ -46,6 +46,7 @@ class ClipCandidate:
     last_export_mode: str | None = None
     last_export_start_threshold_db: float | None = None
     last_export_stop_threshold_db: float | None = None
+    last_export_path: str | None = None
 
     @property
     def clip_id(self) -> str:
@@ -253,6 +254,7 @@ class Session:
                             last_export_mode=prior.last_export_mode,
                             last_export_start_threshold_db=prior.last_export_start_threshold_db,
                             last_export_stop_threshold_db=prior.last_export_stop_threshold_db,
+                            last_export_path=prior.last_export_path,
                         )
                     )
                 else:
@@ -271,6 +273,7 @@ class Session:
                             last_export_mode=prior.last_export_mode,
                             last_export_start_threshold_db=prior.last_export_start_threshold_db,
                             last_export_stop_threshold_db=prior.last_export_stop_threshold_db,
+                            last_export_path=prior.last_export_path,
                         )
                     )
 

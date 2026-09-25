@@ -51,7 +51,7 @@ cd frontend && npm install && npm run build && cd ..
 uv run jipandan-web raw.mp3
 ```
 
-The GUI currently handles opening audio, reviewing SRT candidates, marking, filtering, renaming, duplication, bulk skip, undo, source playback, and waveform trimming. Transcription and export are still under development. Use a copy of a session for testing.
+The GUI now also supports local transcription jobs, rendered export previews, and collision-safe MP3 export. It is still in end-to-end review, so use a copy of a session for testing. The TUI remains the recommended workflow until that review is complete.
 
 ### 3. CLI (legacy)
 

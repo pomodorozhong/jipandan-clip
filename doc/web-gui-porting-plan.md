@@ -2,7 +2,7 @@
 
 Build a local browser interface that can open audio, transcribe when needed, review and trim clips, and export MP3s without losing edits. Reuse the Python audio pipeline and keep the TUI available during migration.
 
-**Current state:** Phases 0–3 and checkpoints 1–3 are complete. Phase 4A's modal preview build, background pre-render cache, and rendered waveform are ready for [checkpoint 4](web-review-checkpoint-4.md); owner listening and interaction feedback is pending before final export publication. The [review guide](your-web-gui-review-guide.md) covers the remaining hands-on checkpoints.
+**Current state:** Phases 0–4A and checkpoints 1–4 are complete. The owner approved the rendered preview flow. Phase 4B now has transcription jobs and final export publication in a review build; [checkpoint 5](web-review-checkpoint-5.md) is ready for end-to-end owner review. The [review guide](your-web-gui-review-guide.md) covers that hands-on checkpoint.
 
 ## Scope
 
@@ -19,7 +19,7 @@ Each checkpoint needs a runnable build, safe test copy, one launch instruction, 
 | 1. Set the rules | Before Phase 0 changes settle persistence and export behavior | Decide how to handle removed SRT entries, existing export filenames, search scope, and expected undo behavior. |
 | 2. Try the review screen | End of Phase 2, before the waveform UI is built on it | Confirm the list, filters, search, marking, rename, bulk actions, and reload flow work naturally. |
 | 3. Try waveform editing — complete | End of Phase 3 | The owner approved the listening and trim flow. |
-| 4. Try rendered previews | End of Phase 4A, before final export publication UI is fixed | Compare export modes and rendered audio; confirm that option placement, stale-preview feedback, title, and filename are clear. |
+| 4. Try rendered previews — complete | End of Phase 4A | The owner approved the rendered audio and interaction flow. |
 | 5. Finish a real session | End of Phase 4B, before cutover decisions | Confirm transcription through final exported MP3 works on representative audio, including one failure and retry. |
 
 Treat feedback at any point as a change request for the active phase: record the observation, fix material workflow or audio problems, and offer the same task again when ready. Continue independent engineering while waiting, but do not lock in a dependent interaction or switch the recommended interface before its checkpoint is resolved. This keeps the owner's involvement focused on decisions and lived use rather than every implementation step.
@@ -173,7 +173,7 @@ Serve source audio and envelope data. Build seek, playhead, coarse drag, fine bo
 
 After checkpoint 3's material waveform findings are resolved, build the three export modes, threshold controls, captured option/revision identity, isolated preview jobs, rendered playback, title editing, stale-preview handling, and useful failure states. Group 1 and Group 2 changes also queue the default render into a persistent disk cache. Opening the modal reuses a cache hit or starts the selected render automatically. Two fixed-size, playable waveforms compare the unchanged clip with the export candidate, and settings changes update the candidate automatically. Keep the preview UI focused, with visible action keys and no duplicate player controls. This phase must not publish final MP3s through an unreviewed flow.
 
-**Owner checkpoint 4:** Prepare rendered previews for representative clips in a disposable workspace, including a silence-sensitive example and a safe render-failure case. Ask the owner to mark a clip Group 1 or Group 2, open the modal with `E`, and check that a background render is ready or that the fixed-size placeholders remain steady until it is. Compare the stacked As is and export candidate waveforms by listening, try all three modes, adjust an option, inspect the automatically updated title and proposed filename, and say whether the results are clear. Resolve material layout, wording, and audio findings on the same checkpoint before finalizing publication UI. Transcription engine and job recovery work can continue while this review is open; final export interaction waits.
+**Owner checkpoint 4 — complete:** The owner reviewed the rendered preview build and reported that it was all good. The two waveforms, background rendering, mode controls, title, filename, and error flow remain the basis for final publication.
 
 **Gate:** Preview jobs for different clips or options cannot collide; a changed option invalidates the old preview; matching disk cache is reused; a missing cache starts automatically; background renders are queued when clips are grouped; waveform display does not shift the layout; rendered audio corresponds to the displayed options and captured clip revision. The owner can choose a mode, find its controls and any shortcut at a glance, understand the result without TUI guidance, and identify the single next action.
 
@@ -185,11 +185,11 @@ After checkpoint 4's material findings are resolved, add transcription settings/
 
 **Gate:** Fresh audio can go from transcription to exported clip in one browser session. Tests cover failed and retried transcription, option changes during rendering, simultaneous previews, export failure, automatic filename collision handling without overwrite, and recovery after reload. The owner has listened to representative outputs and can complete the flow.
 
-### Phase 5 — Parity, packaging, and cutover
+### Phase 5 — Packaging and cutover
 
-Compare the GUI and TUI feature list against real recordings, verify macOS setup, document the new command, and package the built frontend with the Python app. Only change the README's recommended interface after the GUI meets the gates above. Retain `jipandan` and `jipandan-serve` while users migrate.
+Evaluate the GUI against the owner's real workflow and recordings, verify macOS setup, document the new command, and package the built frontend with the Python app. Feature parity with the TUI is not a requirement; document any deliberate differences that matter to a user choosing an interface. Only change the README's recommended interface after the GUI meets the gates above. Retain `jipandan` and `jipandan-serve` while users migrate.
 
-**Gate:** A fresh install can launch the GUI with one documented command; bundled assets load without a separate development server; TUI sessions open in the GUI without data loss; the same session format can still be read by the TUI or has a documented migration path. The final interface follows the interaction rule above across review, transcription, and export. The checkpoint 5 review supports making the GUI the recommended interface; retain the TUI otherwise.
+**Gate:** A fresh install can launch the GUI with one documented command; bundled assets load without a separate development server; existing TUI sessions open in the GUI without data loss; the same session format can still be read by the TUI or has a documented migration path. The final interface follows the interaction rule above across review, transcription, and export. The checkpoint 5 review supports making the GUI the recommended interface; retain the TUI otherwise.
 
 ## Testing and operational checks
 

@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import secrets
 import mimetypes
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from jipandan.web.service import InvalidEdit, SessionConflict, SessionNotReady, SessionService
+from jipandan.web.service import InvalidEdit, RevealUnavailable, SessionConflict, SessionNotReady, SessionService
 from jipandan.web.waveform import WaveformDecodeError
 
 
@@ -48,13 +51,34 @@ class PreviewRequest(RevisionRequest):
     title: str = Field(min_length=1, max_length=180)
 
 
+class ExportRequest(RevisionRequest):
+    preview_id: str
+
+
+class TranscriptionRequest(BaseModel):
+    audio: str
+    model_name: str = Field(default="large-v3", min_length=1, max_length=180)
+    language: str | None = None
+    temperature: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    max_context: int = Field(default=0, ge=0, le=4096)
+    entropy_thold: float = Field(default=3.0, gt=0, allow_inf_nan=False)
+
+
 def create_app(
     service: SessionService | None = None,
     *,
     allowed_hosts: set[str] | None = None,
     allowed_origins: set[str] | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="Jipandan local GUI", docs_url=None, redoc_url=None)
+    @asynccontextmanager
+    async def lifespan(application: FastAPI):
+        try:
+            yield
+        finally:
+            application.state.service.close()
+
+    app = FastAPI(title="Jipandan local GUI", docs_url=None, redoc_url=None,
+                  lifespan=lifespan)
     app.state.service = service or SessionService()
     app.state.token = secrets.token_urlsafe(32)
     hosts = allowed_hosts or {"127.0.0.1", "localhost", "::1"}
@@ -87,6 +111,10 @@ def create_app(
     async def not_ready_handler(request: Request, exc: SessionNotReady):
         return JSONResponse({"detail": str(exc)}, status_code=409)
 
+    @app.exception_handler(RevealUnavailable)
+    async def reveal_unavailable_handler(request: Request, exc: RevealUnavailable):
+        return JSONResponse({"detail": str(exc)}, status_code=503)
+
     @app.exception_handler(WaveformDecodeError)
     async def waveform_error_handler(request: Request, exc: WaveformDecodeError):
         return JSONResponse({"detail": str(exc)}, status_code=503)
@@ -98,6 +126,30 @@ def create_app(
     @app.get("/api/session")
     def get_session():
         return app.state.service.snapshot()
+
+    @app.get("/api/events")
+    async def events(request: Request, token: str):
+        if not secrets.compare_digest(token, app.state.token):
+            raise HTTPException(status_code=403, detail="Request token required")
+
+        async def stream():
+            previous = None
+            heartbeats = 0
+            while not await request.is_disconnected():
+                payload = app.state.service.event_snapshot()
+                encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                if encoded != previous:
+                    yield f"data: {encoded}\n\n"
+                    previous = encoded
+                    heartbeats = 0
+                elif heartbeats >= 15:
+                    yield ": keepalive\n\n"
+                    heartbeats = 0
+                await asyncio.sleep(1)
+                heartbeats += 1
+
+        return StreamingResponse(stream(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache"})
 
     @app.post("/api/session/open")
     def open_session(request: OpenAudio):
@@ -146,6 +198,22 @@ def create_app(
     def undo(request: RevisionRequest):
         return app.state.service.undo(request.expected_revision)
 
+    @app.post("/api/transcriptions")
+    def start_transcription(request: TranscriptionRequest):
+        return app.state.service.start_transcription(request.audio, request.model_dump(exclude={"audio"}))
+
+    @app.get("/api/transcriptions/{job_id}")
+    def get_transcription(job_id: str):
+        return app.state.service.transcription(job_id)
+
+    @app.post("/api/transcriptions/{job_id}/retry")
+    def retry_transcription(job_id: str):
+        return app.state.service.retry_transcription(job_id)
+
+    @app.post("/api/transcriptions/{job_id}/cancel")
+    def cancel_transcription(job_id: str):
+        return app.state.service.cancel_transcription(job_id)
+
     @app.get("/api/waveforms/{clip_id}")
     def waveform(
         clip_id: str,
@@ -172,6 +240,15 @@ def create_app(
         if not secrets.compare_digest(token, app.state.token):
             raise HTTPException(status_code=403, detail="Request token required")
         return FileResponse(app.state.service.preview_audio(job_id), media_type="audio/mpeg")
+
+    @app.post("/api/exports")
+    def publish_export(request: ExportRequest):
+        return app.state.service.publish_export(request.preview_id, request.expected_revision)
+
+    @app.post("/api/clips/{clip_id}/reveal-export")
+    def reveal_export(clip_id: str):
+        app.state.service.reveal_export(clip_id)
+        return {"revealed": True}
 
     @app.get("/api/audio")
     def opened_audio(token: str):

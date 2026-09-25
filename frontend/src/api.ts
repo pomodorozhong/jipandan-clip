@@ -11,6 +11,7 @@ export interface Clip {
   original_start_ms: number;
   original_end_ms: number;
   duration: string;
+  last_export_path: string | null;
 }
 
 export interface MergePreview {
@@ -34,6 +35,7 @@ export interface Session {
   session_path: string | null;
   clip_dir: string;
   needs_transcription: boolean;
+  transcription: TranscriptionJob | null;
   revision: number | null;
   candidates: Clip[];
   counts: Record<Status, number>;
@@ -41,6 +43,27 @@ export interface Session {
   merge_preview: MergePreview | null;
   created_clip_id?: string;
   changed_clip_ids?: string[];
+  output_path?: string;
+}
+
+export interface TranscriptionJob {
+  id: string;
+  audio: string;
+  settings: {
+    model_name: string;
+    language: string | null;
+    temperature: number;
+    max_context: number;
+    entropy_thold: number;
+  };
+  state: "queued" | "running" | "completed" | "failed" | "cancelled";
+  phase: string;
+  error: string | null;
+  entry_count: number | null;
+  created_at: number;
+  started_at: number | null;
+  finished_at: number | null;
+  log_tail: string[];
 }
 
 export interface WaveformWindow {
@@ -85,6 +108,10 @@ export function audioUrl(): string {
 
 export function previewUrl(jobId: string): string {
   return `/api/previews/${encodeURIComponent(jobId)}/audio?token=${encodeURIComponent(token)}`;
+}
+
+export function eventsUrl(): string {
+  return `/api/events?token=${encodeURIComponent(token)}`;
 }
 
 export async function api<T>(path: string, method = "GET", body?: unknown, signal?: AbortSignal): Promise<T> {

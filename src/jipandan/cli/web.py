@@ -17,10 +17,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run Jipandan's local browser GUI")
     parser.add_argument("audio", nargs="?", type=Path, help="Audio file to open")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--clip-dir", type=Path, help="Directory for exported MP3s from new sessions")
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
 
-    service = SessionService()
+    service = SessionService(clip_dir=args.clip_dir)
     if args.audio is not None:
         service.open_audio(args.audio)
     app = create_app(service)
