@@ -95,6 +95,7 @@ class Session:
     version: int = SESSION_VERSION
     revision: int = 0
     srt_fingerprint: str | None = None
+    leading_silence_detection_complete: bool = False
 
     @property
     def session_path(self) -> Path:
@@ -148,6 +149,7 @@ class Session:
             version=data.get("version", SESSION_VERSION),
             revision=data.get("revision", 0),
             srt_fingerprint=data.get("srt_fingerprint"),
+            leading_silence_detection_complete=data.get("leading_silence_detection_complete", False),
         )
 
     def save(self) -> None:
@@ -168,6 +170,7 @@ class Session:
                 "version": self.version,
                 "revision": next_revision,
                 "srt_fingerprint": self.srt_fingerprint,
+                "leading_silence_detection_complete": self.leading_silence_detection_complete,
                 "audio": str(self.audio),
                 "srt": str(self.srt),
                 "clip_dir": str(self.clip_dir),
@@ -306,6 +309,7 @@ class Session:
 
         self.candidates = merged
         self.srt_fingerprint = fresh.srt_fingerprint
+        self.leading_silence_detection_complete = False
         return warnings
 
     def get_candidate(self, clip_id: str) -> ClipCandidate | None:
