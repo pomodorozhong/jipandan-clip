@@ -6,6 +6,7 @@ type TimeRange = { start: number; end: number };
 
 const MIN_CLIP_MS = 10;
 const KEYBOARD_NUDGE_DEBOUNCE_MS = 300;
+const BOUNDARY_AUDITION_MS = 500;
 const MAX_WINDOW_MS = 120_000;
 const FINE_WINDOW_MS = 700;
 const PLOT_WIDTH = 1000;
@@ -483,9 +484,10 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
   }
 
   async function audition(which: Edge) {
-    const boundary = which === "start" ? startMs : endMs;
-    seek(clamp(boundary - 500, 0, durationMs));
-    auditionStop.current = clamp(boundary + 500, 0, durationMs);
+    const playStart = which === "start" ? startMs : Math.max(startMs, endMs - BOUNDARY_AUDITION_MS);
+    const playEnd = which === "start" ? Math.min(endMs, startMs + BOUNDARY_AUDITION_MS) : endMs;
+    seek(playStart);
+    auditionStop.current = playEnd;
     try { await audioRef.current?.play(); setLocalError(""); }
     catch { setLocalError("Audio playback was blocked. Press Play again after interacting with the page."); }
   }
