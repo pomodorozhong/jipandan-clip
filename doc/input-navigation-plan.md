@@ -1,16 +1,16 @@
 # Browser input navigation plan
 
-Status: proposed implementation plan. Creating the tracking issues and this document does not mean the features are implemented or the controller mapping is approved.
+Status: implementation in progress. Issues #7 and #8 are complete; the gamepad controls and controller mapping remain proposals until validated.
 
 ## Outcome and scope
 
 Make the browser review workflow usable with an Asian IME selected and with a gamepad. The target session is: navigate → replay → classify → trim → rename with IME → export. Text entry continues to use the keyboard and IME.
 
-Scope is the React browser GUI. TUI/browser-terminal controls, OS-level input-method switching, virtual keyboards, arbitrary controller mapping editors, and storage changes are separate work. The storage follow-up is [#5](https://github.com/pomodorozhong/jipandan-clip/issues/5).
+Scope is the React browser GUI, including a follow-up screen for configuring standard-mapped gamepad controls. TUI/browser-terminal controls, OS-level input-method switching, virtual keyboards, support for nonstandard controller layouts, and application storage changes are separate work. The storage follow-up is [#5](https://github.com/pomodorozhong/jipandan-clip/issues/5).
 
 ## Starting point
 
-Keyboard handling currently lives in [App.tsx](../frontend/src/App.tsx), [WaveformEditor.tsx](../frontend/src/WaveformEditor.tsx), and [ExportPreview.tsx](../frontend/src/ExportPreview.tsx). Some bindings use characters, others use physical key codes, and composition/modifier guards differ. The project has Python regression tests and frontend type/build checks, but no automated frontend interaction suite yet.
+The shared action and input policy introduced by #7 lives in [inputActions.ts](../frontend/src/inputActions.ts), with interaction tests in [inputActions.test.ts](../frontend/src/inputActions.test.ts). [App.tsx](../frontend/src/App.tsx), [WaveformEditor.tsx](../frontend/src/WaveformEditor.tsx), and [ExportPreview.tsx](../frontend/src/ExportPreview.tsx) use that policy. Issue #8 added IME-friendly keyboard navigation; gamepad support remains to be implemented.
 
 ## Shared action design
 
@@ -61,28 +61,36 @@ Use contextual hints and visible boundary/step feedback. Controller brand labels
 
 Export must require a fresh confirmation press after opening its dialog. Rendering, publication, disabled controls, and failures must all obey the same action availability rules. Closing a dialog restores appropriate focus.
 
+## Gamepad mapping settings
+
+After the core review controls in #9, add a **Gamepad mapping** screen opened from the existing Settings screen. Make the available review actions configurable early so the controller can be adjusted for comfort during real-device testing. Show the active controller and the current bindings for each implemented action. Let the user capture a control for an action, detect conflicting assignments, reset to the validated defaults, and save or cancel changes. Add trimming bindings with #10 and dialog/export bindings with #11 as those actions become available. Store preferences in this browser alongside the existing UI settings; application-level storage belongs to the separate storage follow-up only if a later requirement calls for it.
+
+The gamepad adapter must use the configured bindings without changing action availability, repeat rules, or dialog priority. Keep the standard-mapping requirement and unsupported-mapping guidance until nonstandard layouts are designed and validated separately. Prevent a control press used to open the screen or capture a binding from triggering a review action. Restore appropriate focus when leaving the mapping screen.
+
 ## Implementation issues and proposed PRs
 
 Each issue is intended to become one focused implementation PR. Update the split if implementation evidence warrants it; keep this table current rather than opening empty draft PRs.
 
 | Order | Issue | Dependency | Acceptance / review point | Implementation PR |
 | --- | --- | --- | --- | --- |
-| 1 | [#7 Shared actions and contexts](https://github.com/pomodorozhong/jipandan-clip/issues/7) | None | Existing browser behavior preserved; dialog priority, editing guards, and repeat rules covered. | Not opened |
-| 2 | [#8 IME-friendly navigation](https://github.com/pomodorozhong/jipandan-clip/issues/8) | #7 | Owner's agreed IME/browser combinations navigate without switching language; candidate confirmation/cancellation does not trigger unrelated actions. | [#14](https://github.com/pomodorozhong/jipandan-clip/pull/14) |
+| 1 | [#7 Shared actions and contexts](https://github.com/pomodorozhong/jipandan-clip/issues/7) | None | Existing browser behavior preserved; dialog priority, editing guards, and repeat rules covered. | [#13](https://github.com/pomodorozhong/jipandan-clip/pull/13) (merged) |
+| 2 | [#8 IME-friendly navigation](https://github.com/pomodorozhong/jipandan-clip/issues/8) | #7 | Owner's agreed IME/browser combinations navigate without switching language; candidate confirmation/cancellation does not trigger unrelated actions. | [#14](https://github.com/pomodorozhong/jipandan-clip/pull/14) (merged) |
 | 3 | [#9 Gamepad foundation and review](https://github.com/pomodorozhong/jipandan-clip/issues/9) | #7 | Browse, replay, and classify on a real controller; disconnect/focus/context transitions cannot produce stale actions. | Not opened |
-| 4 | [#10 Gamepad trimming](https://github.com/pomodorozhong/jipandan-clip/issues/10) | #9 | Accurate start/end edits with visible step/boundary; held input cannot leak into another clip or conflict with saves. | Not opened |
-| 5 | [#11 Gamepad dialogs and export](https://github.com/pomodorozhong/jipandan-clip/issues/11) | #9 | Reach enabled dialog controls, compare previews, export once per fresh press, and restore focus. | Not opened |
+| 4 | [#15 Gamepad mapping settings](https://github.com/pomodorozhong/jipandan-clip/issues/15) | #9 | Open from Settings; inspect, change, save, and reset bindings for available review actions. Conflicts and held/captured presses are handled safely. | Not opened |
+| 5 | [#10 Gamepad trimming](https://github.com/pomodorozhong/jipandan-clip/issues/10) | #9, #15 | Accurate start/end edits with visible step/boundary; add trim actions to mapping settings; held input cannot leak into another clip or conflict with saves. | Not opened |
+| 6 | [#11 Gamepad dialogs and export](https://github.com/pomodorozhong/jipandan-clip/issues/11) | #9, #15 | Reach enabled dialog controls, compare previews, export once per fresh press, and restore focus; add dialog/export actions to mapping settings. | Not opened |
 
-Recommended landing order: **1 → 2 → 3 → 4 → 5**. Issues #8 and #9 can proceed independently after #7; #10 and #11 can proceed independently after #9. Full workflow acceptance waits for all five. The initial IME probe is investigation within this work, not an additional PR.
+Recommended landing order: **#7 → #8 → #9 → #15 → #10/#11**. Issues #8 and #9 can proceed independently after #7; #10 and #11 can proceed independently after #15. Mapping review actions before trimming and export lets the owner tune controls while testing those later features. Full workflow acceptance waits for all six issues. The initial IME probe is investigation within this work, not an additional PR.
 
 Implementation PRs should close their respective issues only when their acceptance criteria are met. The planning PR references the issues without closing them. Repository cleanup is a separate PR: [#6](https://github.com/pomodorozhong/jipandan-clip/pull/6).
 
 ## Validation
 
 - Run the existing frontend type and production build checks for implementation changes: `npm --prefix frontend run check` and `npm --prefix frontend run build`.
-- Add a focused frontend interaction test setup with #7 for routing, contexts, and repeat rules. Extend it with meaningful regression cases for composition boundaries, controller transitions, dialog focus, and slow saves/publication as those features land.
+- Extend the frontend interaction tests introduced by #7 with meaningful regression cases for controller transitions, mapping changes, dialog focus, and slow saves/publication as those features land.
 - Exercise real IME candidate entry/confirmation/cancellation on the agreed browser combinations. Record versions, observations, and limitations in the implementing PR.
 - Exercise the actual controller, including held buttons, unplug/reconnect, background/foreground changes, and unsupported mappings. Record device, transport, and browser.
+- For mapping settings, verify capture and conflict handling, reset, persistence across reload, dialog focus, and that changed bindings still obey hold-repeat and action-availability rules.
 - Validate the final session on disposable data: navigate, replay, classify, trim, rename with IME, export, reload, and compare saved bounds/output with what was reviewed.
 
 ## Decisions to settle during implementation
@@ -90,6 +98,7 @@ Implementation PRs should close their respective issues only when their acceptan
 - Initial OS/browser/IME coverage, based on the owner's setup and the event probe.
 - Initial controller and browser coverage; physical button labels and confirm/back conventions.
 - Fine/coarse trim modifier, repeat delay/rate, and whether analog navigation is useful in the initial release.
+- Which actions may share a control in separate contexts, and how the mapping screen explains or resolves conflicts.
 - Physical-key shortcut behavior across keyboard layouts and whether an explicit preference is needed.
 - Focus order and text-entry handoff for each dialog in the review/export workflow.
 
