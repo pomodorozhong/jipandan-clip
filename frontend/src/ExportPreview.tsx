@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, previewUrl, type Clip, type ExportMode, type PreviewJob, type Session, type WaveformWindow } from "./api";
 import PreviewPlayer, { type PreviewPlayerHandle } from "./PreviewPlayer";
 import {
+  deactivateTextEditingTarget,
   isActionAvailable,
   keyboardInputFromEvent,
   resolveKeyboardAction,
@@ -259,6 +260,11 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
       const input = keyboardInputFromEvent(event);
       const action = resolveKeyboardAction("export", input, "active-dialog");
       if (!action || !shouldDispatchAction(action, input)) return;
+      if (action.type === "deactivate-text-editing") {
+        event.preventDefault();
+        deactivateTextEditingTarget(event.target);
+        return;
+      }
       const playbackReady = action.type !== "playback" || (
         action.target === "candidate" ? candidateReady : action.target === "reference" ? referenceReady : true
       );

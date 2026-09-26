@@ -5,7 +5,9 @@ import ExportPreview from "./ExportPreview";
 import TranscriptionScreen from "./TranscriptionScreen";
 import SettingsScreen from "./SettingsScreen";
 import {
+  deactivateTextEditingTarget,
   getInputContext,
+  installCompositionTracking,
   isActionAvailable,
   keyboardInputFromEvent,
   resolveKeyboardAction,
@@ -97,7 +99,10 @@ function Dialog({ title, children, onClose }: {
     function onKeyDown(event: KeyboardEvent) {
       const input = keyboardInputFromEvent(event);
       const action = resolveKeyboardAction("dialog", input, "active-dialog");
-      if (action && shouldDispatchAction(action, input)) { event.preventDefault(); onClose(); }
+      if (!action || !shouldDispatchAction(action, input)) return;
+      event.preventDefault();
+      if (action.type === "deactivate-text-editing") deactivateTextEditingTarget(event.target);
+      else onClose();
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -153,6 +158,8 @@ export default function App() {
   const clipMenuRef = useRef<HTMLDivElement>(null);
   const detailScrollRef = useRef<HTMLDivElement>(null);
   const clipListRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => installCompositionTracking(), []);
 
   useEffect(() => {
     try { localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings)); }
@@ -404,7 +411,13 @@ export default function App() {
     function onKeyDown(event: KeyboardEvent) {
       const input = keyboardInputFromEvent(event);
       const action = resolveKeyboardAction("review", input, reviewContext);
-      if (!action || !shouldDispatchAction(action, input) || !isActionAvailable(action, {
+      if (!action || !shouldDispatchAction(action, input)) return;
+      if (action.type === "deactivate-text-editing") {
+        event.preventDefault();
+        deactivateTextEditingTarget(event.target);
+        return;
+      }
+      if (!isActionAvailable(action, {
         context: reviewContext,
         busy,
         hasSelection: Boolean(selected),
@@ -621,7 +634,8 @@ export default function App() {
             </div>
             <div className="flex gap-2">
               <div className="relative min-w-0 flex-1">
-                <input ref={searchRef} type="search" value={query} onChange={(event) => setQuery(event.target.value)}
+                {/* Native search inputs clear on Escape, including IME-owned Escape presses. */}
+                <input ref={searchRef} type="text" role="searchbox" value={query} onChange={(event) => setQuery(event.target.value)}
                   aria-label="Search clip titles" placeholder={`Search within ${filters.find((item) => item.key === filter)?.label}…`}
                   className="w-full rounded-lg border line bg-[#101816] px-3 py-2 pr-10 text-sm" />
                 <kbd aria-hidden="true" className="shortcut-key pointer-events-none absolute right-3 top-1/2 -translate-y-1/2">/</kbd>
@@ -677,8 +691,9 @@ export default function App() {
               {editingTitle ? <div className="flex gap-2">
                 <input ref={titleRef} value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)}
                   onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); void saveTitle(); }
-                    if (event.key === "Escape") { setEditingTitle(false); }
+                    const input = keyboardInputFromEvent(event.nativeEvent);
+                    if (input.key === "Enter" && !input.isComposing) { event.preventDefault(); void saveTitle(); }
+                    if (input.key === "Escape" && !input.isComposing) { event.preventDefault(); setEditingTitle(false); }
                   }} aria-label="Clip title" className="min-w-0 flex-1 rounded-lg border line bg-[#101816] px-3 py-2" />
                 <ActionButton onClick={() => void saveTitle()} disabled={busy || !titleDraft.trim()} tone="accent">Save</ActionButton>
                 <ActionButton onClick={() => setEditingTitle(false)}>Cancel</ActionButton>

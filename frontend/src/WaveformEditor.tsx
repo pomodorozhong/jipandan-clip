@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type Clip, type WaveformWindow } from "./api";
 import {
+  deactivateTextEditingTarget,
   getInputContext,
   isActionAvailable,
   keyboardInputFromEvent,
@@ -447,7 +448,13 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
     function onKeyDown(event: KeyboardEvent) {
       const input = keyboardInputFromEvent(event);
       const action = resolveKeyboardAction("waveform", input, waveformContext);
-      if (!action || !shouldDispatchAction(action, input) || savingRef.current || !isActionAvailable(action, {
+      if (!action || !shouldDispatchAction(action, input)) return;
+      if (action.type === "deactivate-text-editing") {
+        event.preventDefault();
+        deactivateTextEditingTarget(event.target);
+        return;
+      }
+      if (savingRef.current || !isActionAvailable(action, {
         context: waveformContext,
         busy: controlsDisabled,
         enabled: active,
@@ -644,8 +651,9 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
                 onChange={(event) => setOffset(event.target.value)}
                 onBlur={(event) => offsetBlur(which, event.currentTarget.value)}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
-                  if (event.key === "Escape") { event.preventDefault(); cancelOffset(which, event.currentTarget); }
+                  const input = keyboardInputFromEvent(event.nativeEvent);
+                  if (input.key === "Enter" && !input.isComposing) { event.preventDefault(); event.currentTarget.blur(); }
+                  if (input.key === "Escape" && !input.isComposing) { event.preventDefault(); cancelOffset(which, event.currentTarget); }
                 }} disabled={controlsDisabled} className="mt-1 w-full rounded-lg border line bg-[#101816] px-3 py-2 mono" />
             </label>
           </div>;

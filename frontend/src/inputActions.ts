@@ -18,6 +18,7 @@ export type InputAction =
   | { type: "focus-search" }
   | { type: "show-help" }
   | { type: "open-export" }
+  | { type: "deactivate-text-editing" }
   | { type: "dialog-close" }
   | { type: "export"; advance: boolean }
   | { type: "export-mode"; mode: ExportMode }
@@ -33,6 +34,7 @@ export type KeyboardInput = {
   metaKey: boolean;
   isComposing: boolean;
   targetEditable: boolean;
+  targetTextEditing: boolean;
   targetInteractive: boolean;
 };
 
@@ -50,6 +52,118 @@ export type InputAvailability = {
 
 export type RepeatPolicy = "repeat" | "once";
 
+export type CompositionTracker = {
+  start(target: EventTarget | null): void;
+  cancel(target: EventTarget | null): void;
+  end(target: EventTarget | null, cancelled?: boolean): void;
+  isActiveFor(target: EventTarget | null, event?: KeyboardEvent): boolean;
+};
+
+export function createCompositionTracker(): CompositionTracker {
+  let activeTarget: EventTarget | null = null;
+  let cancellationTarget: EventTarget | null = null;
+  let boundaryTarget: EventTarget | null = null;
+  let boundaryExpiresAt = 0;
+  const imeEvents = new WeakSet<KeyboardEvent>();
+  let lastImeKey: Pick<KeyboardEvent, "target" | "key" | "code" | "timeStamp"> | null = null;
+  function rememberImeKey(event: KeyboardEvent) {
+    imeEvents.add(event);
+    lastImeKey = { target: event.target, key: event.key, code: event.code, timeStamp: event.timeStamp };
+  }
+  return {
+    start: (target) => {
+      activeTarget = target;
+      cancellationTarget = null;
+      boundaryTarget = null;
+      boundaryExpiresAt = 0;
+    },
+    cancel: (target) => {
+      if (activeTarget === target) cancellationTarget = target;
+    },
+    end: (target, cancelled = false) => {
+      if (activeTarget !== null && (target === null || activeTarget === target)) {
+        const compositionTarget = activeTarget;
+        activeTarget = null;
+        const wasCancelled = cancelled || cancellationTarget === compositionTarget;
+        cancellationTarget = null;
+        boundaryTarget = wasCancelled ? (target ?? compositionTarget) : null;
+        boundaryExpiresAt = wasCancelled ? Date.now() + 250 : 0;
+      }
+    },
+    isActiveFor: (target, event) => {
+      // React and native listeners must agree for the entire event dispatch.
+      // A microtask can run between listeners, so never expire event ownership there.
+      if (event && imeEvents.has(event)) return true;
+      // Chrome/macOS can replay an IME keydown as a different event after
+      // compositionend, retaining its timestamp but clearing the IME flags.
+      // Keep this across start/end updates, and match the target as well.
+      if (event && event.timeStamp > 0 && lastImeKey?.target === target &&
+          lastImeKey.timeStamp === event.timeStamp && lastImeKey.key === event.key &&
+          lastImeKey.code === event.code) {
+        imeEvents.add(event);
+        return true;
+      }
+      if ((event && (event.isComposing || event.keyCode === 229 || event.key === "Process")) ||
+          (target !== null && activeTarget === target)) {
+        if (event) rememberImeKey(event);
+        return true;
+      }
+      if (boundaryTarget === target && Date.now() > boundaryExpiresAt) {
+        boundaryTarget = null;
+        boundaryExpiresAt = 0;
+      }
+      if (!event || target === null || boundaryTarget !== target ||
+          (event.key !== "Escape" && event.key !== "Enter" && event.key !== "Process")) {
+        if (boundaryTarget === target && event && event.key !== "Escape" && event.key !== "Enter" && event.key !== "Process") {
+          boundaryTarget = null;
+          boundaryExpiresAt = 0;
+        }
+        return false;
+      }
+      // Consume the boundary for this event only; the next Escape may blur.
+      rememberImeKey(event);
+      boundaryTarget = null;
+      boundaryExpiresAt = 0;
+      return true;
+    },
+  };
+}
+
+const compositionTracker = createCompositionTracker();
+
+export function installCompositionTracking(tracker: CompositionTracker = compositionTracker): () => void {
+  function onKeyDown(event: KeyboardEvent) { tracker.isActiveFor(event.target, event); }
+  function onStart(event: CompositionEvent) { tracker.start(event.target); }
+  function onUpdate(event: CompositionEvent) {
+    if (event.data === "") tracker.cancel(event.target);
+    else tracker.start(event.target);
+  }
+  function onEnd(event: Event) {
+    const data = "data" in event && typeof event.data === "string" ? event.data : null;
+    tracker.end(event.target, event.type === "compositioncancel" || data === "");
+  }
+  function onBeforeInput(event: InputEvent) {
+    if (event.inputType === "deleteCompositionText") tracker.cancel(event.target);
+    else if (event.inputType === "insertCompositionText") {
+      tracker.start(event.target);
+    }
+  }
+  window.addEventListener("keydown", onKeyDown, true);
+  window.addEventListener("compositionstart", onStart, true);
+  window.addEventListener("compositionupdate", onUpdate, true);
+  window.addEventListener("compositionend", onEnd, true);
+  window.addEventListener("compositioncancel", onEnd, true);
+  window.addEventListener("beforeinput", onBeforeInput, true);
+  return () => {
+    window.removeEventListener("keydown", onKeyDown, true);
+    window.removeEventListener("compositionstart", onStart, true);
+    window.removeEventListener("compositionupdate", onUpdate, true);
+    window.removeEventListener("compositionend", onEnd, true);
+    window.removeEventListener("compositioncancel", onEnd, true);
+    window.removeEventListener("beforeinput", onBeforeInput, true);
+  };
+}
+
 export function getInputContext({ activeDialog, textEditing, composing }: {
   activeDialog?: boolean;
   textEditing?: boolean;
@@ -61,7 +175,9 @@ export function getInputContext({ activeDialog, textEditing, composing }: {
   return "review";
 }
 
-export function keyboardInputFromEvent(event: KeyboardEvent): KeyboardInput {
+export function keyboardInputFromEvent(event: KeyboardEvent, tracker: CompositionTracker = compositionTracker): KeyboardInput {
+  // Always record IME keydowns, even when the browser's flags already identify them.
+  const composing = tracker.isActiveFor(event.target, event);
   return {
     key: event.key,
     code: event.code,
@@ -70,18 +186,35 @@ export function keyboardInputFromEvent(event: KeyboardEvent): KeyboardInput {
     altKey: event.altKey,
     ctrlKey: event.ctrlKey,
     metaKey: event.metaKey,
-    isComposing: event.isComposing || event.key === "Process",
+    // IME boundary keydowns can arrive after compositionend with isComposing false.
+    // Browsers still mark those IME-owned events with keyCode 229.
+    isComposing: event.isComposing || event.keyCode === 229 || event.key === "Process" || composing,
     targetEditable: isEditableTarget(event.target),
+    targetTextEditing: isTextEditingTarget(event.target),
     targetInteractive: isInteractiveTarget(event.target),
   };
 }
 
 export function isEditableTarget(target: EventTarget | null): boolean {
-  return target instanceof Element && target.closest("input, textarea, select, [contenteditable='true']") !== null;
+  return typeof Element !== "undefined" && target instanceof Element && target.closest("input, textarea, select, [contenteditable='true']") !== null;
+}
+
+export function isTextEditingTarget(target: EventTarget | null): boolean {
+  if (typeof Element === "undefined" || !(target instanceof Element)) return false;
+  const editable = target.closest("input, textarea, [contenteditable='true']");
+  if (!editable) return false;
+  if (typeof HTMLInputElement === "undefined" || !(editable instanceof HTMLInputElement)) return true;
+  return !["button", "checkbox", "file", "hidden", "image", "radio", "range", "reset", "submit"].includes(editable.type);
+}
+
+export function deactivateTextEditingTarget(target: EventTarget | null): void {
+  if (typeof Element === "undefined" || !(target instanceof Element)) return;
+  const editable = target.closest("input, textarea, [contenteditable='true']");
+  if (typeof HTMLElement !== "undefined" && editable instanceof HTMLElement) editable.blur();
 }
 
 export function isInteractiveTarget(target: EventTarget | null): boolean {
-  return target instanceof Element && target.closest("button, a, [role='button']") !== null;
+  return typeof Element !== "undefined" && target instanceof Element && target.closest("button, a, [role='button']") !== null;
 }
 
 export function actionRepeatPolicy(action: InputAction): RepeatPolicy {
@@ -105,6 +238,8 @@ export function isActionAvailable(action: InputAction, availability: InputAvaila
 
   switch (action.type) {
     case "navigate":
+      return true;
+    case "deactivate-text-editing":
       return true;
     case "playback":
       return Boolean(availability.hasSelection);
@@ -136,6 +271,7 @@ export function resolveKeyboardAction(
   context: InputContext,
 ): InputAction | null {
   if (input.isComposing) return null;
+  if (input.key === "Escape" && input.targetTextEditing) return { type: "deactivate-text-editing" };
 
   switch (surface) {
     case "review":
@@ -211,6 +347,7 @@ function resolveDialogAction(input: KeyboardInput, context: InputContext): Input
 }
 
 function contextAllowsAction(action: InputAction, context: InputContext): boolean {
+  if (action.type === "deactivate-text-editing") return true;
   if (context === "text-editing" || context === "composition") return false;
   if (context === "active-dialog") return isDialogAction(action);
   return !isDialogAction(action);
