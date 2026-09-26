@@ -9,6 +9,7 @@ import {
   shouldDispatchAction,
   type InputAction,
 } from "./inputActions";
+import type { GamepadActionRequest } from "./gamepad";
 
 type Edge = "start" | "end";
 type TimeRange = { start: number; end: number };
@@ -241,12 +242,14 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
   </div>;
 }
 
-export default function WaveformEditor({ clip, durationMs, audioSrc, busy, shortcutsPaused, active = true,
-  detectLeadingSilence, showOriginalStart, onSave }: {
+export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamepadAction, onGamepadActionHandled,
+  shortcutsPaused, active = true, detectLeadingSilence, showOriginalStart, onSave }: {
   clip: Clip;
   durationMs: number;
   audioSrc: string;
   busy: boolean;
+  gamepadAction?: GamepadActionRequest | null;
+  onGamepadActionHandled?: (id: number) => void;
   shortcutsPaused: boolean;
   active?: boolean;
   detectLeadingSilence: boolean;
@@ -520,6 +523,14 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
       nudge(action.edge, action.amount, action.source === "keyboard");
     }
   }
+
+  const handledGamepadAction = useRef<number | null>(null);
+  useEffect(() => {
+    if (!gamepadAction || gamepadAction.clipId !== clip.clip_id || handledGamepadAction.current === gamepadAction.id) return;
+    handledGamepadAction.current = gamepadAction.id;
+    dispatchAction(gamepadAction.action);
+    onGamepadActionHandled?.(gamepadAction.id);
+  }, [clip.clip_id, gamepadAction, onGamepadActionHandled]);
 
   function applyOffset(which: Edge, value: string) {
     if (!/^[+-]?\d+$/.test(value.trim())) {
