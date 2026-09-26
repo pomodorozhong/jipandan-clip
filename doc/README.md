@@ -2,6 +2,10 @@
 
 See the [project README](../README.md) for installation, commands, and testing.
 
+## Active plans
+
+- [Browser input navigation](input-navigation-plan.md): IME-friendly shortcuts and gamepad support, tracked as five implementation issues.
+
 ## Reviews
 
 - [TUI user flow review](tui-user-flow-issues.md): historical findings, not a current list of verified open bugs. Check the implementation before taking up a finding.
