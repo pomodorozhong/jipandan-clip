@@ -78,6 +78,35 @@ uv run generate-commands raw.srt --audio raw.mp3
 
 Exported clips are saved as `clip/raw_0001_title.mp3`, `clip/raw_0002_title.mp3`, etc. Here, `raw` is the stem of the source audio filename (for example, `raw.mp3` -> `raw`).
 
+## Testing
+
+Complete the installation steps above, then run these commands from the repository root. The Python tests use the standard-library `unittest` runner; some web API tests also require `ffmpeg` on your PATH.
+
+Run the full Python suite:
+
+```bash
+uv run python -m unittest discover -s tests -v
+```
+
+The TUI regression test currently requires three local fixtures: `raw/0524.mp3`, `raw/0524.srt`, and `raw/0524.jipandan.json`. It expects the original session fixture, including revision zero and its initial clip state. Without these files, the full suite fails with `FileNotFoundError`.
+
+If you do not have those fixtures, run the core, web API, and leading-silence tests separately:
+
+```bash
+uv run python -m unittest discover -s tests -p 'test_core_safety.py' -v
+uv run python -m unittest discover -s tests -p 'test_web_api.py' -v
+uv run python -m unittest discover -s tests -p 'test_leading_silence.py' -v
+```
+
+Check frontend types and build the production assets:
+
+```bash
+npm --prefix frontend run check
+npm --prefix frontend run build
+```
+
+There is currently no automated frontend interaction test suite. To check the browser interface manually, run `uv run jipandan-web`, open a recording, and exercise clip selection, trimming, playback, settings, and export preview.
+
 ## Notice
 
 - The project is only tested on macOS.
