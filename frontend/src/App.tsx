@@ -4,6 +4,14 @@ import WaveformEditor from "./WaveformEditor";
 import ExportPreview from "./ExportPreview";
 import TranscriptionScreen from "./TranscriptionScreen";
 import SettingsScreen from "./SettingsScreen";
+import {
+  getInputContext,
+  isActionAvailable,
+  keyboardInputFromEvent,
+  resolveKeyboardAction,
+  shouldDispatchAction,
+  type InputAction,
+} from "./inputActions";
 
 type Filter = "unsorted" | "group1" | "group2" | "exported" | "all";
 type AllStatusFilter = "all" | Status;
@@ -87,7 +95,9 @@ function Dialog({ title, children, onClose }: {
 }) {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") { event.preventDefault(); onClose(); }
+      const input = keyboardInputFromEvent(event);
+      const action = resolveKeyboardAction("dialog", input, "active-dialog");
+      if (action && shouldDispatchAction(action, input)) { event.preventDefault(); onClose(); }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -328,41 +338,86 @@ export default function App() {
     setShowDetailMobile(false);
   }, [visible, selectedPosition]);
 
+  const activeDialog = showSettings || showHelp || showJump || showMerge || showExportModal;
+  const reviewContext = getInputContext({ activeDialog, textEditing: editingTitle });
+
+  const undo = useCallback(() => {
+    if (!session || session.revision === null) return;
+    void mutate(() => api<Session>("/session/undo", "POST", { expected_revision: session.revision }));
+  }, [session, mutate]);
+
+  const duplicateSelected = useCallback(() => {
+    if (!session || session.revision === null || !effectiveSelectedId) return;
+    void mutate(() => api<Session>(`/clips/${encodeURIComponent(effectiveSelectedId)}/duplicate`,
+      "POST", { expected_revision: session.revision })).then((next) => {
+      if (next?.created_clip_id) setSelectedId(next.created_clip_id);
+    });
+  }, [session, effectiveSelectedId, mutate]);
+
+  const dispatchReviewAction = useCallback((action: InputAction) => {
+    if (!isActionAvailable(action, {
+      context: reviewContext,
+      busy,
+      hasSelection: Boolean(selected),
+      canMutate: Boolean(session && session.revision !== null && !busy),
+      canUndo: Boolean(session?.can_undo && session.revision !== null),
+      canDuplicate: Boolean(session && session.revision !== null && effectiveSelectedId),
+    })) return;
+    switch (action.type) {
+      case "navigate":
+        moveSelection(action.direction === "next" ? 1 : -1);
+        break;
+      case "classify":
+        patchSelected({ status: action.status });
+        break;
+      case "set-status":
+        patchSelected({ status: action.status });
+        break;
+      case "undo":
+        undo();
+        break;
+      case "duplicate":
+        duplicateSelected();
+        break;
+      case "rename":
+        if (selected) { setTitleDraft(selected.title); setEditingTitle(true); }
+        break;
+      case "jump":
+        setShowJump(true);
+        break;
+      case "focus-search":
+        searchRef.current?.focus();
+        break;
+      case "show-help":
+        setShowHelp(true);
+        break;
+      case "open-export":
+        setShowExportModal(true);
+        break;
+      default:
+        break;
+    }
+  }, [reviewContext, busy, selected, session, effectiveSelectedId, moveSelection, patchSelected,
+    undo, duplicateSelected]);
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (showSettings || showHelp || showJump || showMerge || showExportModal || editingTitle) return;
-      if (event.isComposing || event.key === "Process") return;
-      const target = event.target as HTMLElement | null;
-      if (target && (target.closest("input, textarea, select, [contenteditable='true']"))) return;
-      const key = event.key.toLowerCase();
-      if (key === "e" && selected) { event.preventDefault(); setShowExportModal(true); }
-      else if (key === "j" || key === "arrowdown") { event.preventDefault(); moveSelection(1); }
-      else if (key === "k" || key === "arrowup") { event.preventDefault(); moveSelection(-1); }
-      else if (key === "1") { event.preventDefault(); patchSelected({ status: "group1" }); }
-      else if (key === "2") { event.preventDefault(); patchSelected({ status: "group2" }); }
-      else if (key === "x") { event.preventDefault(); patchSelected({ status: "skipped" }); }
-      else if (key === "u" && session?.can_undo && session.revision !== null) {
-        event.preventDefault();
-        void mutate(() => api<Session>("/session/undo", "POST", { expected_revision: session.revision }));
-      }
-      else if (key === "d" && effectiveSelectedId && session && session.revision !== null) {
-        event.preventDefault();
-        void mutate(() => api<Session>(`/clips/${encodeURIComponent(effectiveSelectedId)}/duplicate`,
-          "POST", { expected_revision: session.revision })).then((next) => {
-          if (next?.created_clip_id) setSelectedId(next.created_clip_id);
-        });
-      }
-      else if (key === "r" && selected) {
-        event.preventDefault(); setTitleDraft(selected.title); setEditingTitle(true);
-      }
-      else if (key === "g") { event.preventDefault(); setShowJump(true); }
-      else if (key === "/") { event.preventDefault(); searchRef.current?.focus(); }
-      else if (key === "?") { event.preventDefault(); setShowHelp(true); }
+      const input = keyboardInputFromEvent(event);
+      const action = resolveKeyboardAction("review", input, reviewContext);
+      if (!action || !shouldDispatchAction(action, input) || !isActionAvailable(action, {
+        context: reviewContext,
+        busy,
+        hasSelection: Boolean(selected),
+        canMutate: Boolean(session && session.revision !== null && !busy),
+        canUndo: Boolean(session?.can_undo && session.revision !== null),
+        canDuplicate: Boolean(session && session.revision !== null && effectiveSelectedId),
+      })) return;
+      event.preventDefault();
+      dispatchReviewAction(action);
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [showHelp, showJump, showMerge, showExportModal, editingTitle, moveSelection, patchSelected,
-    session, selected, effectiveSelectedId, mutate, showSettings]);
+  }, [reviewContext, busy, selected, session, effectiveSelectedId, dispatchReviewAction]);
 
   useEffect(() => { if (editingTitle) titleRef.current?.focus(); }, [editingTitle]);
 
@@ -473,10 +528,10 @@ export default function App() {
           {saveState === "saving" ? "Saving…" : saveState === "failed" ? "Save failed" : "Saved"}
         </span>}
         {session?.audio && !session.needs_transcription && <ActionButton onClick={() => {
-          if (session.revision === null) return;
-          void mutate(() => api<Session>("/session/undo", "POST", { expected_revision: session.revision }));
+          dispatchReviewAction({ type: "undo" });
         }} disabled={!session.can_undo || busy} title="Undo recent change (U)" shortcut="U">Undo</ActionButton>}
-        {!session?.needs_transcription && <ActionButton onClick={() => setShowHelp(true)} title="Keyboard shortcuts" shortcut="?">Shortcuts</ActionButton>}
+        {!session?.needs_transcription && <ActionButton onClick={() => dispatchReviewAction({ type: "show-help" })}
+          title="Keyboard shortcuts" shortcut="?">Shortcuts</ActionButton>}
         <ActionButton onClick={() => {
           setShowSettings(true);
           setShowHelp(false); setShowJump(false); setShowMerge(false); setShowExportModal(false);
@@ -630,34 +685,32 @@ export default function App() {
               </div> : <div className="flex flex-wrap items-start gap-3">
                 <h2 className="min-w-0 flex-1 break-words text-2xl font-semibold leading-snug">{selected.title}</h2>
                 <div className="ml-auto flex shrink-0 items-center gap-1.5">
-                  <button type="button" onClick={() => moveSelection(-1)} disabled={selectedPosition <= 0}
+                  <button type="button" onClick={() => dispatchReviewAction({ type: "navigate", direction: "previous" })} disabled={selectedPosition <= 0}
                     aria-label="Previous clip (K)" title="Previous clip (K)"
                     className="soft-surface inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium hover:bg-[#354b3b]">
                     <span aria-hidden="true">←</span><kbd aria-hidden="true" className="shortcut-key">K</kbd>
                   </button>
-                  <button type="button" onClick={() => moveSelection(1)} disabled={selectedPosition >= visible.length - 1}
+                  <button type="button" onClick={() => dispatchReviewAction({ type: "navigate", direction: "next" })} disabled={selectedPosition >= visible.length - 1}
                     aria-label="Next clip (J)" title="Next clip (J)"
                     className="soft-surface inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium hover:bg-[#354b3b]">
                     <span aria-hidden="true">→</span><kbd aria-hidden="true" className="shortcut-key">J</kbd>
                   </button>
-                  <ActionButton onClick={() => setShowExportModal(true)} title="Open export preview (E)" shortcut="E" tone="accent">Export</ActionButton>
+                  <ActionButton onClick={() => dispatchReviewAction({ type: "open-export" })} disabled={busy}
+                    title="Open export preview (E)" shortcut="E" tone="accent">Export</ActionButton>
                   <div ref={clipMenuRef} className="relative">
                     <button type="button" onClick={() => setShowClipMenu((open) => !open)}
                       aria-label="More clip actions" aria-expanded={showClipMenu} aria-haspopup="menu" title="More clip actions"
                       className="soft-surface rounded-lg px-3 py-2 text-sm font-medium hover:bg-[#354b3b]">…</button>
                     {showClipMenu && <div role="menu" aria-label="More clip actions"
                       className="surface absolute right-0 top-full z-20 mt-1 min-w-40 rounded-lg p-1 shadow-xl">
-                      <button type="button" role="menuitem" onClick={() => {
-                        setShowClipMenu(false); setTitleDraft(selected.title); setEditingTitle(true);
+                      <button type="button" role="menuitem" disabled={busy} onClick={() => {
+                        setShowClipMenu(false); dispatchReviewAction({ type: "rename" });
                       }} className="flex w-full items-center justify-between gap-4 rounded-md px-3 py-2 text-left text-sm hover:bg-[#304439]">
                         Rename <kbd aria-hidden="true" className="shortcut-key">R</kbd>
                       </button>
                       <button type="button" role="menuitem" disabled={busy} onClick={() => {
                         setShowClipMenu(false);
-                        if (session.revision === null) return;
-                        void mutate(() => api<Session>(`/clips/${encodeURIComponent(selected.clip_id)}/duplicate`, "POST", {
-                          expected_revision: session.revision,
-                        })).then((next) => { if (next?.created_clip_id) setSelectedId(next.created_clip_id); });
+                        dispatchReviewAction({ type: "duplicate" });
                       }} className="flex w-full items-center justify-between gap-4 rounded-md px-3 py-2 text-left text-sm hover:bg-[#304439]">
                         Duplicate <kbd aria-hidden="true" className="shortcut-key">D</kbd>
                       </button>
@@ -671,7 +724,7 @@ export default function App() {
                 <label htmlFor="clip-status" className="font-medium">Status</label>
                 <span className="relative inline-flex">
                   <select id="clip-status" value={selected.status} disabled={busy}
-                    onChange={(event) => patchSelected({ status: event.target.value as Status })}
+                    onChange={(event) => dispatchReviewAction({ type: "set-status", status: event.target.value as Status })}
                     className="appearance-none rounded-lg border line bg-[#22312a] py-2 pl-3 pr-9 text-[#e7eee7] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b4e2b6]">
                     {(["group1", "group2", "skipped", "pending"] as Status[]).map((status) =>
                       <option key={status} value={status}>{labels[status]}</option>)}

@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, previewUrl, type Clip, type ExportMode, type PreviewJob, type Session, type WaveformWindow } from "./api";
 import PreviewPlayer, { type PreviewPlayerHandle } from "./PreviewPlayer";
+import {
+  isActionAvailable,
+  keyboardInputFromEvent,
+  resolveKeyboardAction,
+  shouldDispatchAction,
+  type InputAction,
+} from "./inputActions";
 
 const descriptions: Record<ExportMode, string> = {
   as_is: "Keep the selected clip exactly as it is.",
@@ -148,6 +155,43 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
     }
   }
 
+  function dispatchAction(action: InputAction) {
+    const playbackReady = action.type !== "playback" || (
+      action.target === "candidate" ? candidateReady : action.target === "reference" ? referenceReady : true
+    );
+    if (!isActionAvailable(action, {
+      context: "active-dialog",
+      busy: exporting || requesting,
+      enabled: open && playbackReady,
+      hasSelection: true,
+      candidateReady,
+      hasNextClip: Boolean(nextClipId),
+    })) return;
+    switch (action.type) {
+      case "dialog-close":
+        onClose();
+        break;
+      case "export":
+        void publish(action.advance);
+        break;
+      case "export-mode":
+        chooseMode(action.mode);
+        break;
+      case "playback":
+        if (action.target === "candidate") {
+          action.mode === "replay" ? candidatePlayer.current?.replay() : candidatePlayer.current?.toggle();
+        } else if (action.target === "reference") {
+          action.mode === "replay" ? referencePlayer.current?.replay() : referencePlayer.current?.toggle();
+        }
+        break;
+      case "reveal-export":
+        void reveal();
+        break;
+      default:
+        break;
+    }
+  }
+
   useEffect(() => {
     if (!open) {
       candidateWasOpen.current = false;
@@ -212,40 +256,26 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
   useEffect(() => {
     if (!open) return;
     function onKeyDown(event: KeyboardEvent) {
-      if (event.isComposing || event.key === "Process") return;
-      if (event.key === "Escape") { event.preventDefault(); onClose(); return; }
-      if (event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key === "Enter") {
-        event.preventDefault();
-        if (!event.repeat) void publish(true);
-        return;
-      }
-      if (event.altKey || event.ctrlKey || event.metaKey) return;
-      const target = event.target as HTMLElement | null;
-      if (event.key === "Enter" && !event.shiftKey && !target?.closest("button, a, [role='button']")) {
-        event.preventDefault();
-        if (!event.repeat) void publish(false);
-        return;
-      }
-      if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
-      if (event.code === "Space") {
-        event.preventDefault();
-        if (!event.repeat) event.shiftKey ? candidatePlayer.current?.toggle() : candidatePlayer.current?.replay();
-        return;
-      }
-      if (event.code === "KeyQ") {
-        event.preventDefault();
-        if (!event.repeat) event.shiftKey ? referencePlayer.current?.toggle() : referencePlayer.current?.replay();
-        return;
-      }
-      if (event.shiftKey) return;
-      const key = event.key.toLowerCase();
-      if (key === "a") { event.preventDefault(); chooseMode("as_is"); }
-      else if (key === "e") { event.preventDefault(); chooseMode("trim_edges"); }
-      else if (key === "t") { event.preventDefault(); chooseMode("trim_all"); }
+      const input = keyboardInputFromEvent(event);
+      const action = resolveKeyboardAction("export", input, "active-dialog");
+      if (!action || !shouldDispatchAction(action, input)) return;
+      const playbackReady = action.type !== "playback" || (
+        action.target === "candidate" ? candidateReady : action.target === "reference" ? referenceReady : true
+      );
+      if (!isActionAvailable(action, {
+        context: "active-dialog",
+        busy: exporting || requesting,
+        enabled: open && playbackReady,
+        hasSelection: true,
+        candidateReady,
+        hasNextClip: Boolean(nextClipId),
+      })) return;
+      event.preventDefault();
+      dispatchAction(action);
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, onClose, publish]);
+  });
 
   if (!open) return null;
 
@@ -274,7 +304,7 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
         </div>
         <div className="flex shrink-0 items-center gap-4">
           <span className="subtle hidden text-xs sm:block">Compare the original clip with your export</span>
-          <button type="button" onClick={onClose} aria-label="Close export preview (Esc)"
+          <button type="button" onClick={() => dispatchAction({ type: "dialog-close" })} aria-label="Close export preview (Esc)"
             className="subtle inline-flex items-center gap-1.5 rounded-lg px-1 py-1 text-xl hover:bg-[#283b30]">
             <span aria-hidden="true">×</span><kbd aria-hidden="true" className="shortcut-key text-xs">Esc</kbd>
           </button>
@@ -285,7 +315,7 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
         <h3 className="subtle text-[11px] font-bold uppercase tracking-[.15em]">Export settings</h3>
         <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2">
           <div role="group" aria-label="Export mode" className="inline-flex flex-wrap gap-1 rounded-lg border line bg-[#101b16] p-1">
-            {modes.map((item) => <button key={item.value} type="button" onClick={() => chooseMode(item.value)}
+            {modes.map((item) => <button key={item.value} type="button" onClick={() => dispatchAction({ type: "export-mode", mode: item.value })}
               aria-pressed={mode === item.value}
               className={`inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-xs font-semibold ${mode === item.value
                 ? "bg-[#c5dda9] text-[#1f3021]" : "subtle hover:bg-[#304538] hover:text-white"}`}>
@@ -335,7 +365,8 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
             note="Includes the original edges and pauses" startMs={0} endMs={referenceDuration}
             waveform={referenceReady ? referenceJob?.waveform ?? null : null} sharedPeak={sharedPeak}
             src={referenceReady ? previewUrl(referenceJob!.id) : undefined} placeholder={referencePlaceholder}
-            playShortcut="⇧Q" replayShortcut="Q" onActivate={() => candidatePlayer.current?.pause()} />
+            playShortcut="⇧Q" replayShortcut="Q" onActivate={() => candidatePlayer.current?.pause()}
+            onAction={dispatchAction} />
           {(referenceError || referenceJob?.state === "failed") && <div role="alert" className="flex flex-wrap items-center gap-2 text-xs text-[#ffb3a8]">
             <span>{referenceError || `Reference render failed: ${referenceJob?.error ?? "Unknown error"}`}</span>
             <button type="button" onClick={() => void renderReference()} disabled={referenceRequesting}
@@ -350,7 +381,7 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
             startMs={0} endMs={candidateDuration} waveform={waveformReady ? job?.waveform ?? null : null}
             sharedPeak={sharedPeak} src={waveformReady ? previewUrl(job!.id) : undefined}
             placeholder={candidatePlaceholder} playShortcut="⇧Space" replayShortcut="Space"
-            onActivate={() => referencePlayer.current?.pause()} />
+            onActivate={() => referencePlayer.current?.pause()} onAction={dispatchAction} />
           {job?.state === "failed" && !stale && <p role="alert" className="text-xs text-[#ffb3a8]">Render failed: {job.error}. Adjust the settings to retry.</p>}
         </div>
       </div>
@@ -370,12 +401,12 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
           {candidateReady && <span>· {difference < 0 ? "Shorter" : difference > 0 ? "Longer" : "Difference"} <strong className="text-[#d8edb6]">{duration(Math.abs(difference))}</strong></span>}
         </div>
         <div className="flex gap-2">
-          {outputPath && <button type="button" onClick={() => void reveal()}
+          {outputPath && <button type="button" onClick={() => dispatchAction({ type: "reveal-export" })}
             className="rounded-lg border line px-4 py-2 text-sm font-semibold">Reveal file</button>}
-          <button type="button" onClick={() => void publish(false)} disabled={!candidateReady || exporting || requesting}
+          <button type="button" onClick={() => dispatchAction({ type: "export", advance: false })} disabled={!candidateReady || exporting || requesting}
             className="rounded-lg border line px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50">
             Export <kbd aria-hidden="true" className="shortcut-key ml-2">Enter</kbd></button>
-          <button type="button" onClick={() => void publish(true)} disabled={!candidateReady || exporting || requesting || !nextClipId}
+          <button type="button" onClick={() => dispatchAction({ type: "export", advance: true })} disabled={!candidateReady || exporting || requesting || !nextClipId}
             title={nextClipId ? "Export and open the next clip (Command+Enter)" : "No next clip in this view"}
             className="rounded-lg bg-[#b7d69d] px-4 py-2 text-sm font-semibold text-[#1d2d20] disabled:cursor-not-allowed disabled:opacity-50">
             {exporting ? "Exporting…" : "Export & Next"}

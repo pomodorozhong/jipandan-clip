@@ -101,6 +101,7 @@ uv run python -m unittest discover -s tests -p 'test_leading_silence.py' -v
 Check frontend types and build the production assets:
 
 ```bash
+npm --prefix frontend run test
 npm --prefix frontend run check
 npm --prefix frontend run build
 ```
