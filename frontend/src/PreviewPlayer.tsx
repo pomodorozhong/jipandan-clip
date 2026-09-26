@@ -1,5 +1,6 @@
 import { forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from "react";
 import type { WaveformWindow } from "./api";
+import type { InputAction } from "./inputActions";
 
 export interface PreviewPlayerHandle {
   toggle(): void;
@@ -23,6 +24,7 @@ type Props = {
   playShortcut: string;
   replayShortcut: string;
   onActivate(): void;
+  onAction(action: InputAction): void;
 };
 
 const WIDTH = 1000;
@@ -74,7 +76,7 @@ function clock(ms: number): string {
 
 const PreviewPlayer = forwardRef<PreviewPlayerHandle, Props>(function PreviewPlayer({
   variant, eyebrow, title, durationLabel, durationText, note, startMs, endMs,
-  waveform, sharedPeak, src, placeholder, playShortcut, replayShortcut, onActivate,
+  waveform, sharedPeak, src, placeholder, playShortcut, replayShortcut, onActivate, onAction,
 }, ref) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const maskId = useId();
@@ -178,14 +180,18 @@ const PreviewPlayer = forwardRef<PreviewPlayerHandle, Props>(function PreviewPla
       <p className={`text-[10px] font-bold uppercase tracking-[.13em] ${reference ? "text-[#b9dce7]" : "text-[#cee8ad]"}`}>{eyebrow}</p>
       <h4 className={`mt-0.5 text-sm font-semibold ${reference ? "text-[#d5edf4]" : "text-[#def0c7]"}`}>{title}</h4>
       <div className="mt-2 flex gap-1.5">
-        <button type="button" disabled={!ready} onClick={() => void play(false)}
+        <button type="button" disabled={!ready} onClick={() => onAction({
+          type: "playback", target: reference ? "reference" : "candidate", mode: "toggle",
+        })}
           aria-label={`${playing ? "Pause" : "Play"} ${reference ? "As is reference" : "export candidate"}`}
           className={`inline-flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-semibold disabled:opacity-45 ${reference
             ? "bg-[#b8dbe6] text-[#1d3038]" : "bg-[#c9e5a6] text-[#1d3020]"}`}>
           <span aria-hidden="true">{playing ? "Ⅱ" : "▶"}</span><span>{playing ? "Pause" : "Play"}</span>
           <kbd aria-hidden="true" className="shortcut-key">{playShortcut}</kbd>
         </button>
-        <button type="button" disabled={!ready} onClick={() => void play(true)}
+        <button type="button" disabled={!ready} onClick={() => onAction({
+          type: "playback", target: reference ? "reference" : "candidate", mode: "replay",
+        })}
           aria-label={`Replay ${reference ? "As is reference" : "export candidate"}`}
           className={`inline-flex min-w-0 flex-1 items-center justify-center gap-1 rounded-lg px-2 py-2 text-xs font-semibold disabled:opacity-45 ${reference
             ? "bg-[#344c55]" : "bg-[#38563c]"}`}>

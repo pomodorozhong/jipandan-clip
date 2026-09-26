@@ -101,11 +101,12 @@ uv run python -m unittest discover -s tests -p 'test_leading_silence.py' -v
 Check frontend types and build the production assets:
 
 ```bash
+npm --prefix frontend run test
 npm --prefix frontend run check
 npm --prefix frontend run build
 ```
 
-There is currently no automated frontend interaction test suite. To check the browser interface manually, run `uv run jipandan-web`, open a recording, and exercise clip selection, trimming, playback, settings, and export preview.
+The frontend interaction-policy tests run with Vitest. To check the browser interface manually, run `uv run jipandan-web`, open a recording, and exercise clip selection, trimming, playback, settings, and export preview.
 
 ## Repository layout
 

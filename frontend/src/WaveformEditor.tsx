@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type Clip, type WaveformWindow } from "./api";
+import {
+  deactivateTextEditingTarget,
+  getInputContext,
+  isActionAvailable,
+  keyboardInputFromEvent,
+  resolveKeyboardAction,
+  shouldDispatchAction,
+  type InputAction,
+} from "./inputActions";
 
 type Edge = "start" | "end";
 type TimeRange = { start: number; end: number };
@@ -437,24 +446,23 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (shortcutsPaused || busy || savingRef.current || event.isComposing) return;
-      const target = event.target as HTMLElement | null;
-      if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
-      if (event.code === "Space" && !event.altKey && !event.ctrlKey && !event.metaKey) {
+      const input = keyboardInputFromEvent(event);
+      const action = resolveKeyboardAction("waveform", input, waveformContext);
+      if (!action || !shouldDispatchAction(action, input)) return;
+      if (action.type === "deactivate-text-editing") {
         event.preventDefault();
-        if (!event.repeat) {
-          if (event.shiftKey) void play();
-          else void replay();
-        }
+        deactivateTextEditingTarget(event.target);
         return;
       }
-      const which: Edge = event.code === "BracketLeft" || event.code === "BracketRight" ? "end" : "start";
-      const direction = event.code === "Comma" || event.code === "BracketLeft" ? -1
-        : event.code === "Period" || event.code === "BracketRight" ? 1 : 0;
-      if (direction) {
-        event.preventDefault();
-        nudge(which, direction * (event.shiftKey ? 100 : 10), true);
-      }
+      if (savingRef.current || !isActionAvailable(action, {
+        context: waveformContext,
+        busy: controlsDisabled,
+        enabled: active,
+        hasSelection: true,
+        canMutate: !controlsDisabled,
+      })) return;
+      event.preventDefault();
+      dispatchAction(action);
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -490,6 +498,27 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
     auditionStop.current = playEnd;
     try { await audioRef.current?.play(); setLocalError(""); }
     catch { setLocalError("Audio playback was blocked. Press Play again after interacting with the page."); }
+  }
+
+  const controlsDisabled = busy || saving;
+  const waveformContext = getInputContext({ activeDialog: shortcutsPaused || !active });
+
+  function dispatchAction(action: InputAction) {
+    if (!isActionAvailable(action, {
+      context: waveformContext,
+      busy: controlsDisabled,
+      enabled: active,
+      hasSelection: true,
+      canMutate: !controlsDisabled,
+    })) return;
+    if (action.type === "playback" && action.target === "clip") {
+      if (action.mode === "replay") void replay();
+      else if (action.mode === "toggle") void play();
+      else if (action.mode === "audition-start") void audition("start");
+      else void audition("end");
+    } else if (action.type === "nudge") {
+      nudge(action.edge, action.amount, action.source === "keyboard");
+    }
   }
 
   function applyOffset(which: Edge, value: string) {
@@ -540,23 +569,22 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
     setOverviewRange(boundedRange(overviewRange.start + direction * span / 2, span, durationMs));
   }
 
-  const controlsDisabled = busy || saving;
   return <div className="mb-6">
     <audio ref={audioRef} src={audioSrc} preload="metadata" playsInline
       onLoadedMetadata={() => seek(clip.start_ms)} onPlay={() => setPlaying(true)}
       onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} />
     <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
       <div className="flex flex-wrap gap-2">
-        <button type="button" onClick={() => void replay()} title="Replay from start (Space)"
+        <button type="button" onClick={() => dispatchAction({ type: "playback", target: "clip", mode: "replay" })} title="Replay from start (Space)"
           className="inline-flex items-center gap-2 rounded-lg bg-[#b7d69d] px-3 py-2 text-sm font-medium text-[#1b291f] hover:bg-[#c8e5af]">
           <span aria-hidden="true" className="text-base leading-none">↻</span><span>Replay from start</span><kbd aria-hidden="true" className="shortcut-key">Space</kbd>
         </button>
-        <button type="button" onClick={() => void play()} className="soft-surface inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm"
+        <button type="button" onClick={() => dispatchAction({ type: "playback", target: "clip", mode: "toggle" })} className="soft-surface inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm"
           aria-label={playing ? "Pause audio" : "Play clip"} title="Play or pause (Shift+Space)">
           <span aria-hidden="true" className="text-xs leading-none">{playing ? "❚❚" : "▶"}</span><span>{playing ? "Pause" : "Play clip"}</span><kbd aria-hidden="true" className="shortcut-key">Shift+Space</kbd>
         </button>
-        <button type="button" onClick={() => void audition("start")} className="soft-surface rounded-lg px-3 py-2 text-sm">Hear start</button>
-        <button type="button" onClick={() => void audition("end")} className="soft-surface rounded-lg px-3 py-2 text-sm">Hear end</button>
+        <button type="button" onClick={() => dispatchAction({ type: "playback", target: "clip", mode: "audition-start" })} className="soft-surface rounded-lg px-3 py-2 text-sm">Hear start</button>
+        <button type="button" onClick={() => dispatchAction({ type: "playback", target: "clip", mode: "audition-end" })} className="soft-surface rounded-lg px-3 py-2 text-sm">Hear end</button>
       </div>
       <span className="subtle mono text-xs">Playhead {formatClock(playheadMs)}</span>
     </div>
@@ -604,7 +632,7 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
             <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label={`Nudge ${which} boundary`}>
               {[-100, -10, 10, 100].map((amount) => {
                 const key = `${Math.abs(amount) === 100 ? "⇧" : ""}${amount < 0 ? keyPair[0] : keyPair[1]}`;
-                return <button key={amount} type="button" onClick={() => nudge(which, amount)}
+                return <button key={amount} type="button" onClick={() => dispatchAction({ type: "nudge", edge: which, amount, source: "pointer" })}
                   disabled={controlsDisabled} title={`Nudge ${which} boundary ${amount > 0 ? "+" : ""}${amount} ms (${key})`}
                   className="mono inline-flex items-center justify-center gap-2 rounded-lg bg-[#304538] px-3 py-2 text-sm hover:bg-[#3b5543] disabled:opacity-50">
                   <span>{amount > 0 ? "+" : ""}{amount} ms</span><kbd aria-hidden="true" className="shortcut-key">{key}</kbd>
@@ -623,8 +651,9 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, short
                 onChange={(event) => setOffset(event.target.value)}
                 onBlur={(event) => offsetBlur(which, event.currentTarget.value)}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
-                  if (event.key === "Escape") { event.preventDefault(); cancelOffset(which, event.currentTarget); }
+                  const input = keyboardInputFromEvent(event.nativeEvent);
+                  if (input.key === "Enter" && !input.isComposing) { event.preventDefault(); event.currentTarget.blur(); }
+                  if (input.key === "Escape" && !input.isComposing) { event.preventDefault(); cancelOffset(which, event.currentTarget); }
                 }} disabled={controlsDisabled} className="mt-1 w-full rounded-lg border line bg-[#101816] px-3 py-2 mono" />
             </label>
           </div>;
