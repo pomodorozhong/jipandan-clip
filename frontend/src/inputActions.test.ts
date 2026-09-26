@@ -61,8 +61,7 @@ describe("input contexts", () => {
       // -> keyup -> a new keydown object with the original keydown timestamp.
       tracker.start(target);
       expect(actionFor(imeEscape)).toBeNull();
-      tracker.start(target);
-      tracker.end(target, false);
+      tracker.end(target);
       const replay = { ...imeEscape, keyCode: 27, isComposing: false } as KeyboardEvent;
       expect(keyboardInputFromEvent(replay, tracker).isComposing).toBe(true);
       expect(actionFor(replay)).toBeNull();
@@ -72,7 +71,7 @@ describe("input contexts", () => {
     },
   );
 
-  it("keeps a cancelled IME Escape protected across handlers and microtasks", async () => {
+  it("keeps the same IME Escape protected across handlers and microtasks", async () => {
     const tracker = createCompositionTracker();
     const target = {} as EventTarget;
     const escape = {
@@ -80,10 +79,10 @@ describe("input contexts", () => {
       isComposing: false, target,
     } as KeyboardEvent;
     tracker.start(target);
-    tracker.end(target, true);
 
     // The field's React handler runs before the window shortcut handlers.
     expect(keyboardInputFromEvent(escape, tracker).isComposing).toBe(true);
+    tracker.end(target);
     await Promise.resolve();
     for (const surface of ["review", "export", "dialog"] as const) {
       expect(resolveKeyboardAction(surface, {
@@ -140,7 +139,7 @@ describe("input contexts", () => {
     tracker.start(target);
     expect(keyboardInputFromEvent(event, tracker).isComposing).toBe(true);
     expect(resolveKeyboardAction("export", keyboardInputFromEvent(event, tracker), "active-dialog")).toBeNull();
-    tracker.end(target, true);
+    tracker.end(target);
     expect(keyboardInputFromEvent(event, tracker).isComposing).toBe(true);
     expect(resolveKeyboardAction("export", keyboardInputFromEvent(event, tracker), "active-dialog")).toBeNull();
 
@@ -153,7 +152,7 @@ describe("input contexts", () => {
     expect(keyboardInputFromEvent(event, completedTracker).isComposing).toBe(false);
   });
 
-  it("keeps Escape owned when cancellation is signaled before compositionend", () => {
+  it("does not swallow a new Escape immediately after composition ends", () => {
     const tracker = createCompositionTracker();
     const target = {} as EventTarget;
     const escape = {
@@ -163,15 +162,14 @@ describe("input contexts", () => {
     } as KeyboardEvent;
 
     tracker.start(target);
-    tracker.cancel(target);
-    tracker.end(target, false);
+    tracker.end(target);
 
-    expect(keyboardInputFromEvent(escape, tracker).isComposing).toBe(true);
+    expect(keyboardInputFromEvent(escape, tracker).isComposing).toBe(false);
     expect(resolveKeyboardAction("export", {
       ...keyboardInputFromEvent(escape, tracker),
       targetEditable: true,
       targetTextEditing: true,
-    }, "text-editing")).toBeNull();
+    }, "text-editing")).toEqual({ type: "deactivate-text-editing" });
   });
 
   it("gives an active dialog priority over review shortcuts", () => {

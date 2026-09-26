@@ -54,16 +54,12 @@ export type RepeatPolicy = "repeat" | "once";
 
 export type CompositionTracker = {
   start(target: EventTarget | null): void;
-  cancel(target: EventTarget | null): void;
-  end(target: EventTarget | null, cancelled?: boolean): void;
+  end(target: EventTarget | null): void;
   isActiveFor(target: EventTarget | null, event?: KeyboardEvent): boolean;
 };
 
 export function createCompositionTracker(): CompositionTracker {
   let activeTarget: EventTarget | null = null;
-  let cancellationTarget: EventTarget | null = null;
-  let boundaryTarget: EventTarget | null = null;
-  let boundaryExpiresAt = 0;
   const imeEvents = new WeakSet<KeyboardEvent>();
   let lastImeKey: Pick<KeyboardEvent, "target" | "key" | "code" | "timeStamp"> | null = null;
   function rememberImeKey(event: KeyboardEvent) {
@@ -73,22 +69,9 @@ export function createCompositionTracker(): CompositionTracker {
   return {
     start: (target) => {
       activeTarget = target;
-      cancellationTarget = null;
-      boundaryTarget = null;
-      boundaryExpiresAt = 0;
     },
-    cancel: (target) => {
-      if (activeTarget === target) cancellationTarget = target;
-    },
-    end: (target, cancelled = false) => {
-      if (activeTarget !== null && (target === null || activeTarget === target)) {
-        const compositionTarget = activeTarget;
-        activeTarget = null;
-        const wasCancelled = cancelled || cancellationTarget === compositionTarget;
-        cancellationTarget = null;
-        boundaryTarget = wasCancelled ? (target ?? compositionTarget) : null;
-        boundaryExpiresAt = wasCancelled ? Date.now() + 250 : 0;
-      }
+    end: (target) => {
+      if (activeTarget === target) activeTarget = null;
     },
     isActiveFor: (target, event) => {
       // React and native listeners must agree for the entire event dispatch.
@@ -103,28 +86,13 @@ export function createCompositionTracker(): CompositionTracker {
         imeEvents.add(event);
         return true;
       }
+      // keyCode 229 also identifies IME boundary events with isComposing false.
       if ((event && (event.isComposing || event.keyCode === 229 || event.key === "Process")) ||
           (target !== null && activeTarget === target)) {
         if (event) rememberImeKey(event);
         return true;
       }
-      if (boundaryTarget === target && Date.now() > boundaryExpiresAt) {
-        boundaryTarget = null;
-        boundaryExpiresAt = 0;
-      }
-      if (!event || target === null || boundaryTarget !== target ||
-          (event.key !== "Escape" && event.key !== "Enter" && event.key !== "Process")) {
-        if (boundaryTarget === target && event && event.key !== "Escape" && event.key !== "Enter" && event.key !== "Process") {
-          boundaryTarget = null;
-          boundaryExpiresAt = 0;
-        }
-        return false;
-      }
-      // Consume the boundary for this event only; the next Escape may blur.
-      rememberImeKey(event);
-      boundaryTarget = null;
-      boundaryExpiresAt = 0;
-      return true;
+      return false;
     },
   };
 }
@@ -134,33 +102,14 @@ const compositionTracker = createCompositionTracker();
 export function installCompositionTracking(tracker: CompositionTracker = compositionTracker): () => void {
   function onKeyDown(event: KeyboardEvent) { tracker.isActiveFor(event.target, event); }
   function onStart(event: CompositionEvent) { tracker.start(event.target); }
-  function onUpdate(event: CompositionEvent) {
-    if (event.data === "") tracker.cancel(event.target);
-    else tracker.start(event.target);
-  }
-  function onEnd(event: Event) {
-    const data = "data" in event && typeof event.data === "string" ? event.data : null;
-    tracker.end(event.target, event.type === "compositioncancel" || data === "");
-  }
-  function onBeforeInput(event: InputEvent) {
-    if (event.inputType === "deleteCompositionText") tracker.cancel(event.target);
-    else if (event.inputType === "insertCompositionText") {
-      tracker.start(event.target);
-    }
-  }
+  function onEnd(event: CompositionEvent) { tracker.end(event.target); }
   window.addEventListener("keydown", onKeyDown, true);
   window.addEventListener("compositionstart", onStart, true);
-  window.addEventListener("compositionupdate", onUpdate, true);
   window.addEventListener("compositionend", onEnd, true);
-  window.addEventListener("compositioncancel", onEnd, true);
-  window.addEventListener("beforeinput", onBeforeInput, true);
   return () => {
     window.removeEventListener("keydown", onKeyDown, true);
     window.removeEventListener("compositionstart", onStart, true);
-    window.removeEventListener("compositionupdate", onUpdate, true);
     window.removeEventListener("compositionend", onEnd, true);
-    window.removeEventListener("compositioncancel", onEnd, true);
-    window.removeEventListener("beforeinput", onBeforeInput, true);
   };
 }
 
@@ -186,9 +135,7 @@ export function keyboardInputFromEvent(event: KeyboardEvent, tracker: Compositio
     altKey: event.altKey,
     ctrlKey: event.ctrlKey,
     metaKey: event.metaKey,
-    // IME boundary keydowns can arrive after compositionend with isComposing false.
-    // Browsers still mark those IME-owned events with keyCode 229.
-    isComposing: event.isComposing || event.keyCode === 229 || event.key === "Process" || composing,
+    isComposing: composing,
     targetEditable: isEditableTarget(event.target),
     targetTextEditing: isTextEditingTarget(event.target),
     targetInteractive: isInteractiveTarget(event.target),
