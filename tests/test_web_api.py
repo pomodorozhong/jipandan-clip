@@ -90,6 +90,79 @@ class WebApiTests(unittest.TestCase):
         reopened.open_audio(self.audio)
         self.assertEqual(reopened.snapshot()["candidates"][0]["status"], "group1")
 
+    def test_leading_silence_batches_share_one_undo_and_persist_completion(self):
+        self.open()
+        path = "/api/session/leading-silence-detection"
+        with patch("jipandan.web.service.LEADING_SILENCE_BATCH_SIZE", 1), patch(
+            "jipandan.web.service.detect_leading_silence_start",
+            side_effect=lambda _audio, start, _end: start + 400,
+        ):
+            response = self.client.post(path, headers=self.headers)
+            self.assertEqual(response.status_code, 200, response.text)
+            job = self.wait_for_job(path, "completed")
+        self.assertEqual(job["adjusted"], 2)
+        state = self.service.snapshot()
+        self.assertEqual([clip["start_ms"] for clip in state["candidates"]], [1400, 3400])
+        persisted = json.loads(self.audio.with_suffix(".jipandan.json").read_text())
+        self.assertTrue(persisted["leading_silence_detection_complete"])
+        undone = self.client.post("/api/session/undo", json={
+            "expected_revision": state["revision"],
+        }, headers=self.headers)
+        self.assertEqual(undone.status_code, 200, undone.text)
+        self.assertEqual([clip["start_ms"] for clip in undone.json()["candidates"]], [1000, 3000])
+        with patch("jipandan.web.service.detect_leading_silence_start") as detect:
+            self.assertEqual(self.client.post(path, headers=self.headers).json()["state"], "completed")
+            detect.assert_not_called()
+
+    def test_leading_silence_preserves_manual_trim_during_detection(self):
+        self.open()
+        entered, release = threading.Event(), threading.Event()
+
+        def detect(_audio, start, _end):
+            entered.set()
+            if not release.wait(5):
+                raise TimeoutError("Test did not release detector")
+            return start + 400
+
+        path = "/api/session/leading-silence-detection"
+        with patch("jipandan.web.service.detect_leading_silence_start", side_effect=detect):
+            self.client.post(path, headers=self.headers)
+            try:
+                self.assertTrue(entered.wait(5))
+                edited = self.client.patch("/api/clips/1", json={
+                    "expected_revision": 1, "start_ms": 1200,
+                }, headers=self.headers)
+                self.assertEqual(edited.status_code, 200, edited.text)
+            finally:
+                release.set()
+            job = self.wait_for_job(path, "completed")
+        self.assertEqual(job["adjusted"], 1)
+        self.assertEqual(self.service.snapshot()["candidates"][0]["start_ms"], 1200)
+
+    def test_preview_title_change_reuses_render_and_waveform(self):
+        self.open()
+        envelope = WaveformEnvelopeCache(
+            times=np.array([0.4]), mins=np.array([-0.25]), maxs=np.array([0.5]),
+            duration=0.8, buckets=1,
+        )
+
+        def render(_audio, _candidate, _options, output):
+            output.write_bytes(b"rendered audio")
+
+        request = {"clip_id": "1", "expected_revision": 1, "mode": "as_is", "title": "First"}
+        with patch("jipandan.web.preview.render_export_preview", side_effect=render) as renderer, \
+             patch("jipandan.web.preview.probe_duration_seconds", return_value=0.8), \
+             patch("jipandan.web.preview.build_envelope_from_audio_slice", return_value=envelope):
+            first = self.client.post("/api/previews", json=request, headers=self.headers).json()
+            completed = self.wait_for_job(f"/api/previews/{first['id']}", "completed")
+            renamed = self.client.post("/api/previews", json={**request, "title": "Renamed"},
+                                       headers=self.headers)
+            self.assertEqual(renamed.status_code, 200, renamed.text)
+            self.assertEqual(renamed.json()["id"], first["id"])
+            self.assertEqual(renamed.json()["title"], "Renamed")
+            self.assertEqual(renamed.json()["waveform"], completed["waveform"])
+            renderer.assert_called_once()
+
     def test_bulk_skip_and_invalid_bounds(self):
         self.open()
         bad = self.client.patch(

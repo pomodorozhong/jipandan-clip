@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import BinaryIO, Callable
 
 from jipandan.core.ffmpeg import ExportOptions, probe_duration_seconds, publish_prebuilt_clip
+from jipandan.core.leading_silence import detect_leading_silence_start
 from jipandan.core.srt import parse_srt
 from jipandan.core.whisper import describe_transcribe_call
 from jipandan.core.models import (
@@ -54,6 +55,9 @@ def _time_ms(value: str) -> int:
     return round(srt_time_to_seconds(value.replace(".", ",")) * 1000)
 
 
+LEADING_SILENCE_BATCH_SIZE = 25
+
+
 def clip_payload(candidate: ClipCandidate) -> dict:
     return {
         **asdict(candidate),
@@ -78,8 +82,9 @@ class SessionService:
             base = Path.home() / ("Library/Application Support/Jipandan" if sys.platform == "darwin" else ".local/share/jipandan")
             upload_dir = base / "uploads"
         self.upload_dir = upload_dir
-        self._undo: list[tuple[str, dict[str, ClipCandidate]]] = []
+        self._undo: list[tuple[str, dict[str, ClipCandidate], str | None]] = []
         self._waveforms = WaveformCache()
+        self._leading_silence_job: dict[str, object] | None = None
         self._previews = PreviewJobs((preview_dir or Path("tmp/web-previews")).resolve())
         self._transcriptions = TranscriptionJobs(
             (transcription_dir or Path("tmp/web-transcriptions")).resolve(),
@@ -294,6 +299,138 @@ class SessionService:
             audio = session.audio
         return self._waveforms.get(audio, start_ms, end_ms, buckets)
 
+    def leading_silence_detection_status(self) -> dict | None:
+        with self._lock:
+            job = self._leading_silence_job
+            if job is None or job["audio"] != str(self.audio):
+                return None
+            return {key: value for key, value in job.items() if key != "audio"}
+
+    def start_leading_silence_detection(self) -> dict:
+        with self._lock:
+            session = self._ready()
+            if session.leading_silence_detection_complete:
+                return {
+                    "id": "completed", "state": "completed", "progress": 0,
+                    "total": 0, "adjusted": 0, "error": None,
+                }
+
+            existing = self._leading_silence_job
+            if (
+                existing is not None
+                and existing["audio"] == str(session.audio)
+                and existing["state"] in {"queued", "running"}
+            ):
+                return {key: value for key, value in existing.items() if key != "audio"}
+
+            job: dict[str, object] = {
+                "id": uuid.uuid4().hex,
+                "audio": str(session.audio),
+                "srt_fingerprint": session.srt_fingerprint,
+                "state": "queued",
+                "progress": 0,
+                "total": len(session.candidates),
+                "adjusted": 0,
+                "error": None,
+            }
+            clips = [
+                (candidate.clip_id, candidate.original_start, _time_ms(candidate.original_start),
+                 _time_ms(candidate.end), candidate.start == candidate.original_start)
+                for candidate in session.candidates
+            ]
+            self._leading_silence_job = job
+            threading.Thread(
+                target=self._run_leading_silence_detection,
+                args=(str(job["id"]), session.audio, session.srt_fingerprint, clips),
+                name="jipandan-leading-silence",
+                daemon=True,
+            ).start()
+            return {key: value for key, value in job.items() if key != "audio"}
+
+    def _run_leading_silence_detection(
+        self,
+        job_id: str,
+        audio: Path,
+        srt_fingerprint: str | None,
+        clips: list[tuple[str, str, int, int, bool]],
+    ) -> None:
+        proposals: dict[str, tuple[str, int]] = {}
+        try:
+            with self._lock:
+                job = self._leading_silence_job
+                if job is None or job["id"] != job_id:
+                    return
+                job["state"] = "running"
+
+            for position, (clip_id, original_start, start_ms, end_ms, unchanged) in enumerate(clips, 1):
+                if unchanged:
+                    proposed_start = detect_leading_silence_start(audio, start_ms, end_ms)
+                    if proposed_start is not None and proposed_start > start_ms:
+                        proposals[clip_id] = (original_start, proposed_start)
+
+                batch_finished = (
+                    position % LEADING_SILENCE_BATCH_SIZE == 0 or position == len(clips)
+                )
+                with self._lock:
+                    job = self._leading_silence_job
+                    if job is None or job["id"] != job_id:
+                        return
+                    job["progress"] = position
+                    if not batch_finished:
+                        continue
+
+                    session = self.session
+                    if (
+                        self.audio != audio or session is None
+                        or session.srt_fingerprint != srt_fingerprint
+                    ):
+                        job["state"] = "cancelled"
+                        return
+
+                    eligible_ids = [
+                        candidate_id for candidate_id, (candidate_original, proposed_start) in proposals.items()
+                        if (candidate := session.get_candidate(candidate_id)) is not None
+                        and candidate.start == candidate.original_start == candidate_original
+                        and _time_ms(candidate.end) - proposed_start >= 10
+                    ]
+                    changed: list[str] = []
+
+                    def apply_proposals(draft: Session) -> str:
+                        for candidate_id, (candidate_original, proposed_start) in proposals.items():
+                            candidate = draft.get_candidate(candidate_id)
+                            if (
+                                candidate is None or candidate.start != candidate.original_start
+                                or candidate.original_start != candidate_original
+                            ):
+                                continue
+                            end = _time_ms(candidate.end)
+                            if proposed_start <= _time_ms(candidate.original_start) or end - proposed_start < 10:
+                                continue
+                            candidate.start = seconds_to_ffmpeg_timestamp(proposed_start / 1000)
+                            candidate.duration = f"{(end - proposed_start) / 1000:.3f}"
+                            changed.append(candidate_id)
+                        if position == len(clips):
+                            draft.leading_silence_detection_complete = True
+                        return "Detect leading silence"
+
+                    if eligible_ids or position == len(clips):
+                        snapshot, _ = self._mutate(
+                            session.revision, apply_proposals, undo_ids=eligible_ids,
+                            undo_group=f"leading-silence:{job_id}",
+                        )
+                        del snapshot
+                    job["adjusted"] = int(job["adjusted"]) + len(changed)
+                    proposals.clear()
+                    if position == len(clips):
+                        job["state"] = "completed"
+        except Exception as exc:
+            logger.exception("Leading silence detection failed")
+            with self._lock:
+                job = self._leading_silence_job
+                if job is not None and job["id"] == job_id:
+                    job["state"] = "failed"
+                    job["error"] = str(exc)
+
     def import_audio(self, filename: str, source: BinaryIO) -> dict:
         name = Path(filename).name
         if not name or name in {".", ".."} or Path(name).suffix.lower() not in {
@@ -359,6 +496,10 @@ class SessionService:
                 "srt_exists": bool(self.srt and self.srt.exists()),
                 "session_path": str(session.session_path) if session else None,
                 "clip_dir": str(session.clip_dir) if session else str(self.default_clip_dir),
+                "srt_fingerprint": session.srt_fingerprint if session else None,
+                "leading_silence_detection_complete": (
+                    session.leading_silence_detection_complete if session else False
+                ),
                 "needs_transcription": bool(self.audio and session is None),
                 "transcription": self._transcriptions.latest(self.audio),
                 "revision": session.revision if session else None,
@@ -388,7 +529,7 @@ class SessionService:
 
     def _mutate(
         self, expected_revision: int, operation: Callable[[Session], object],
-        *, undo_ids: list[str] | None = None,
+        *, undo_ids: list[str] | None = None, undo_group: str | None = None,
     ) -> tuple[dict, object]:
         with self._lock:
             current = self._check_revision(expected_revision)
@@ -407,8 +548,14 @@ class SessionService:
                 raise SessionConflict(str(exc)) from exc
             self.session = draft
             if before:
-                self._undo.append((str(result), before))
-                self._undo = self._undo[-50:]
+                if undo_group is not None and self._undo and self._undo[-1][2] == undo_group:
+                    label, grouped_before, group_id = self._undo[-1]
+                    for clip_id, candidate in before.items():
+                        grouped_before.setdefault(clip_id, candidate)
+                    self._undo[-1] = (label, grouped_before, group_id)
+                else:
+                    self._undo.append((str(result), before, undo_group))
+                    self._undo = self._undo[-50:]
             return self.snapshot(), result
 
     def patch_clip(
@@ -504,7 +651,7 @@ class SessionService:
             self._check_revision(expected_revision)
             if not self._undo:
                 raise InvalidEdit("Nothing to undo")
-            label, before = self._undo[-1]
+            label, before, _ = self._undo[-1]
 
             def restore(session: Session) -> str:
                 for clip_id, old in before.items():

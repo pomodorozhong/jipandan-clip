@@ -58,7 +58,8 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
     let alive = true;
     const timer = window.setInterval(() => {
       void api<PreviewJob>(`/previews/${job.id}`).then((next) => {
-        if (alive) setJob(next);
+        if (alive) setJob((previous) => previous && previous.id === next.id && previous.waveform
+          ? { ...next, waveform: previous.waveform } : next);
       }).catch((cause) => {
         if (alive) setError(cause instanceof Error ? cause.message : String(cause));
       });
@@ -93,17 +94,24 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
     job.stop_threshold_db !== (mode === "as_is" ? -50 : stop) ||
     job.title !== title.trim()
   ));
+  const waveformStale = Boolean(job && (
+    job.stale || job.start_ms !== clip.start_ms || job.end_ms !== clip.end_ms ||
+    job.clip_title !== clip.title || job.mode !== mode ||
+    job.start_threshold_db !== (mode === "as_is" ? -40 : start) ||
+    job.stop_threshold_db !== (mode === "as_is" ? -50 : stop)
+  ));
   const referenceStale = Boolean(referenceJob && (
     referenceJob.stale || referenceJob.start_ms !== clip.start_ms ||
     referenceJob.end_ms !== clip.end_ms || referenceJob.clip_title !== clip.title
   ));
   const candidateReady = Boolean(job?.state === "completed" && !stale && job.duration_ms);
+  const waveformReady = Boolean(job?.state === "completed" && !waveformStale && job.duration_ms);
   const referenceReady = Boolean(referenceJob?.state === "completed" && !referenceStale && referenceJob.duration_ms);
   const selectedDuration = clip.end_ms - clip.start_ms;
   const referenceDuration = referenceReady ? referenceJob?.duration_ms ?? selectedDuration : selectedDuration;
-  const candidateDuration = candidateReady ? job?.duration_ms ?? 0 : 0;
+  const candidateDuration = waveformReady ? job?.duration_ms ?? 0 : 0;
   const sharedPeak = Math.max(peak(referenceReady ? referenceJob?.waveform ?? null : null),
-    peak(candidateReady ? job?.waveform ?? null : null));
+    peak(waveformReady ? job?.waveform ?? null : null));
 
   function chooseMode(next: ExportMode) {
     setMode(next);
@@ -148,7 +156,6 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
     }
     const delay = candidateWasOpen.current ? 450 : 0;
     candidateWasOpen.current = true;
-    candidatePlayer.current?.pause();
     setError("");
     if (!validThresholds || !title.trim()) {
       setRequesting(false);
@@ -163,7 +170,8 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
         stop_threshold_db: mode === "as_is" ? -50 : stop,
         title: title.trim(),
       }, controller.signal).then((next) => {
-        if (!controller.signal.aborted) setJob(next);
+        if (!controller.signal.aborted) setJob((previous) => previous && previous.id === next.id && previous.waveform
+          ? { ...next, waveform: previous.waveform } : next);
       }).catch((cause) => {
         if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : String(cause));
       }).finally(() => {
@@ -221,12 +229,12 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
       if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
       if (event.code === "Space") {
         event.preventDefault();
-        if (!event.repeat) event.shiftKey ? candidatePlayer.current?.replay() : candidatePlayer.current?.toggle();
+        if (!event.repeat) event.shiftKey ? candidatePlayer.current?.toggle() : candidatePlayer.current?.replay();
         return;
       }
       if (event.code === "KeyQ") {
         event.preventDefault();
-        if (!event.repeat) event.shiftKey ? referencePlayer.current?.replay() : referencePlayer.current?.toggle();
+        if (!event.repeat) event.shiftKey ? referencePlayer.current?.toggle() : referencePlayer.current?.replay();
         return;
       }
       if (event.shiftKey) return;
@@ -327,7 +335,7 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
             note="Includes the original edges and pauses" startMs={0} endMs={referenceDuration}
             waveform={referenceReady ? referenceJob?.waveform ?? null : null} sharedPeak={sharedPeak}
             src={referenceReady ? previewUrl(referenceJob!.id) : undefined} placeholder={referencePlaceholder}
-            playShortcut="Q" replayShortcut="⇧Q" onActivate={() => candidatePlayer.current?.pause()} />
+            playShortcut="⇧Q" replayShortcut="Q" onActivate={() => candidatePlayer.current?.pause()} />
           {(referenceError || referenceJob?.state === "failed") && <div role="alert" className="flex flex-wrap items-center gap-2 text-xs text-[#ffb3a8]">
             <span>{referenceError || `Reference render failed: ${referenceJob?.error ?? "Unknown error"}`}</span>
             <button type="button" onClick={() => void renderReference()} disabled={referenceRequesting}
@@ -335,13 +343,13 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
           </div>}
           <PreviewPlayer ref={candidatePlayer} variant="candidate" eyebrow={`Export candidate · ${modes.find((item) => item.value === mode)?.label}`}
             title="Rendered preview" durationLabel="Rendered result"
-            durationText={candidateReady ? duration(candidateDuration) : "—"}
+            durationText={waveformReady ? duration(candidateDuration) : "—"}
             note={candidateReady ? difference === 0 ? "Same length as the reference"
               : `${duration(Math.abs(difference))} ${difference < 0 ? "shorter" : "longer"} than the reference`
               : "Updates automatically when settings change"}
-            startMs={0} endMs={candidateDuration} waveform={candidateReady ? job?.waveform ?? null : null}
-            sharedPeak={sharedPeak} src={candidateReady ? previewUrl(job!.id) : undefined}
-            placeholder={candidatePlaceholder} playShortcut="Space" replayShortcut="⇧Space"
+            startMs={0} endMs={candidateDuration} waveform={waveformReady ? job?.waveform ?? null : null}
+            sharedPeak={sharedPeak} src={waveformReady ? previewUrl(job!.id) : undefined}
+            placeholder={candidatePlaceholder} playShortcut="⇧Space" replayShortcut="Space"
             onActivate={() => referencePlayer.current?.pause()} />
           {job?.state === "failed" && !stale && <p role="alert" className="text-xs text-[#ffb3a8]">Render failed: {job.error}. Adjust the settings to retry.</p>}
         </div>

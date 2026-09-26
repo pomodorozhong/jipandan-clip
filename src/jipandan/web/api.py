@@ -237,6 +237,14 @@ def create_app(
     ):
         return app.state.service.waveform(clip_id, start_ms, end_ms, buckets)
 
+    @app.get("/api/session/leading-silence-detection")
+    def leading_silence_detection_status():
+        return app.state.service.leading_silence_detection_status()
+
+    @app.post("/api/session/leading-silence-detection")
+    def start_leading_silence_detection():
+        return app.state.service.start_leading_silence_detection()
+
     @app.post("/api/previews")
     def start_preview(request: PreviewRequest):
         return app.state.service.start_preview(

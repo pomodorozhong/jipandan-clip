@@ -1,7 +1,9 @@
 """Start the local browser GUI server."""
 
 import argparse
+import shutil
 import socket
+import subprocess
 import threading
 import time
 import webbrowser
@@ -9,8 +11,27 @@ from pathlib import Path
 
 import uvicorn
 
-from jipandan.web.api import create_app
-from jipandan.web.service import SessionService
+
+def _build_frontend() -> None:
+    frontend_dir = Path(__file__).resolve().parents[3] / "frontend"
+    if not (frontend_dir / "package.json").is_file():
+        raise SystemExit(
+            "Frontend source is missing. Run jipandan-web from a project checkout."
+        )
+
+    npm = shutil.which("npm")
+    if shutil.which("node") is None or npm is None:
+        raise SystemExit("Node.js and npm are required to build the web interface.")
+    if not (frontend_dir / "node_modules" / ".bin" / "tsc").exists():
+        raise SystemExit(
+            "Frontend dependencies are missing. Run `cd frontend && npm ci` first."
+        )
+
+    print("Building web frontend…", flush=True)
+    try:
+        subprocess.run([npm, "run", "build"], cwd=frontend_dir, check=True)
+    except subprocess.CalledProcessError as error:
+        raise SystemExit(error.returncode) from None
 
 
 def main() -> None:
@@ -20,6 +41,12 @@ def main() -> None:
     parser.add_argument("--clip-dir", type=Path, help="Directory for exported MP3s from new sessions")
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
+
+    _build_frontend()
+
+    # Load the app only after its ignored, generated static files are ready.
+    from jipandan.web.api import create_app
+    from jipandan.web.service import SessionService
 
     service = SessionService(clip_dir=args.clip_dir)
     if args.audio is not None:

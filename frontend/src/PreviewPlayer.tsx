@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from "react";
 import type { WaveformWindow } from "./api";
 
 export interface PreviewPlayerHandle {
@@ -28,6 +28,38 @@ type Props = {
 const WIDTH = 1000;
 const HEIGHT = 128;
 
+const WaveformView = memo(function WaveformView({
+  variant, waveformPath, ready, durationMs, positionMs, maskId, onPointerDown, onKeyDown,
+}: {
+  variant: "reference" | "candidate";
+  waveformPath: string;
+  ready: boolean;
+  durationMs: number;
+  positionMs: number;
+  maskId: string;
+  onPointerDown(event: React.PointerEvent<SVGSVGElement>): void;
+  onKeyDown(event: React.KeyboardEvent<SVGSVGElement>): void;
+}) {
+  const reference = variant === "reference";
+  const playheadX = clamp((positionMs / durationMs) * WIDTH, 0, WIDTH);
+  return <svg role="slider" tabIndex={ready ? 0 : -1}
+    aria-label={`Seek in ${reference ? "As is reference" : "export candidate"}`}
+    aria-valuemin={0} aria-valuemax={durationMs} aria-valuenow={clamp(positionMs, 0, durationMs)}
+    aria-valuetext={clock(positionMs)}
+    viewBox={`0 0 ${WIDTH} ${HEIGHT}`} preserveAspectRatio="none"
+    onPointerDown={onPointerDown} onKeyDown={onKeyDown}
+    className={`h-full w-full touch-none ${ready ? "cursor-crosshair" : "cursor-default"}`}>
+    <line x1="0" y1={HEIGHT / 2} x2={WIDTH} y2={HEIGHT / 2}
+      stroke={reference ? "#3f5c68" : "#385145"} strokeWidth="1" />
+    <path d={waveformPath} fill="none" stroke={reference ? "#80b7c8" : "#91bd89"} strokeWidth="1.8" strokeLinecap="round" />
+    <clipPath id={maskId}><rect x="0" y="0" width={playheadX} height={HEIGHT} /></clipPath>
+    <path d={waveformPath} fill="none" stroke={reference ? "#d1e8ef" : "#d1e6b0"}
+      strokeWidth="1.8" strokeLinecap="round" clipPath={`url(#${maskId})`} />
+    {ready && <><line x1={playheadX} y1="5" x2={playheadX} y2={HEIGHT - 5} stroke="#f6faf1" strokeWidth="2" />
+      <circle cx={playheadX} cy="7" r="4" fill="#f6faf1" /></>}
+  </svg>;
+});
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -51,7 +83,6 @@ const PreviewPlayer = forwardRef<PreviewPlayerHandle, Props>(function PreviewPla
   const [error, setError] = useState("");
   const ready = Boolean(src && endMs > startMs);
   const durationMs = Math.max(1, endMs - startMs);
-  const playheadX = clamp((positionMs - startMs) / durationMs * WIDTH, 0, WIDTH);
   const reference = variant === "reference";
 
   const waveformPath = useMemo(() => {
@@ -99,12 +130,12 @@ const PreviewPlayer = forwardRef<PreviewPlayerHandle, Props>(function PreviewPla
     return () => cancelAnimationFrame(frame);
   }, [playing, startMs, endMs]);
 
-  function seek(ms: number) {
+  const seek = useCallback((ms: number) => {
     const position = clamp(Math.round(ms), startMs, endMs);
     const audio = audioRef.current;
     if (audio && ready) audio.currentTime = position / 1000;
     setPositionMs(position);
-  }
+  }, [startMs, endMs, ready]);
 
   async function play(restart: boolean) {
     const audio = audioRef.current;
@@ -126,19 +157,19 @@ const PreviewPlayer = forwardRef<PreviewPlayerHandle, Props>(function PreviewPla
     pause: () => { audioRef.current?.pause(); },
   }));
 
-  function seekFromPointer(event: React.PointerEvent<SVGSVGElement>) {
+  const seekFromPointer = useCallback((event: React.PointerEvent<SVGSVGElement>) => {
     if (!ready) return;
     const box = event.currentTarget.getBoundingClientRect();
     seek(startMs + (event.clientX - box.left) / box.width * durationMs);
-  }
+  }, [ready, startMs, durationMs, seek]);
 
-  function seekFromKey(event: React.KeyboardEvent<SVGSVGElement>) {
+  const seekFromKey = useCallback((event: React.KeyboardEvent<SVGSVGElement>) => {
     if (!ready) return;
     const move = event.key === "ArrowRight" ? 100 : event.key === "ArrowLeft" ? -100 : 0;
     if (move) { event.preventDefault(); seek(positionMs + move); }
     else if (event.key === "Home") { event.preventDefault(); seek(startMs); }
     else if (event.key === "End") { event.preventDefault(); seek(endMs); }
-  }
+  }, [ready, positionMs, seek, startMs, endMs]);
 
   return <div className={`relative grid min-w-0 gap-x-4 rounded-xl border p-3 sm:grid-cols-[270px_minmax(0,1fr)] ${reference
     ? "border-[#618a9c] bg-[#1c2b32]" : "border-[#8eb36c] bg-[#203225]"}`}>
@@ -173,22 +204,10 @@ const PreviewPlayer = forwardRef<PreviewPlayerHandle, Props>(function PreviewPla
         onPause={() => setPlaying(false)} onEnded={() => { setPlaying(false); setPositionMs(endMs); }} />
       <div className={`flex h-32 items-center justify-center overflow-hidden rounded-lg border ${reference
         ? "border-[#4c7180] bg-[#111e24]" : "border-[#55774c] bg-[#132116]"}`}>
-        {waveformPath ? <svg role="slider" tabIndex={ready ? 0 : -1}
-          aria-label={`Seek in ${reference ? "As is reference" : "export candidate"}`}
-          aria-valuemin={0} aria-valuemax={durationMs} aria-valuenow={clamp(positionMs - startMs, 0, durationMs)}
-          aria-valuetext={clock(positionMs - startMs)}
-          viewBox={`0 0 ${WIDTH} ${HEIGHT}`} preserveAspectRatio="none"
-          onPointerDown={seekFromPointer} onKeyDown={seekFromKey}
-          className={`h-full w-full touch-none ${ready ? "cursor-crosshair" : "cursor-default"}`}>
-          <line x1="0" y1={HEIGHT / 2} x2={WIDTH} y2={HEIGHT / 2}
-            stroke={reference ? "#3f5c68" : "#385145"} strokeWidth="1" />
-          <path d={waveformPath} fill="none" stroke={reference ? "#80b7c8" : "#91bd89"} strokeWidth="1.8" strokeLinecap="round" />
-          <clipPath id={maskId}><rect x="0" y="0" width={playheadX} height={HEIGHT} /></clipPath>
-          <path d={waveformPath} fill="none" stroke={reference ? "#d1e8ef" : "#d1e6b0"}
-            strokeWidth="1.8" strokeLinecap="round" clipPath={`url(#${maskId})`} />
-          {ready && <><line x1={playheadX} y1="5" x2={playheadX} y2={HEIGHT - 5} stroke="#f6faf1" strokeWidth="2" />
-            <circle cx={playheadX} cy="7" r="4" fill="#f6faf1" /></>}
-        </svg> : <p className="subtle px-4 text-center text-sm" aria-live="polite">{placeholder}</p>}
+        {waveformPath ? <WaveformView variant={variant} waveformPath={waveformPath} ready={ready}
+          durationMs={durationMs} positionMs={positionMs - startMs} maskId={maskId}
+          onPointerDown={seekFromPointer} onKeyDown={seekFromKey} />
+          : <p className="subtle px-4 text-center text-sm" aria-live="polite">{placeholder}</p>}
       </div>
       <div className="subtle mono mt-1 flex justify-between text-[11px]">
         <span>0:00</span><span>{ready ? "Click waveform to seek" : ""}</span><span>{clock(durationMs)}</span>
