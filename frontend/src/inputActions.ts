@@ -218,7 +218,7 @@ export function resolveKeyboardAction(
   context: InputContext,
 ): InputAction | null {
   if (input.isComposing) return null;
-  if (input.key === "Escape" && input.targetTextEditing) return { type: "deactivate-text-editing" };
+  if (isCode(input, "Escape") && input.targetTextEditing) return { type: "deactivate-text-editing" };
 
   switch (surface) {
     case "review":
@@ -234,19 +234,21 @@ export function resolveKeyboardAction(
 
 function resolveReviewAction(input: KeyboardInput, context: InputContext): InputAction | null {
   if (context !== "review" || input.targetEditable || input.altKey || input.ctrlKey || input.metaKey) return null;
-  const key = input.key.toLowerCase();
-  if (key === "e") return { type: "open-export" };
-  if (key === "j" || key === "arrowdown") return { type: "navigate", direction: "next" };
-  if (key === "k" || key === "arrowup") return { type: "navigate", direction: "previous" };
-  if (key === "1") return { type: "classify", status: "group1" };
-  if (key === "2") return { type: "classify", status: "group2" };
-  if (key === "x") return { type: "classify", status: "skipped" };
-  if (key === "u") return { type: "undo" };
-  if (key === "d") return { type: "duplicate" };
-  if (key === "r") return { type: "rename" };
-  if (key === "g") return { type: "jump" };
-  if (key === "/") return { type: "focus-search" };
-  if (key === "?") return { type: "show-help" };
+  // `key` can be a locale-specific character or `Process` while an IME is
+  // selected. `code` keeps these application shortcuts tied to physical keys.
+  if (isCode(input, "KeyE")) return { type: "open-export" };
+  if (isCode(input, "KeyJ", "ArrowDown")) return { type: "navigate", direction: "next" };
+  if (isCode(input, "KeyK", "ArrowUp")) return { type: "navigate", direction: "previous" };
+  if (!input.shiftKey && isCode(input, "Digit1", "Numpad1")) return { type: "classify", status: "group1" };
+  if (!input.shiftKey && isCode(input, "Digit2", "Numpad2")) return { type: "classify", status: "group2" };
+  if (isCode(input, "KeyX")) return { type: "classify", status: "skipped" };
+  if (isCode(input, "KeyU")) return { type: "undo" };
+  if (isCode(input, "KeyD")) return { type: "duplicate" };
+  if (isCode(input, "KeyR")) return { type: "rename" };
+  if (isCode(input, "KeyG")) return { type: "jump" };
+  if (isCode(input, "Slash")) return input.shiftKey
+    ? { type: "show-help" }
+    : { type: "focus-search" };
   return null;
 }
 
@@ -264,33 +266,36 @@ function resolveWaveformAction(input: KeyboardInput, context: InputContext): Inp
 
 function resolveExportAction(input: KeyboardInput, context: InputContext): InputAction | null {
   if (context !== "active-dialog") return null;
-  if (input.key === "Escape") return { type: "dialog-close" };
+  if (isCode(input, "Escape")) return { type: "dialog-close" };
   if (input.targetEditable) return null;
-  if (input.metaKey && !input.ctrlKey && !input.altKey && !input.shiftKey && input.key === "Enter") {
+  if (input.metaKey && !input.ctrlKey && !input.altKey && !input.shiftKey && isCode(input, "Enter", "NumpadEnter")) {
     return { type: "export", advance: true };
   }
   if (input.altKey || input.ctrlKey || input.metaKey) return null;
-  if (input.key === "Enter" && !input.shiftKey && !input.targetInteractive) {
+  if (isCode(input, "Enter", "NumpadEnter") && !input.shiftKey && !input.targetInteractive) {
     return { type: "export", advance: false };
   }
   if (input.targetInteractive) return null;
   if (input.code === "Space") {
     return { type: "playback", target: "candidate", mode: input.shiftKey ? "toggle" : "replay" };
   }
-  if (input.code === "KeyQ") {
+  if (isCode(input, "KeyQ")) {
     return { type: "playback", target: "reference", mode: input.shiftKey ? "toggle" : "replay" };
   }
   if (input.shiftKey) return null;
-  const key = input.key.toLowerCase();
-  if (key === "a") return { type: "export-mode", mode: "as_is" };
-  if (key === "e") return { type: "export-mode", mode: "trim_edges" };
-  if (key === "t") return { type: "export-mode", mode: "trim_all" };
+  if (isCode(input, "KeyA")) return { type: "export-mode", mode: "as_is" };
+  if (isCode(input, "KeyE")) return { type: "export-mode", mode: "trim_edges" };
+  if (isCode(input, "KeyT")) return { type: "export-mode", mode: "trim_all" };
   return null;
 }
 
 function resolveDialogAction(input: KeyboardInput, context: InputContext): InputAction | null {
-  if (context !== "active-dialog" || input.key !== "Escape") return null;
+  if (context !== "active-dialog" || !isCode(input, "Escape")) return null;
   return { type: "dialog-close" };
+}
+
+function isCode(input: KeyboardInput, ...codes: string[]): boolean {
+  return codes.includes(input.code);
 }
 
 function contextAllowsAction(action: InputAction, context: InputContext): boolean {

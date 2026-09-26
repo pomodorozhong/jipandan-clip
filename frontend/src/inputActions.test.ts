@@ -174,27 +174,39 @@ describe("input contexts", () => {
 
   it("gives an active dialog priority over review shortcuts", () => {
     expect(getInputContext({ activeDialog: true, textEditing: true })).toBe("active-dialog");
-    expect(resolveKeyboardAction("review", input({ key: "j" }), "active-dialog")).toBeNull();
+    expect(resolveKeyboardAction("review", input({ key: "j", code: "KeyJ" }), "active-dialog")).toBeNull();
   });
 
   it("protects text editing and composition from review actions", () => {
-    expect(resolveKeyboardAction("review", input({ key: "1" }), "text-editing")).toBeNull();
-    expect(resolveKeyboardAction("review", input({ key: "1", isComposing: true }), "review")).toBeNull();
-    expect(resolveKeyboardAction("review", input({ key: "1", targetEditable: true }), "review")).toBeNull();
+    expect(resolveKeyboardAction("review", input({ key: "1", code: "Digit1" }), "text-editing")).toBeNull();
+    expect(resolveKeyboardAction("review", input({ key: "1", code: "Digit1", isComposing: true }), "review")).toBeNull();
+    expect(resolveKeyboardAction("review", input({ key: "1", code: "Digit1", targetEditable: true }), "review")).toBeNull();
   });
 
   it("preserves browser modifier shortcuts", () => {
-    expect(resolveKeyboardAction("review", input({ key: "e", metaKey: true }), "review")).toBeNull();
-    expect(resolveKeyboardAction("review", input({ key: "u", ctrlKey: true }), "review")).toBeNull();
+    expect(resolveKeyboardAction("review", input({ key: "e", code: "KeyE", metaKey: true }), "review")).toBeNull();
+    expect(resolveKeyboardAction("review", input({ key: "u", code: "KeyU", ctrlKey: true }), "review")).toBeNull();
+  });
+
+  it("routes physical positions when an IME changes the reported key", () => {
+    expect(resolveKeyboardAction("review", input({ key: "かな", code: "KeyJ" }), "review")).toEqual({
+      type: "navigate", direction: "next",
+    });
+    expect(resolveKeyboardAction("review", input({ key: "Process", code: "Digit1" }), "review")).toEqual({
+      type: "classify", status: "group1",
+    });
+    expect(resolveKeyboardAction("review", input({ key: "?", code: "Slash", shiftKey: true }), "review")).toEqual({
+      type: "show-help",
+    });
   });
 });
 
 describe("keyboard action routing", () => {
   it("maps review actions to shared action objects", () => {
-    expect(resolveKeyboardAction("review", input({ key: "j" }), "review")).toEqual({
+    expect(resolveKeyboardAction("review", input({ key: "j", code: "KeyJ" }), "review")).toEqual({
       type: "navigate", direction: "next",
     });
-    expect(resolveKeyboardAction("review", input({ key: "2" }), "review")).toEqual({
+    expect(resolveKeyboardAction("review", input({ key: "2", code: "Digit2" }), "review")).toEqual({
       type: "classify", status: "group2",
     });
     expect(resolveKeyboardAction("waveform", input({ code: "BracketLeft" }), "review")).toEqual({
@@ -203,16 +215,16 @@ describe("keyboard action routing", () => {
   });
 
   it("keeps export Enter out of editable fields", () => {
-    expect(resolveKeyboardAction("export", input({ key: "Enter", targetEditable: true }), "active-dialog")).toBeNull();
-    expect(resolveKeyboardAction("export", input({ key: "Enter" }), "active-dialog")).toEqual({
+    expect(resolveKeyboardAction("export", input({ key: "Enter", code: "Enter", targetEditable: true }), "active-dialog")).toBeNull();
+    expect(resolveKeyboardAction("export", input({ key: "Enter", code: "Enter" }), "active-dialog")).toEqual({
       type: "export", advance: false,
     });
-    expect(resolveKeyboardAction("export", input({ key: "Enter", metaKey: true, targetEditable: true }), "active-dialog")).toBeNull();
+    expect(resolveKeyboardAction("export", input({ key: "Enter", code: "Enter", metaKey: true, targetEditable: true }), "active-dialog")).toBeNull();
     expect(resolveKeyboardAction("export", input({ code: "Space", targetInteractive: true }), "active-dialog")).toBeNull();
   });
 
   it("deactivates text editing without closing its parent context", () => {
-    const escape = input({ key: "Escape", targetEditable: true, targetTextEditing: true });
+    const escape = input({ key: "Escape", code: "Escape", targetEditable: true, targetTextEditing: true });
     expect(resolveKeyboardAction("review", escape, "text-editing")).toEqual({ type: "deactivate-text-editing" });
     expect(resolveKeyboardAction("export", escape, "active-dialog")).toEqual({ type: "deactivate-text-editing" });
     expect(resolveKeyboardAction("dialog", escape, "active-dialog")).toEqual({ type: "deactivate-text-editing" });
@@ -220,8 +232,17 @@ describe("keyboard action routing", () => {
   });
 
   it("routes dialog actions without leaking them into review", () => {
-    expect(resolveKeyboardAction("dialog", input({ key: "Escape" }), "active-dialog")).toEqual({ type: "dialog-close" });
-    expect(resolveKeyboardAction("export", input({ key: "Escape", isComposing: true }), "active-dialog")).toBeNull();
+    expect(resolveKeyboardAction("dialog", input({ key: "Escape", code: "Escape" }), "active-dialog")).toEqual({ type: "dialog-close" });
+    expect(resolveKeyboardAction("export", input({ key: "Escape", code: "Escape", isComposing: true }), "active-dialog")).toBeNull();
+  });
+
+  it("uses physical positions for export modes and playback", () => {
+    expect(resolveKeyboardAction("export", input({ key: "あ", code: "KeyA" }), "active-dialog")).toEqual({
+      type: "export-mode", mode: "as_is",
+    });
+    expect(resolveKeyboardAction("export", input({ key: "Process", code: "KeyQ" }), "active-dialog")).toEqual({
+      type: "playback", target: "reference", mode: "replay",
+    });
   });
 });
 

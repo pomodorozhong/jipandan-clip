@@ -692,8 +692,12 @@ export default function App() {
                 <input ref={titleRef} value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)}
                   onKeyDown={(event) => {
                     const input = keyboardInputFromEvent(event.nativeEvent);
-                    if (input.key === "Enter" && !input.isComposing) { event.preventDefault(); void saveTitle(); }
-                    if (input.key === "Escape" && !input.isComposing) { event.preventDefault(); setEditingTitle(false); }
+                    if ((input.code === "Enter" || input.code === "NumpadEnter") && !input.isComposing) {
+                      event.preventDefault(); void saveTitle();
+                    }
+                    if (input.code === "Escape" && !input.isComposing) {
+                      event.preventDefault(); setEditingTitle(false);
+                    }
                   }} aria-label="Clip title" className="min-w-0 flex-1 rounded-lg border line bg-[#101816] px-3 py-2" />
                 <ActionButton onClick={() => void saveTitle()} disabled={busy || !titleDraft.trim()} tone="accent">Save</ActionButton>
                 <ActionButton onClick={() => setEditingTitle(false)}>Cancel</ActionButton>
@@ -701,17 +705,17 @@ export default function App() {
                 <h2 className="min-w-0 flex-1 break-words text-2xl font-semibold leading-snug">{selected.title}</h2>
                 <div className="ml-auto flex shrink-0 items-center gap-1.5">
                   <button type="button" onClick={() => dispatchReviewAction({ type: "navigate", direction: "previous" })} disabled={selectedPosition <= 0}
-                    aria-label="Previous clip (K)" title="Previous clip (K)"
+                    aria-label="Previous clip (physical K key position)" title="Previous clip (physical K key position)"
                     className="soft-surface inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium hover:bg-[#354b3b]">
                     <span aria-hidden="true">←</span><kbd aria-hidden="true" className="shortcut-key">K</kbd>
                   </button>
                   <button type="button" onClick={() => dispatchReviewAction({ type: "navigate", direction: "next" })} disabled={selectedPosition >= visible.length - 1}
-                    aria-label="Next clip (J)" title="Next clip (J)"
+                    aria-label="Next clip (physical J key position)" title="Next clip (physical J key position)"
                     className="soft-surface inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium hover:bg-[#354b3b]">
                     <span aria-hidden="true">→</span><kbd aria-hidden="true" className="shortcut-key">J</kbd>
                   </button>
                   <ActionButton onClick={() => dispatchReviewAction({ type: "open-export" })} disabled={busy}
-                    title="Open export preview (E)" shortcut="E" tone="accent">Export</ActionButton>
+                    title="Open export preview (physical E key position)" shortcut="E" tone="accent">Export</ActionButton>
                   <div ref={clipMenuRef} className="relative">
                     <button type="button" onClick={() => setShowClipMenu((open) => !open)}
                       aria-label="More clip actions" aria-expanded={showClipMenu} aria-haspopup="menu" title="More clip actions"
@@ -843,7 +847,7 @@ export default function App() {
             <kbd className="accent mono">{key}</kbd><span>{action}</span>
           </div>)}
       </div>
-      <p className="subtle mt-5 text-xs">Review shortcuts pause while you type. Enter and ⌘ Enter work in the export title field.</p>
+      <p className="subtle mt-5 text-xs">Review shortcuts pause while you type. Letter and number shortcuts follow their physical US-QWERTY key positions, so a non-QWERTY layout may show different printed characters. Enter and ⌘ Enter work in the export preview when focus is outside an editable field.</p>
     </Dialog>}
   </div>;
 }
