@@ -68,7 +68,7 @@ Each issue is intended to become one focused implementation PR. Update the split
 | Order | Issue | Dependency | Acceptance / review point | Implementation PR |
 | --- | --- | --- | --- | --- |
 | 1 | [#7 Shared actions and contexts](https://github.com/pomodorozhong/jipandan-clip/issues/7) | None | Existing browser behavior preserved; dialog priority, editing guards, and repeat rules covered. | Not opened |
-| 2 | [#8 IME-friendly navigation](https://github.com/pomodorozhong/jipandan-clip/issues/8) | #7 | Owner's agreed IME/browser combinations navigate without switching language; candidate confirmation/cancellation does not trigger unrelated actions. | Not opened |
+| 2 | [#8 IME-friendly navigation](https://github.com/pomodorozhong/jipandan-clip/issues/8) | #7 | Owner's agreed IME/browser combinations navigate without switching language; candidate confirmation/cancellation does not trigger unrelated actions. | [#14](https://github.com/pomodorozhong/jipandan-clip/pull/14) |
 | 3 | [#9 Gamepad foundation and review](https://github.com/pomodorozhong/jipandan-clip/issues/9) | #7 | Browse, replay, and classify on a real controller; disconnect/focus/context transitions cannot produce stale actions. | Not opened |
 | 4 | [#10 Gamepad trimming](https://github.com/pomodorozhong/jipandan-clip/issues/10) | #9 | Accurate start/end edits with visible step/boundary; held input cannot leak into another clip or conflict with saves. | Not opened |
 | 5 | [#11 Gamepad dialogs and export](https://github.com/pomodorozhong/jipandan-clip/issues/11) | #9 | Reach enabled dialog controls, compare previews, export once per fresh press, and restore focus. | Not opened |
