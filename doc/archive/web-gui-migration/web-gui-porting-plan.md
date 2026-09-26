@@ -130,7 +130,7 @@ The Python service should own the shared operations: open/merge, status transiti
 
 ## Persistence and job safety
 
-1. Fix the six findings in [the TUI review](tui-user-flow-issues.md) in shared code where possible. In particular, do not build a web interface over the current automatic destructive merge or preview paths.
+1. Fix the six findings in [the TUI review](../../tui-user-flow-issues.md) in shared code where possible. In particular, do not build a web interface over the current automatic destructive merge or preview paths.
 2. Write session JSON to a sibling temporary file, flush it, then atomically replace the target. Keep a backup before schema migration or accepted SRT removal. Migrate older session versions on a copy and retain the original until the new file is verified.
 3. Serialize session mutations for one audio file. Include a monotonically increasing revision and reject stale edits. Handle a second browser tab and simultaneous TUI/web use deliberately: one writer or explicit conflict resolution.
 4. Give every FFmpeg/Whisper job a unique ID, isolated working directory, captured inputs, and states `queued`, `running`, `completed`, `failed`, and `cancelled`. Limit concurrent CPU/media jobs. On server restart, mark interrupted jobs failed or restartable rather than leaving an indefinite spinner.

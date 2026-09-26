@@ -107,7 +107,19 @@ npm --prefix frontend run build
 
 There is currently no automated frontend interaction test suite. To check the browser interface manually, run `uv run jipandan-web`, open a recording, and exercise clip selection, trimming, playback, settings, and export preview.
 
+## Repository layout
+
+- `frontend/`: React browser interface.
+- `src/jipandan/web/`: local API, sessions, transcription jobs, and previews.
+- `src/jipandan/core/`: shared audio, subtitle, and persistence logic.
+- `src/jipandan/tui/`: terminal interface and widgets.
+- `src/jipandan/cli/`: command entry points and browser-terminal template.
+- `tests/`: Python regression and API tests.
+- `scripts/`: waveform benchmarking and disposable web-review fixture preparation.
+- `doc/`: [documentation index](doc/README.md), reviews, and archived project plans.
+- `raw/`, `clip/`, `tmp/`: local recordings, exports, and temporary working data; contents are ignored by Git.
+
 ## Notice
 
 - The project is only tested on macOS.
-- Waveforms are rendered with textual-plot (native terminal and browser).
+- The TUI and browser terminal render waveforms with textual-plot; the browser GUI has its own waveform editor.
