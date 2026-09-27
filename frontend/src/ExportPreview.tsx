@@ -67,8 +67,21 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
   const candidatePlayer = useRef<PreviewPlayerHandle>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const handledGamepadAction = useRef<number | null>(null);
+  const previousFocus = useRef<HTMLElement | null>(null);
+  const wasOpen = useRef(false);
 
   useEffect(() => { setTitle(clip.title); }, [clip.clip_id, clip.title]);
+
+  useEffect(() => {
+    if (open && !wasOpen.current) {
+      previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    } else if (!open && wasOpen.current) {
+      const target = previousFocus.current;
+      previousFocus.current = null;
+      if (target) requestAnimationFrame(() => target.focus());
+    }
+    wasOpen.current = open;
+  }, [open]);
 
   useEffect(() => {
     if (!open || !job || (job.state !== "queued" && job.state !== "running")) return;

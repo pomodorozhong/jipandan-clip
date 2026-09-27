@@ -9,7 +9,7 @@ import {
   type GamepadStatus,
   STANDARD_GAMEPAD_BUTTON_INDEXES,
 } from "./gamepad";
-import { ShortcutBadge, XboxButtonIcon } from "./ShortcutBadge";
+import { XboxButtonIcon } from "./ShortcutBadge";
 
 type CaptureConflict = {
   target: GamepadBindingId;
@@ -165,7 +165,6 @@ export default function GamepadMappingScreen({ initialConfig, status, onSave, on
           <div className="min-w-0">
             <div className="text-sm font-medium">{binding.actionLabel}</div>
             <div className="subtle mt-1 flex flex-wrap items-center gap-2 text-xs">
-              <ShortcutBadge keyboard={binding.keyboard} gamepadIndex={binding.index} gamepadLabel={binding.control} />
               {binding.index === null ? <span>Unbound</span> : <XboxButtonIcon index={binding.index} label={binding.control} />}
               <span>· {binding.contexts.includes("active-dialog") ? "dialog" : "review"}</span>
               {binding.keyboard && <span>· keyboard {binding.keyboard}</span>}

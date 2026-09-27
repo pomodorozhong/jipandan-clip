@@ -123,6 +123,13 @@ function Dialog({ title, children, onClose, controllerHandlerRef }: {
   const dialogRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return () => {
+      if (previousFocus) requestAnimationFrame(() => previousFocus.focus());
+    };
+  }, []);
+
+  useEffect(() => {
     const handler = (action: InputAction) => {
       const root = dialogRef.current;
       if (!root) return;
