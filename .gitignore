@@ -17,13 +17,10 @@ src/jipandan/web/static/
 # macOS
 .DS_Store
 
-# Placeholder folders
+# User-managed audio, export, and temporary work directories, if present.
 raw/*
-!raw/.gitkeep
 clip/*
-!clip/.gitkeep
 tmp/*
-!tmp/.gitkeep
 
 # Textual
 textual.log

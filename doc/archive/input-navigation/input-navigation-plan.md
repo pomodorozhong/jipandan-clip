@@ -10,7 +10,7 @@ Scope is the React browser GUI, including a follow-up screen for configuring sta
 
 ## Starting point
 
-The shared action and input policy introduced by #7 lives in [inputActions.ts](../frontend/src/inputActions.ts), with interaction tests in [inputActions.test.ts](../frontend/src/inputActions.test.ts). [App.tsx](../frontend/src/App.tsx), [WaveformEditor.tsx](../frontend/src/WaveformEditor.tsx), and [ExportPreview.tsx](../frontend/src/ExportPreview.tsx) use that policy. Issue #8 added IME-friendly keyboard navigation; gamepad support remains to be implemented.
+The shared action and input policy introduced by #7 lives in [inputActions.ts](../../frontend/src/inputActions.ts), with interaction tests in [inputActions.test.ts](../../frontend/src/inputActions.test.ts). [App.tsx](../../frontend/src/App.tsx), [WaveformEditor.tsx](../../frontend/src/WaveformEditor.tsx), and [ExportPreview.tsx](../../frontend/src/ExportPreview.tsx) use that policy. Issue #8 added IME-friendly keyboard navigation; gamepad support remains to be implemented.
 
 ## Shared action design
 
