@@ -4,10 +4,11 @@ import {
   defaultGamepadBindingConfig,
   findGamepadBindingConflict,
   gamepadControlLabel,
+  readGamepadPressedControls,
   type GamepadBindingConfig,
   type GamepadBindingId,
   type GamepadStatus,
-  STANDARD_GAMEPAD_BUTTON_INDEXES,
+  STANDARD_GAMEPAD_CONTROL_INDEXES,
 } from "./gamepad";
 import { XboxButtonIcon } from "./ShortcutBadge";
 
@@ -26,16 +27,6 @@ function readActiveController(status: GamepadStatus): Gamepad | null {
   } catch {
     return null;
   }
-}
-
-function pressedButtons(gamepad: Gamepad | null): Set<number> {
-  const pressed = new Set<number>();
-  if (!gamepad) return pressed;
-  for (const index of STANDARD_GAMEPAD_BUTTON_INDEXES) {
-    const button = gamepad.buttons[index];
-    if (button?.pressed || (button?.value ?? 0) >= 0.5) pressed.add(index);
-  }
-  return pressed;
 }
 
 function actionLabel(bindings: ReturnType<typeof bindingsForGamepadConfig>, id: GamepadBindingId): string {
@@ -84,13 +75,13 @@ export default function GamepadMappingScreen({ initialConfig, status, onSave, on
 
     function poll() {
       if (cancelled) return;
-      const pressed = pressedButtons(readActiveController(status));
+      const pressed = readGamepadPressedControls(readActiveController(status), previous);
       // Require a completely released controller before accepting the next
-      // edge. This prevents the button used to enter capture from being saved.
+      // edge. This prevents the control used to enter capture from being saved.
       if (!armed) {
         if (pressed.size === 0) armed = true;
       } else {
-        const captured = STANDARD_GAMEPAD_BUTTON_INDEXES.find((index) =>
+        const captured = STANDARD_GAMEPAD_CONTROL_INDEXES.find((index) =>
           pressed.has(index) && !previous.has(index));
         if (captured !== undefined) {
           capture(targetId, captured);
@@ -158,7 +149,7 @@ export default function GamepadMappingScreen({ initialConfig, status, onSave, on
     <section className="mt-5" aria-labelledby="gamepad-mapping-heading">
       <div className="flex items-baseline justify-between gap-3">
         <h3 id="gamepad-mapping-heading" className="text-base font-semibold">Shortcut bindings</h3>
-        <span className="subtle text-xs">Standard buttons only</span>
+        <span className="subtle text-xs">Standard controls</span>
       </div>
       <div className="mt-3 grid gap-2">
         {bindings.map((binding) => <div key={binding.id} className="flex items-center justify-between gap-3 rounded-lg border line px-3 py-2">

@@ -17,15 +17,23 @@ export const GAMEPAD_BINDING_IDS = SHORTCUT_DEFINITIONS.map((definition) => defi
 export type GamepadBindingId = ShortcutId;
 
 // These labels follow the button indexes exposed by the browser's standard
-// mapping. Mapping is intentionally limited to buttons; axes remain outside
-// this first configurable slice.
+// mapping. Stick directions use virtual indexes so they can share the same
+// persisted binding and conflict model as buttons.
 export const STANDARD_GAMEPAD_CONTROL_LABELS = [
   "A", "B", "X", "Y", "Left shoulder", "Right shoulder",
-  "Left trigger", "Right trigger", "Back", "Start", "Left stick",
+  "Left trigger", "Right trigger", "View", "Menu", "Left stick",
   "Right stick", "D-pad ↑", "D-pad ↓", "D-pad ←", "D-pad →", "Home",
 ] as const;
 export const STANDARD_GAMEPAD_BUTTON_INDEXES = STANDARD_GAMEPAD_CONTROL_LABELS.map((_, index) => index);
-const DIALOG_AXIS_INDEXES = [100, 101, 102, 103] as const;
+export const STANDARD_GAMEPAD_AXIS_CONTROL_LABELS = [
+  "Left stick ↑", "Left stick ↓", "Left stick ←", "Left stick →",
+  "Right stick ↑", "Right stick ↓", "Right stick ←", "Right stick →",
+] as const;
+export const STANDARD_GAMEPAD_AXIS_CONTROL_INDEXES = STANDARD_GAMEPAD_AXIS_CONTROL_LABELS.map((_, index) => index + 100);
+export const STANDARD_GAMEPAD_CONTROL_INDEXES = [
+  ...STANDARD_GAMEPAD_BUTTON_INDEXES,
+  ...STANDARD_GAMEPAD_AXIS_CONTROL_INDEXES,
+] as const;
 
 export type GamepadButtonBinding = {
   id: GamepadBindingId;
@@ -51,6 +59,8 @@ export function defaultGamepadBindingConfig(): GamepadBindingConfig {
 
 export function gamepadControlLabel(index: number | null): string {
   if (index === null) return "Unbound";
+  const axisLabel = STANDARD_GAMEPAD_AXIS_CONTROL_LABELS[index - 100];
+  if (axisLabel) return axisLabel;
   return STANDARD_GAMEPAD_CONTROL_LABELS[index] ?? `Button ${index}`;
 }
 
@@ -70,13 +80,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function isValidButtonIndex(value: unknown): value is number {
+function isValidControlIndex(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) &&
-    STANDARD_GAMEPAD_BUTTON_INDEXES.includes(value);
+    STANDARD_GAMEPAD_CONTROL_INDEXES.includes(value);
 }
 
 function isValidBindingValue(value: unknown): value is number | null {
-  return value === null || isValidButtonIndex(value);
+  return value === null || isValidControlIndex(value);
 }
 
 function contextsOverlap(left: readonly InputContext[], right: readonly InputContext[]): boolean {
@@ -274,6 +284,34 @@ function axisIsPressed(value: number, positive: boolean, wasPressed: boolean): b
   return positive ? value >= threshold : value <= -threshold;
 }
 
+export function readGamepadPressedControls(
+  gamepad: Gamepad | null,
+  previousPressed: ReadonlySet<number> = new Set(),
+): Set<number> {
+  const pressed = new Set<number>();
+  if (!gamepad) return pressed;
+  for (const index of STANDARD_GAMEPAD_BUTTON_INDEXES) {
+    if (buttonIsPressed(gamepad.buttons[index])) pressed.add(index);
+  }
+  const axes = gamepad.axes ?? [];
+  const axisControls: readonly { index: number; axis: number; positive: boolean }[] = [
+    { index: 100, axis: 1, positive: false },
+    { index: 101, axis: 1, positive: true },
+    { index: 102, axis: 0, positive: false },
+    { index: 103, axis: 0, positive: true },
+    { index: 104, axis: 3, positive: false },
+    { index: 105, axis: 3, positive: true },
+    { index: 106, axis: 2, positive: false },
+    { index: 107, axis: 2, positive: true },
+  ];
+  for (const control of axisControls) {
+    if (axisIsPressed(axes[control.axis] ?? 0, control.positive, previousPressed.has(control.index))) {
+      pressed.add(control.index);
+    }
+  }
+  return pressed;
+}
+
 export function createGamepadAdapter(options: GamepadAdapterOptions): GamepadAdapter {
   const getGamepads = options.getGamepads;
   const now = options.now ?? (() => typeof performance === "undefined" ? Date.now() : performance.now());
@@ -316,8 +354,7 @@ export function createGamepadAdapter(options: GamepadAdapterOptions): GamepadAda
   function resetInput(blockAllButtons = false) {
     for (const index of previousPressed) awaitingRelease.add(index);
     if (blockAllButtons) {
-      for (const index of STANDARD_GAMEPAD_BUTTON_INDEXES) awaitingRelease.add(index);
-      for (const index of DIALOG_AXIS_INDEXES) awaitingRelease.add(index);
+      for (const index of STANDARD_GAMEPAD_CONTROL_INDEXES) awaitingRelease.add(index);
     }
     previousPressed.clear();
     repeatStates.clear();
@@ -434,21 +471,7 @@ export function createGamepadAdapter(options: GamepadAdapterOptions): GamepadAda
     const active = refreshStatus();
     if (!active) return;
 
-    const pressed = new Set<number>();
-    for (const index of STANDARD_GAMEPAD_BUTTON_INDEXES) {
-      if (buttonIsPressed(active.buttons[index])) pressed.add(index);
-    }
-    if (context === "active-dialog") {
-      const axes = active.axes ?? [];
-      const up = axisIsPressed(axes[1] ?? 0, false, previousPressed.has(100));
-      const down = axisIsPressed(axes[1] ?? 0, true, previousPressed.has(101));
-      const left = axisIsPressed(axes[0] ?? 0, false, previousPressed.has(102));
-      const right = axisIsPressed(axes[0] ?? 0, true, previousPressed.has(103));
-      if (up && !pressed.has(12)) pressed.add(100);
-      if (down && !pressed.has(13)) pressed.add(101);
-      if (left && !pressed.has(14)) pressed.add(102);
-      if (right && !pressed.has(15)) pressed.add(103);
-    }
+    const pressed = readGamepadPressedControls(active, previousPressed);
     for (const index of awaitingRelease) {
       if (!pressed.has(index)) awaitingRelease.delete(index);
     }

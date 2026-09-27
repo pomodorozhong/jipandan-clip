@@ -56,12 +56,17 @@ export function useShortcutDisplay(): ShortcutDisplaySettings {
 
 const controlLabels = [
   "A", "B", "X", "Y", "Left shoulder", "Right shoulder",
-  "Left trigger", "Right trigger", "Back", "Start", "Left stick",
+  "Left trigger", "Right trigger", "View", "Menu", "Left stick",
   "Right stick", "D-pad up", "D-pad down", "D-pad left", "D-pad right", "Home",
 ];
 
+const axisControlLabels: Record<number, string> = {
+  100: "Left stick up", 101: "Left stick down", 102: "Left stick left", 103: "Left stick right",
+  104: "Right stick up", 105: "Right stick down", 106: "Right stick left", 107: "Right stick right",
+};
+
 function controlLabel(index: number): string {
-  return controlLabels[index] ?? `Button ${index}`;
+  return axisControlLabels[index] ?? controlLabels[index] ?? `Button ${index}`;
 }
 
 export function XboxButtonIcon({ index, label }: { index: number; label?: string }) {
@@ -70,6 +75,10 @@ export function XboxButtonIcon({ index, label }: { index: number; label?: string
   const shoulder = index === 4 ? "LB" : index === 5 ? "RB" : index === 6 ? "LT" : index === 7 ? "RT" : null;
   const isDpad = index >= 12 && index <= 15;
   const isStick = index === 10 || index === 11;
+  const isStickDirection = axisControlLabels[index] !== undefined;
+  const isView = index === 8;
+  const isMenu = index === 9;
+  const isHome = index === 16;
   return <svg width="22" height="22" viewBox="0 0 22 22" role="img" aria-label={name}
     className="inline-block align-text-bottom" focusable="false">
     {face && <>
@@ -88,9 +97,26 @@ export function XboxButtonIcon({ index, label }: { index: number; label?: string
       <circle cx="11" cy="11" r="8" fill="currentColor" opacity=".18" stroke="currentColor" />
       <circle cx="11" cy="11" r="3" fill="currentColor" />
     </>}
-    {!face && !shoulder && !isDpad && !isStick && <>
+    {isStickDirection && <>
+      <circle cx="11" cy="11" r="8" fill="currentColor" opacity=".18" stroke="currentColor" />
+      <circle cx="11" cy="11" r="2.2" fill="currentColor" />
+      <path d={index === 100 ? "M11 3.5l-2.4 3h1.5v3h1.8v-3h1.5z" : index === 101 ? "M11 18.5l-2.4-3h1.5v-3h1.8v3h1.5z" : index === 102 ? "M3.5 11l3-2.4v1.5h3v1.8h-3v1.5z" : index === 103 ? "M18.5 11l-3-2.4v1.5h-3v1.8h3v1.5z" : index === 104 ? "M11 3.5l-2.4 3h1.5v3h1.8v-3h1.5z" : index === 105 ? "M11 18.5l-2.4-3h1.5v-3h1.8v3h1.5z" : index === 106 ? "M3.5 11l3-2.4v1.5h3v1.8h-3v1.5z" : "M18.5 11l-3-2.4v1.5h-3v1.8h3v1.5z"} fill="currentColor" />
+    </>}
+    {isView && <>
+      <rect x="2" y="4" width="12" height="10" rx="2" fill="currentColor" opacity=".18" stroke="currentColor" />
+      <rect x="8" y="8" width="12" height="10" rx="2" fill="currentColor" opacity=".18" stroke="currentColor" />
+    </>}
+    {isMenu && <>
       <rect x="2" y="4" width="18" height="14" rx="4" fill="currentColor" opacity=".18" stroke="currentColor" />
-      <text x="11" y="14" textAnchor="middle" fontSize="7" fontWeight="700" fill="currentColor">{index === 8 ? "VIEW" : index === 9 ? "MENU" : "•"}</text>
+      <path d="M6 8h10M6 11h10M6 14h10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </>}
+    {isHome && <>
+      <path d="m3 10 8-7 8 7v9H3z" fill="currentColor" opacity=".18" stroke="currentColor" strokeLinejoin="round" />
+      <path d="M9 19v-5h4v5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+    </>}
+    {!face && !shoulder && !isDpad && !isStick && !isStickDirection && !isView && !isMenu && !isHome && <>
+      <rect x="2" y="4" width="18" height="14" rx="4" fill="currentColor" opacity=".18" stroke="currentColor" />
+      <circle cx="11" cy="11" r="2" fill="currentColor" />
     </>}
   </svg>;
 }

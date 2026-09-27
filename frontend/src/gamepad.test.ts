@@ -23,7 +23,8 @@ function fakeGamepad(id = "Test Pad", mapping = "standard") {
     mapping,
     connected: true,
     buttons: Array.from({ length: 16 }, (): FakeButton => ({ pressed: false, value: 0 })),
-  } as unknown as Gamepad & { buttons: FakeButton[] };
+    axes: [0, 0, 0, 0],
+  } as unknown as Gamepad & { buttons: FakeButton[]; axes: number[] };
 }
 
 function press(gamepad: Gamepad & { buttons: FakeButton[] }, index: number, pressed: boolean) {
@@ -217,6 +218,34 @@ describe("gamepad adapter", () => {
     expect(loadGamepadBindingConfig(storage)).toEqual(defaults);
     storageData.set("jipandan-gamepad-bindings", "not json");
     expect(loadGamepadBindingConfig(storage)).toEqual(defaults);
+  });
+
+  it("accepts and dispatches analog stick direction bindings", () => {
+    let config = { ...defaultGamepadBindingConfig(), next: 100 };
+    const bindings = bindingsForGamepadConfig(config);
+    expect(bindings.find((binding) => binding.id === "next")).toMatchObject({
+      index: 100,
+      control: "Left stick ↑",
+    });
+    const { adapter, gamepads, actions } = createHarness(() => bindingsForGamepadConfig(config));
+    const gamepad = fakeGamepad();
+    gamepads.push(gamepad);
+    adapter.poll(0);
+
+    gamepad.axes[1] = -0.8;
+    adapter.poll(1);
+    expect(actions).toEqual([{ type: "navigate", direction: "next" }]);
+
+    gamepad.axes[1] = 0;
+    adapter.poll(2);
+    config = { ...config, next: 105 };
+    adapter.poll(3);
+    gamepad.axes[3] = 0.8;
+    adapter.poll(4);
+    expect(actions).toEqual([
+      { type: "navigate", direction: "next" },
+      { type: "navigate", direction: "next" },
+    ]);
   });
 
   it("derives future actions as unbound and migrates older six-action configs", () => {
