@@ -1,14 +1,20 @@
-import { actionRepeatPolicy, type InputAction } from "./inputActions";
+import {
+  actionForShortcut,
+  actionRepeatPolicy,
+  SHORTCUT_DEFINITIONS,
+  type InputAction,
+  type InputContext,
+  type ShortcutDefinition,
+  type ShortcutId,
+} from "./inputActions";
 
 export const GAMEPAD_REPEAT_DELAY_MS = 400;
 export const GAMEPAD_REPEAT_INTERVAL_MS = 120;
 export const GAMEPAD_BINDINGS_STORAGE_KEY = "jipandan-gamepad-bindings";
-export const GAMEPAD_BINDINGS_STORAGE_VERSION = 1;
+export const GAMEPAD_BINDINGS_STORAGE_VERSION = 2;
 
-export const GAMEPAD_BINDING_IDS = [
-  "previous", "next", "replay", "group1", "group2", "skipped",
-] as const;
-export type GamepadBindingId = typeof GAMEPAD_BINDING_IDS[number];
+export const GAMEPAD_BINDING_IDS = SHORTCUT_DEFINITIONS.map((definition) => definition.id) as readonly ShortcutId[];
+export type GamepadBindingId = ShortcutId;
 
 // These labels follow the button indexes exposed by the browser's standard
 // mapping. Mapping is intentionally limited to buttons; axes remain outside
@@ -19,50 +25,44 @@ export const STANDARD_GAMEPAD_CONTROL_LABELS = [
   "Right stick", "D-pad ↑", "D-pad ↓", "D-pad ←", "D-pad →", "Home",
 ] as const;
 export const STANDARD_GAMEPAD_BUTTON_INDEXES = STANDARD_GAMEPAD_CONTROL_LABELS.map((_, index) => index);
+const DIALOG_AXIS_INDEXES = [100, 101, 102, 103] as const;
 
 export type GamepadButtonBinding = {
   id: GamepadBindingId;
-  index: number;
+  index: number | null;
   control: string;
   actionLabel: string;
+  keyboard?: string;
   action: InputAction;
+  contexts: readonly InputContext[];
 };
 
-export type GamepadBindingConfig = Record<GamepadBindingId, number>;
+export type GamepadBindingConfig = Record<GamepadBindingId, number | null>;
 
-const bindingDefinitions: readonly {
-  id: GamepadBindingId;
-  defaultIndex: number;
-  actionLabel: string;
-  action: InputAction;
-}[] = [
-  { id: "previous", defaultIndex: 12, actionLabel: "Previous clip", action: { type: "navigate", direction: "previous" } },
-  { id: "next", defaultIndex: 13, actionLabel: "Next clip", action: { type: "navigate", direction: "next" } },
-  { id: "replay", defaultIndex: 0, actionLabel: "Replay clip", action: { type: "playback", target: "clip", mode: "replay" } },
-  { id: "group1", defaultIndex: 1, actionLabel: "Group 1", action: { type: "classify", status: "group1" } },
-  { id: "group2", defaultIndex: 2, actionLabel: "Group 2", action: { type: "classify", status: "group2" } },
-  { id: "skipped", defaultIndex: 3, actionLabel: "Skip clip", action: { type: "classify", status: "skipped" } },
-];
+const bindingDefinitions: readonly ShortcutDefinition[] = SHORTCUT_DEFINITIONS;
 
 export function defaultGamepadBindingConfig(): GamepadBindingConfig {
   const config = {} as GamepadBindingConfig;
   for (const definition of bindingDefinitions) {
-    config[definition.id] = definition.defaultIndex;
+    config[definition.id] = definition.defaultGamepadIndex ?? null;
   }
   return config;
 }
 
-export function gamepadControlLabel(index: number): string {
+export function gamepadControlLabel(index: number | null): string {
+  if (index === null) return "Unbound";
   return STANDARD_GAMEPAD_CONTROL_LABELS[index] ?? `Button ${index}`;
 }
 
 export function bindingsForGamepadConfig(config: GamepadBindingConfig): readonly GamepadButtonBinding[] {
   return bindingDefinitions.map((definition) => ({
     id: definition.id,
-    actionLabel: definition.actionLabel,
-    action: definition.action,
+    actionLabel: definition.label,
+    keyboard: definition.keyboard,
+    action: actionForShortcut(definition.id),
     index: config[definition.id],
     control: gamepadControlLabel(config[definition.id]),
+    contexts: definition.contexts,
   }));
 }
 
@@ -75,21 +75,35 @@ function isValidButtonIndex(value: unknown): value is number {
     STANDARD_GAMEPAD_BUTTON_INDEXES.includes(value);
 }
 
+function isValidBindingValue(value: unknown): value is number | null {
+  return value === null || isValidButtonIndex(value);
+}
+
+function contextsOverlap(left: readonly InputContext[], right: readonly InputContext[]): boolean {
+  return left.some((context) => right.includes(context));
+}
+
+function hasOverlappingConflict(config: GamepadBindingConfig): boolean {
+  const bindings = bindingsForGamepadConfig(config);
+  return bindings.some((binding, index) => binding.index !== null && bindings.slice(index + 1).some((other) =>
+    other.index === binding.index && contextsOverlap(binding.contexts, other.contexts)));
+}
+
 export function normalizeGamepadBindingConfig(value: unknown): GamepadBindingConfig {
   const fallback = defaultGamepadBindingConfig();
   let candidate: unknown = value;
   if (isRecord(value) && Object.hasOwn(value, "version")) {
-    if (value.version !== GAMEPAD_BINDINGS_STORAGE_VERSION || !isRecord(value.bindings)) return fallback;
+    if ((value.version !== GAMEPAD_BINDINGS_STORAGE_VERSION && value.version !== 1) || !isRecord(value.bindings)) return fallback;
     candidate = value.bindings;
   }
-  if (!isRecord(candidate) || Object.keys(candidate).length !== GAMEPAD_BINDING_IDS.length) return fallback;
-  if (GAMEPAD_BINDING_IDS.some((id) => !Object.hasOwn(candidate, id) || !isValidButtonIndex(candidate[id]))) {
-    return fallback;
-  }
-  const indexes = GAMEPAD_BINDING_IDS.map((id) => candidate[id] as number);
-  if (new Set(indexes).size !== indexes.length) return fallback;
   const config = {} as GamepadBindingConfig;
-  for (const id of GAMEPAD_BINDING_IDS) config[id] = candidate[id] as number;
+  if (!isRecord(candidate)) return fallback;
+  for (const definition of bindingDefinitions) {
+    const stored = candidate[definition.id];
+    config[definition.id] = Object.hasOwn(candidate, definition.id) && isValidBindingValue(stored)
+      ? stored : (definition.defaultGamepadIndex ?? null);
+  }
+  if (hasOverlappingConflict(config)) return fallback;
   return config;
 }
 
@@ -129,14 +143,18 @@ export function saveGamepadBindingConfig(config: GamepadBindingConfig, storage: 
 export function findGamepadBindingConflict(
   config: GamepadBindingConfig,
   target: GamepadBindingId,
-  index: number,
+  index: number | null,
 ): GamepadBindingId | null {
-  return GAMEPAD_BINDING_IDS.find((id) => id !== target && config[id] === index) ?? null;
+  if (index === null) return null;
+  const targetDefinition = bindingDefinitions.find((definition) => definition.id === target);
+  if (!targetDefinition) return null;
+  return GAMEPAD_BINDING_IDS.find((id) => id !== target && config[id] === index &&
+    contextsOverlap(targetDefinition.contexts, bindingDefinitions.find((definition) => definition.id === id)?.contexts ?? [])) ?? null;
 }
 
 export type GamepadActionRequest = {
   id: number;
-  clipId: string;
+  clipId?: string;
   action: InputAction;
 };
 
@@ -173,6 +191,7 @@ export type GamepadAdapterOptions = {
   getBindings?: () => readonly GamepadButtonBinding[];
   onAction: (action: InputAction) => void;
   onStatusChange?: (status: GamepadStatus) => void;
+  onInputTypeChange?: (inputType: "keyboard" | "xbox") => void;
   getContext?: () => string;
   now?: () => number;
   requestFrame?: (callback: GamepadFrameCallback) => number;
@@ -235,6 +254,26 @@ function bindingsSignature(bindings: readonly GamepadButtonBinding[]): string {
   return bindings.map((binding) => `${binding.id}:${binding.index}`).join("|");
 }
 
+function fixedDialogBindings(): readonly { index: number; action: InputAction }[] {
+  return [
+    { index: 12, action: { type: "focus-move", direction: "up" } },
+    { index: 13, action: { type: "focus-move", direction: "down" } },
+    { index: 14, action: { type: "focus-move", direction: "left" } },
+    { index: 15, action: { type: "focus-move", direction: "right" } },
+    { index: 0, action: { type: "dialog-confirm" } },
+    { index: 1, action: { type: "dialog-back" } },
+    { index: 100, action: { type: "focus-move", direction: "up" } },
+    { index: 101, action: { type: "focus-move", direction: "down" } },
+    { index: 102, action: { type: "focus-move", direction: "left" } },
+    { index: 103, action: { type: "focus-move", direction: "right" } },
+  ];
+}
+
+function axisIsPressed(value: number, positive: boolean, wasPressed: boolean): boolean {
+  const threshold = wasPressed ? 0.45 : 0.6;
+  return positive ? value >= threshold : value <= -threshold;
+}
+
 export function createGamepadAdapter(options: GamepadAdapterOptions): GamepadAdapter {
   const getGamepads = options.getGamepads;
   const now = options.now ?? (() => typeof performance === "undefined" ? Date.now() : performance.now());
@@ -278,6 +317,7 @@ export function createGamepadAdapter(options: GamepadAdapterOptions): GamepadAda
     for (const index of previousPressed) awaitingRelease.add(index);
     if (blockAllButtons) {
       for (const index of STANDARD_GAMEPAD_BUTTON_INDEXES) awaitingRelease.add(index);
+      for (const index of DIALOG_AXIS_INDEXES) awaitingRelease.add(index);
     }
     previousPressed.clear();
     repeatStates.clear();
@@ -302,6 +342,7 @@ export function createGamepadAdapter(options: GamepadAdapterOptions): GamepadAda
     if (nextKey !== activeControllerKey) {
       resetInput(Boolean(selection.active));
       activeControllerKey = nextKey;
+      options.onInputTypeChange?.(selection.active ? "xbox" : "keyboard");
     }
     emitStatus({
       apiSupported: Boolean(getGamepads),
@@ -384,7 +425,7 @@ export function createGamepadAdapter(options: GamepadAdapterOptions): GamepadAda
 
   function poll(timestamp = now()) {
     const bindings = syncBindings();
-    const context = options.getContext?.();
+    const context = options.getContext?.() ?? currentContext;
     if (context !== undefined && context !== currentContext) {
       currentContext = context;
       resetInput(true);
@@ -397,31 +438,46 @@ export function createGamepadAdapter(options: GamepadAdapterOptions): GamepadAda
     for (const index of STANDARD_GAMEPAD_BUTTON_INDEXES) {
       if (buttonIsPressed(active.buttons[index])) pressed.add(index);
     }
+    if (context === "active-dialog") {
+      const axes = active.axes ?? [];
+      const up = axisIsPressed(axes[1] ?? 0, false, previousPressed.has(100));
+      const down = axisIsPressed(axes[1] ?? 0, true, previousPressed.has(101));
+      const left = axisIsPressed(axes[0] ?? 0, false, previousPressed.has(102));
+      const right = axisIsPressed(axes[0] ?? 0, true, previousPressed.has(103));
+      if (up && !pressed.has(12)) pressed.add(100);
+      if (down && !pressed.has(13)) pressed.add(101);
+      if (left && !pressed.has(14)) pressed.add(102);
+      if (right && !pressed.has(15)) pressed.add(103);
+    }
     for (const index of awaitingRelease) {
       if (!pressed.has(index)) awaitingRelease.delete(index);
     }
 
-    for (const binding of bindings) {
-      const isPressed = pressed.has(binding.index);
-      const wasPressed = previousPressed.has(binding.index);
-      if (awaitingRelease.has(binding.index)) {
-        repeatStates.delete(binding.index);
-        continue;
+    const fixed = context === "active-dialog" ? fixedDialogBindings() : [];
+    const fixedIndexes = new Set(fixed.map((binding) => binding.index));
+
+    function dispatchBinding(index: number, action: InputAction) {
+      const isPressed = pressed.has(index);
+      const wasPressed = previousPressed.has(index);
+      if (awaitingRelease.has(index)) {
+        repeatStates.delete(index);
+        return;
       }
       if (!isPressed) {
-        repeatStates.delete(binding.index);
-        continue;
+        repeatStates.delete(index);
+        return;
       }
+      options.onInputTypeChange?.("xbox");
       if (!wasPressed) {
-        options.onAction(binding.action);
-        if (actionRepeatPolicy(binding.action) === "repeat") {
-          repeatStates.set(binding.index, {
-            action: binding.action,
+        options.onAction(action);
+        if (actionRepeatPolicy(action) === "repeat") {
+          repeatStates.set(index, {
+            action,
             nextAt: timestamp + GAMEPAD_REPEAT_DELAY_MS,
           });
         }
       } else {
-        const repeat = repeatStates.get(binding.index);
+        const repeat = repeatStates.get(index);
         if (repeat && timestamp >= repeat.nextAt) {
           options.onAction(repeat.action);
           // Dispatch at most one repeat per animation frame. This prevents a
@@ -430,6 +486,12 @@ export function createGamepadAdapter(options: GamepadAdapterOptions): GamepadAda
         }
       }
     }
+
+    for (const binding of bindings) {
+      if (binding.index === null || fixedIndexes.has(binding.index)) continue;
+      dispatchBinding(binding.index, binding.action);
+    }
+    for (const binding of fixed) dispatchBinding(binding.index, binding.action);
     previousPressed.clear();
     for (const index of pressed) previousPressed.add(index);
   }

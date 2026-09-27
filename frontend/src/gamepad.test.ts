@@ -35,14 +35,16 @@ function createHarness(getBindings?: () => readonly GamepadButtonBinding[]) {
   const gamepads: (Gamepad | null)[] = [];
   const actions: InputAction[] = [];
   const statuses: GamepadStatus[] = [];
+  const inputTypes: ("keyboard" | "xbox")[] = [];
   const adapter = createGamepadAdapter({
     getGamepads: () => gamepads,
     getBindings,
     onAction: (action) => actions.push(action),
     onStatusChange: (status) => statuses.push(status),
+    onInputTypeChange: (inputType) => inputTypes.push(inputType),
   });
   adapter.setPageActive(true);
-  return { adapter, gamepads, actions, statuses };
+  return { adapter, gamepads, actions, statuses, inputTypes };
 }
 
 describe("gamepad adapter", () => {
@@ -177,6 +179,16 @@ describe("gamepad adapter", () => {
     });
   });
 
+  it("reports controller activation and disconnect as input-mode changes", () => {
+    const { adapter, gamepads, inputTypes } = createHarness();
+    const gamepad = fakeGamepad();
+    gamepads.push(gamepad);
+    adapter.poll(0);
+    gamepads.length = 0;
+    adapter.poll(1);
+    expect(inputTypes).toEqual(["xbox", "keyboard"]);
+  });
+
   it("uses saved bindings and rejects duplicate assignments", () => {
     const defaults = defaultGamepadBindingConfig();
     const custom: GamepadBindingConfig = { ...defaults, next: 14 };
@@ -205,6 +217,48 @@ describe("gamepad adapter", () => {
     expect(loadGamepadBindingConfig(storage)).toEqual(defaults);
     storageData.set("jipandan-gamepad-bindings", "not json");
     expect(loadGamepadBindingConfig(storage)).toEqual(defaults);
+  });
+
+  it("derives future actions as unbound and migrates older six-action configs", () => {
+    const defaults = defaultGamepadBindingConfig();
+    expect(defaults.previous).toBe(12);
+    expect(defaults["nudge-start-fine-back"]).toBeNull();
+    expect(bindingsForGamepadConfig(defaults).length).toBeGreaterThan(6);
+    expect(loadGamepadBindingConfig({
+      getItem: () => JSON.stringify({ version: 1, bindings: {
+        previous: 12, next: 13, replay: 0, group1: 1, group2: 2, skipped: 3,
+      } }),
+      setItem: () => {},
+    })).toEqual(defaults);
+  });
+
+  it("allows the same control in separate contexts but rejects overlap", () => {
+    const defaults = defaultGamepadBindingConfig();
+    const separateContexts = { ...defaults, replay: 0, "candidate-replay": 0 };
+    expect(findGamepadBindingConflict(separateContexts, "candidate-replay", 0)).toBeNull();
+    expect(findGamepadBindingConflict({ ...defaults, replay: 0, "play-pause": 0 }, "play-pause", 0)).toBe("replay");
+  });
+
+  it("uses standard controller focus and confirm conventions in dialogs", () => {
+    const { adapter, gamepads, actions } = createHarness();
+    const gamepad = fakeGamepad();
+    gamepads.push(gamepad);
+    adapter.poll(0);
+    adapter.setContext("active-dialog");
+    press(gamepad, 13, true);
+    adapter.poll(1);
+    press(gamepad, 13, false);
+    adapter.poll(2);
+    press(gamepad, 13, true);
+    adapter.poll(2.5);
+    press(gamepad, 13, false);
+    adapter.poll(2.75);
+    press(gamepad, 0, true);
+    adapter.poll(3);
+    expect(actions).toEqual([
+      { type: "focus-move", direction: "down" },
+      { type: "dialog-confirm" },
+    ]);
   });
 
   it("applies a changed binding only after a fresh release", () => {

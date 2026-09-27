@@ -6,6 +6,7 @@ import TranscriptionScreen from "./TranscriptionScreen";
 import SettingsScreen from "./SettingsScreen";
 import GamepadControls from "./GamepadControls";
 import GamepadMappingScreen from "./GamepadMappingScreen";
+import { ShortcutBadge, ShortcutDisplayProvider, type BadgeMode, type DisplayInputType, type UnboundBadgeBehavior } from "./ShortcutBadge";
 import {
   bindingsForGamepadConfig,
   createGamepadAdapter,
@@ -21,8 +22,10 @@ import {
   getInputContext,
   installCompositionTracking,
   isActionAvailable,
+  isTextEditingTarget,
   keyboardInputFromEvent,
   resolveKeyboardAction,
+  SHORTCUT_DEFINITIONS,
   shouldDispatchAction,
   type InputAvailability,
   type InputAction,
@@ -32,7 +35,12 @@ type Filter = "unsorted" | "group1" | "group2" | "exported" | "all";
 type AllStatusFilter = "all" | Status;
 type AllOrder = "clip-asc" | "clip-desc" | "start-asc" | "start-desc" | "title-asc";
 type SaveState = "saved" | "saving" | "failed";
-type AppSettings = { detectLeadingSilence: boolean; showOriginalStart: boolean };
+type AppSettings = {
+  detectLeadingSilence: boolean;
+  showOriginalStart: boolean;
+  badgeMode: BadgeMode;
+  unboundBadgeBehavior: UnboundBadgeBehavior;
+};
 
 const SETTINGS_STORAGE_KEY = "jipandan-settings";
 
@@ -44,10 +52,12 @@ function loadSettings(): AppSettings {
       return {
         detectLeadingSilence: typeof parsed.detectLeadingSilence === "boolean" ? parsed.detectLeadingSilence : true,
         showOriginalStart: typeof parsed.showOriginalStart === "boolean" ? parsed.showOriginalStart : false,
+        badgeMode: parsed.badgeMode === "keyboard" || parsed.badgeMode === "xbox" ? parsed.badgeMode : "auto",
+        unboundBadgeBehavior: parsed.unboundBadgeBehavior === "keyboard" ? "keyboard" : "hide",
       };
     }
   } catch { /* Use defaults when browser storage is unavailable or invalid. */ }
-  return { detectLeadingSilence: true, showOriginalStart: false };
+  return { detectLeadingSilence: true, showOriginalStart: false, badgeMode: "auto", unboundBadgeBehavior: "hide" };
 }
 
 const filters: { key: Filter; label: string }[] = [
@@ -90,9 +100,9 @@ function visibleClips(
   });
 }
 
-function ActionButton({ children, onClick, disabled, tone = "normal", title, shortcut, buttonRef }: {
+function ActionButton({ children, onClick, disabled, tone = "normal", title, shortcut, shortcutId, buttonRef }: {
   children: React.ReactNode; onClick: () => void; disabled?: boolean;
-  tone?: "normal" | "accent" | "danger"; title?: string; shortcut?: string;
+  tone?: "normal" | "accent" | "danger"; title?: string; shortcut?: string; shortcutId?: string;
   buttonRef?: React.Ref<HTMLButtonElement>;
 }) {
   const toneClass = tone === "accent"
@@ -102,13 +112,56 @@ function ActionButton({ children, onClick, disabled, tone = "normal", title, sho
       : "soft-surface text-[#e7eee7] hover:bg-[#354b3b]";
   return <button ref={buttonRef} type="button" title={title} disabled={disabled} onClick={onClick}
     className={`inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${toneClass}`}>
-    <span>{children}</span>{shortcut && <kbd aria-hidden="true" className="shortcut-key">{shortcut}</kbd>}
+    <span>{children}</span><ShortcutBadge keyboard={shortcut} bindingId={shortcutId} />
   </button>;
 }
 
-function Dialog({ title, children, onClose }: {
+function Dialog({ title, children, onClose, controllerHandlerRef }: {
   title: string; children: React.ReactNode; onClose: () => void;
+  controllerHandlerRef: React.MutableRefObject<((action: InputAction) => void) | null>;
 }) {
+  const dialogRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const handler = (action: InputAction) => {
+      const root = dialogRef.current;
+      if (!root) return;
+      if (action.type === "dialog-back" || action.type === "dialog-close") {
+        const active = document.activeElement;
+        if (active instanceof HTMLElement && root.contains(active) && isTextEditingTarget(active)) {
+          active.blur();
+          return;
+        }
+        onClose();
+        return;
+      }
+      const focusable = Array.from(root.querySelectorAll<HTMLElement>(
+        "button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])",
+      )).filter((element) => !element.hidden && element.getClientRects().length > 0);
+      if (action.type === "dialog-confirm") {
+        const active = document.activeElement;
+        const target = active instanceof HTMLElement && root.contains(active) ? active : focusable[0];
+        if (target instanceof HTMLButtonElement) target.click();
+        return;
+      }
+      if (action.type === "focus-move" && focusable.length > 0) {
+        const currentIndex = Math.max(0, focusable.findIndex((element) => element === document.activeElement));
+        const delta = action.direction === "up" || action.direction === "left" ? -1 : 1;
+        focusable[(currentIndex + delta + focusable.length) % focusable.length]?.focus();
+      }
+    };
+    controllerHandlerRef.current = handler;
+    requestAnimationFrame(() => {
+      const first = dialogRef.current?.querySelector<HTMLElement>(
+        "button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)",
+      );
+      if (first && !dialogRef.current?.contains(document.activeElement)) first.focus();
+    });
+    return () => {
+      if (controllerHandlerRef.current === handler) controllerHandlerRef.current = null;
+    };
+  }, [controllerHandlerRef, onClose]);
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       const input = keyboardInputFromEvent(event);
@@ -124,13 +177,13 @@ function Dialog({ title, children, onClose }: {
 
   return <div className="fixed inset-0 z-30 flex items-center justify-center bg-[#07100bcf] p-4"
     role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <section role="dialog" aria-modal="true" aria-label={title}
+    <section ref={dialogRef} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1}
       className="surface max-h-[85vh] w-full max-w-lg overflow-auto rounded-2xl p-5 shadow-2xl">
       <div className="mb-4 flex items-start justify-between gap-4">
         <h2 className="text-lg font-semibold">{title}</h2>
         <button type="button" onClick={onClose} aria-label="Close dialog (Esc)"
           className="subtle inline-flex items-center gap-2 text-xl">
-          <span aria-hidden="true">×</span><kbd className="shortcut-key text-xs">Esc</kbd>
+          <span aria-hidden="true">×</span><ShortcutBadge keyboard="Esc" bindingId="dialog-close" />
         </button>
       </div>
       {children}
@@ -163,6 +216,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showGamepadMapping, setShowGamepadMapping] = useState(false);
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
+  const [inputType, setInputType] = useState<DisplayInputType>("keyboard");
   const [gamepadBindingConfig, setGamepadBindingConfig] = useState<GamepadBindingConfig>(loadGamepadBindingConfig);
   const [gamepadActionRequest, setGamepadActionRequest] = useState<GamepadActionRequest | null>(null);
   const [gamepadStatus, setGamepadStatus] = useState<GamepadStatus>(() => initialGamepadStatus(
@@ -181,6 +235,7 @@ export default function App() {
   const detailScrollRef = useRef<HTMLDivElement>(null);
   const clipListRef = useRef<HTMLDivElement>(null);
   const gamepadActionIdRef = useRef(0);
+  const dialogControllerHandlerRef = useRef<((action: InputAction) => void) | null>(null);
   const gamepadDispatchRef = useRef<{
     dispatch: (action: InputAction) => void;
     availability: InputAvailability;
@@ -190,6 +245,21 @@ export default function App() {
   const configuredGamepadBindings = useMemo(() => bindingsForGamepadConfig(gamepadBindingConfig), [gamepadBindingConfig]);
 
   useEffect(() => installCompositionTracking(), []);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (!["Shift", "Control", "Alt", "Meta", "CapsLock", "NumLock", "ScrollLock"].includes(event.key)) {
+        setInputType("keyboard");
+      }
+    }
+    function onInput() { setInputType("keyboard"); }
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("input", onInput, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("input", onInput, true);
+    };
+  }, []);
 
   useEffect(() => {
     try { localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings)); }
@@ -443,9 +513,13 @@ export default function App() {
 
   gamepadDispatchRef.current = {
     dispatch: (action) => {
-      if (action.type === "playback" && action.target === "clip" && effectiveSelectedId) {
+      if (action.type === "focus-move" || action.type === "dialog-confirm" || action.type === "dialog-back" || action.type === "dialog-close") {
+        dialogControllerHandlerRef.current?.(action);
+      } else if ((action.type === "playback" || action.type === "nudge" || action.type === "nudge-selected" ||
+          action.type === "export" || action.type === "export-mode" || action.type === "reveal-export") &&
+          (effectiveSelectedId || reviewContext === "active-dialog")) {
         gamepadActionIdRef.current += 1;
-        setGamepadActionRequest({ id: gamepadActionIdRef.current, clipId: effectiveSelectedId, action });
+        setGamepadActionRequest({ id: gamepadActionIdRef.current, clipId: effectiveSelectedId ?? undefined, action });
       } else {
         dispatchReviewAction(action);
       }
@@ -468,10 +542,11 @@ export default function App() {
       getContext: () => gamepadDispatchRef.current?.availability.context ?? "review",
       onAction: (action) => {
         const current = gamepadDispatchRef.current;
-        if (!current || !isActionAvailable(action, current.availability)) return;
+        if (!current) return;
         current.dispatch(action);
       },
       onStatusChange: setGamepadStatus,
+      onInputTypeChange: setInputType,
     });
     adapter.start();
     return () => {
@@ -614,7 +689,9 @@ export default function App() {
 
   if (initializing) return <main className="flex min-h-screen items-center justify-center subtle">Opening Jipandan…</main>;
 
-  return <div className={`flex flex-col ${session?.audio ? "h-dvh min-h-0 overflow-hidden" : "min-h-screen"}`}>
+  return <ShortcutDisplayProvider mode={settings.badgeMode} inputType={inputType}
+    unboundBehavior={settings.unboundBadgeBehavior} bindings={configuredGamepadBindings}>
+  <div className={`flex flex-col ${session?.audio ? "h-dvh min-h-0 overflow-hidden" : "min-h-screen"}`}>
     <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b line px-4 py-3 md:px-7">
       <div className="flex items-center gap-3">
         <div aria-hidden="true" className="flex size-9 items-center justify-center rounded-xl bg-[#b7d69d] text-xl font-bold text-[#263c2b]">J</div>
@@ -629,9 +706,9 @@ export default function App() {
         </span>}
         {session?.audio && !session.needs_transcription && <ActionButton onClick={() => {
           dispatchReviewAction({ type: "undo" });
-        }} disabled={!session.can_undo || busy} title="Undo recent change (U)" shortcut="U">Undo</ActionButton>}
+        }} disabled={!session.can_undo || busy} title="Undo recent change (U)" shortcut="U" shortcutId="undo">Undo</ActionButton>}
         {!session?.needs_transcription && <ActionButton onClick={() => dispatchReviewAction({ type: "show-help" })}
-          title="Keyboard shortcuts" shortcut="?">Shortcuts</ActionButton>}
+          title="Keyboard shortcuts" shortcut="?" shortcutId="show-help">Shortcuts</ActionButton>}
         <ActionButton buttonRef={settingsButtonRef} onClick={() => {
           setShowSettings(true);
           setShowGamepadMapping(false);
@@ -726,9 +803,9 @@ export default function App() {
                 <input ref={searchRef} type="text" role="searchbox" value={query} onChange={(event) => setQuery(event.target.value)}
                   aria-label="Search clip titles" placeholder={`Search within ${filters.find((item) => item.key === filter)?.label}…`}
                   className="w-full rounded-lg border line bg-[#101816] px-3 py-2 pr-10 text-sm" />
-                <kbd aria-hidden="true" className="shortcut-key pointer-events-none absolute right-3 top-1/2 -translate-y-1/2">/</kbd>
+                <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2"><ShortcutBadge keyboard="/" bindingId="focus-search" /></span>
               </div>
-              <ActionButton onClick={() => setShowJump(true)} title="Jump to clip index (G)" shortcut="G">Go to #</ActionButton>
+              <ActionButton onClick={() => setShowJump(true)} title="Jump to clip index (G)" shortcut="G" shortcutId="jump">Go to #</ActionButton>
             </div>
             {filter === "all" && <div className="mt-3 grid grid-cols-2 gap-2">
               <label className="subtle min-w-0 text-xs">Filter status
@@ -795,15 +872,15 @@ export default function App() {
                   <button type="button" onClick={() => dispatchReviewAction({ type: "navigate", direction: "previous" })} disabled={selectedPosition <= 0}
                     aria-label="Previous clip (physical K key position)" title="Previous clip (physical K key position)"
                     className="soft-surface inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium hover:bg-[#354b3b]">
-                    <span aria-hidden="true">←</span><kbd aria-hidden="true" className="shortcut-key">K</kbd>
+                    <span aria-hidden="true">←</span><ShortcutBadge keyboard="K" bindingId="previous" />
                   </button>
                   <button type="button" onClick={() => dispatchReviewAction({ type: "navigate", direction: "next" })} disabled={selectedPosition >= visible.length - 1}
                     aria-label="Next clip (physical J key position)" title="Next clip (physical J key position)"
                     className="soft-surface inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium hover:bg-[#354b3b]">
-                    <span aria-hidden="true">→</span><kbd aria-hidden="true" className="shortcut-key">J</kbd>
+                    <span aria-hidden="true">→</span><ShortcutBadge keyboard="J" bindingId="next" />
                   </button>
                   <ActionButton onClick={() => dispatchReviewAction({ type: "open-export" })} disabled={busy}
-                    title="Open export preview (physical E key position)" shortcut="E" tone="accent">Export</ActionButton>
+                    title="Open export preview (physical E key position)" shortcut="E" shortcutId="open-export" tone="accent">Export</ActionButton>
                   <div ref={clipMenuRef} className="relative">
                     <button type="button" onClick={() => setShowClipMenu((open) => !open)}
                       aria-label="More clip actions" aria-expanded={showClipMenu} aria-haspopup="menu" title="More clip actions"
@@ -813,13 +890,13 @@ export default function App() {
                       <button type="button" role="menuitem" disabled={busy} onClick={() => {
                         setShowClipMenu(false); dispatchReviewAction({ type: "rename" });
                       }} className="flex w-full items-center justify-between gap-4 rounded-md px-3 py-2 text-left text-sm hover:bg-[#304439]">
-                        Rename <kbd aria-hidden="true" className="shortcut-key">R</kbd>
+                        Rename <ShortcutBadge keyboard="R" bindingId="rename" />
                       </button>
                       <button type="button" role="menuitem" disabled={busy} onClick={() => {
                         setShowClipMenu(false);
                         dispatchReviewAction({ type: "duplicate" });
                       }} className="flex w-full items-center justify-between gap-4 rounded-md px-3 py-2 text-left text-sm hover:bg-[#304439]">
-                        Duplicate <kbd aria-hidden="true" className="shortcut-key">D</kbd>
+                        Duplicate <ShortcutBadge keyboard="D" bindingId="duplicate" />
                       </button>
                     </div>}
                   </div>
@@ -843,7 +920,7 @@ export default function App() {
                   </svg>
                 </span>
                 <span className="subtle inline-flex flex-wrap items-center gap-1.5 text-xs">
-                  Choose Group 1 <kbd className="shortcut-key">1</kbd>, Group 2 <kbd className="shortcut-key">2</kbd>, or Skipped <kbd className="shortcut-key">X</kbd>
+                  Choose Group 1 <ShortcutBadge keyboard="1" bindingId="group1" />, Group 2 <ShortcutBadge keyboard="2" bindingId="group2" />, or Skipped <ShortcutBadge keyboard="X" bindingId="skipped" />
                 </span>
               </div>
               <WaveformEditor key={selected.clip_id} clip={selected}
@@ -868,6 +945,9 @@ export default function App() {
       </>}
       {selected && session.revision !== null && <ExportPreview key={selected.clip_id} clip={selected}
         revision={session.revision} open={showExportModal} nextClipId={nextVisibleClipId}
+        gamepadAction={gamepadActionRequest}
+        onGamepadActionHandled={(id) => setGamepadActionRequest((current) => current?.id === id ? null : current)}
+        controllerHandlerRef={dialogControllerHandlerRef}
         onClose={() => setShowExportModal(false)} onPublished={(next, advance) => {
           setSession(next);
           setSaveState("saved");
@@ -886,6 +966,7 @@ export default function App() {
     </>}
 
     {showSettings && <Dialog title={showGamepadMapping ? "Gamepad mapping" : "Settings"}
+      controllerHandlerRef={dialogControllerHandlerRef}
       onClose={showGamepadMapping ? closeGamepadMapping : closeSettings}>
       {showGamepadMapping
         ? <GamepadMappingScreen initialConfig={gamepadBindingConfig} status={gamepadStatus}
@@ -897,10 +978,14 @@ export default function App() {
             gamepadMappingButtonRef={gamepadMappingButtonRef}
             onOpenGamepadMapping={openGamepadMapping}
             onDetectLeadingSilenceChange={(enabled) => setSettings((current) => ({ ...current, detectLeadingSilence: enabled }))}
-            onShowOriginalStartChange={(enabled) => setSettings((current) => ({ ...current, showOriginalStart: enabled }))} />}
+            onShowOriginalStartChange={(enabled) => setSettings((current) => ({ ...current, showOriginalStart: enabled }))}
+            badgeMode={settings.badgeMode}
+            unboundBadgeBehavior={settings.unboundBadgeBehavior}
+            onBadgeModeChange={(badgeMode) => setSettings((current) => ({ ...current, badgeMode }))}
+            onUnboundBadgeBehaviorChange={(unboundBadgeBehavior) => setSettings((current) => ({ ...current, unboundBadgeBehavior }))} />}
     </Dialog>}
 
-    {showJump && <Dialog title="Jump to clip index" onClose={() => setShowJump(false)}>
+    {showJump && <Dialog title="Jump to clip index" controllerHandlerRef={dialogControllerHandlerRef} onClose={() => setShowJump(false)}>
       <p className="subtle mb-3 text-sm">Find the requested index in the current view, or the nearest visible clip.</p>
       <form onSubmit={(event) => { event.preventDefault(); jumpToIndex(); }} className="flex gap-2">
         <input autoFocus type="number" min="1" value={jumpDraft} onChange={(event) => setJumpDraft(event.target.value)}
@@ -909,7 +994,7 @@ export default function App() {
       </form>
     </Dialog>}
 
-    {showMerge && session?.merge_preview && <Dialog title="Review SRT changes" onClose={() => setShowMerge(false)}>
+    {showMerge && session?.merge_preview && <Dialog title="Review SRT changes" controllerHandlerRef={dialogControllerHandlerRef} onClose={() => setShowMerge(false)}>
       <p className="subtle mb-4 text-sm">Nothing changes until you apply this merge. Saved titles, groups, and trims are kept. A backup is made before any selected removal.</p>
       <div className="mb-4 grid grid-cols-2 gap-2 text-sm">
         <span>Added entries: {session.merge_preview.added.length}</span>
@@ -933,20 +1018,16 @@ export default function App() {
         <ActionButton tone="accent" onClick={() => void applyMerge()} disabled={busy}>Apply selected changes</ActionButton></div>
     </Dialog>}
 
-    {showHelp && <Dialog title="Keyboard shortcuts" onClose={() => setShowHelp(false)}>
+    {showHelp && <Dialog title="Keyboard shortcuts" controllerHandlerRef={dialogControllerHandlerRef} onClose={() => setShowHelp(false)}>
       <div className="grid grid-cols-[6rem_1fr] gap-y-2 text-sm">
-        {[["Space", "Play from start"], ["Shift+Space", "Play / pause clip"], ["J / K", "Next / previous clip"], ["1 / 2", "Mark Group 1 / Group 2"],
-          ["X", "Skip clip"], ["U", "Undo recent change"], ["D", "Duplicate clip"],
-          ["R", "Rename title"], ["G", "Jump to index"], ["E", "Open export preview"],
-          ["Enter", "Export (in preview)"], ["⌘ Enter", "Export & Next (in preview)"], ["/", "Search titles"],
-          [", / .", "Nudge start − / + 10 ms (Shift: 100 ms)"],
-          ["[ / ]", "Nudge end − / + 10 ms (Shift: 100 ms)"],
-          ["?", "Show this help"]].map(([key, action]) => <div key={key} className="contents">
-            <kbd className="accent mono">{key}</kbd><span>{action}</span>
-          </div>)}
+        {SHORTCUT_DEFINITIONS.filter((definition) => definition.keyboard).map((definition) => <div key={definition.id} className="contents">
+          <ShortcutBadge keyboard={definition.keyboard} bindingId={definition.id} /><span>{definition.label}</span>
+        </div>)}
+        {/* Shortcut help is generated from SHORTCUT_DEFINITIONS above. */}
       </div>
       <p className="subtle mt-5 text-xs">Review shortcuts pause while you type. Letter and number shortcuts follow their physical US-QWERTY key positions, so a non-QWERTY layout may show different printed characters. Enter and ⌘ Enter work in the export preview when focus is outside an editable field.</p>
       <GamepadControls status={gamepadStatus} bindings={configuredGamepadBindings} />
     </Dialog>}
-  </div>;
+  </div>
+  </ShortcutDisplayProvider>;
 }

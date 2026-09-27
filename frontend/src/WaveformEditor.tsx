@@ -10,6 +10,7 @@ import {
   type InputAction,
 } from "./inputActions";
 import type { GamepadActionRequest } from "./gamepad";
+import { ShortcutBadge } from "./ShortcutBadge";
 
 type Edge = "start" | "end";
 type TimeRange = { start: number; end: number };
@@ -274,6 +275,7 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
   const [playing, setPlaying] = useState(false);
   const [saving, setSaving] = useState(false);
   const [localError, setLocalError] = useState("");
+  const [selectedBoundary, setSelectedBoundary] = useState<Edge>("start");
 
   useEffect(() => {
     if (active) return;
@@ -355,6 +357,7 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
   }
 
   function previewEdge(edgeToMove: Edge, time: number) {
+    setSelectedBoundary(edgeToMove);
     const [nextStart, nextEnd] = boundsFor(edgeToMove, time);
     previewRange(nextStart, nextEnd);
   }
@@ -413,8 +416,9 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
     setEndOffset(String(clip.end_ms - clip.original_end_ms));
   }
 
-  function nudge(which: Edge, amount: number, fromKeyboard = false) {
-    if (!fromKeyboard) {
+  function nudge(which: Edge, amount: number, deferred = false) {
+    setSelectedBoundary(which);
+    if (!deferred) {
       commitEdge(which, (which === "start" ? startMs : endMs) + amount);
       return;
     }
@@ -520,13 +524,19 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
       else if (action.mode === "audition-start") void audition("start");
       else void audition("end");
     } else if (action.type === "nudge") {
-      nudge(action.edge, action.amount, action.source === "keyboard");
+      nudge(action.edge, action.amount, action.source === "keyboard" || action.source === "gamepad");
+    } else if (action.type === "select-boundary") {
+      setSelectedBoundary(action.edge);
+    } else if (action.type === "nudge-selected") {
+      nudge(selectedBoundary, action.amount, true);
     }
   }
 
   const handledGamepadAction = useRef<number | null>(null);
   useEffect(() => {
-    if (!gamepadAction || gamepadAction.clipId !== clip.clip_id || handledGamepadAction.current === gamepadAction.id) return;
+    if (!gamepadAction || gamepadAction.clipId !== clip.clip_id || handledGamepadAction.current === gamepadAction.id ||
+        !(gamepadAction.action.type === "nudge" || gamepadAction.action.type === "nudge-selected" ||
+          (gamepadAction.action.type === "playback" && gamepadAction.action.target === "clip"))) return;
     handledGamepadAction.current = gamepadAction.id;
     dispatchAction(gamepadAction.action);
     onGamepadActionHandled?.(gamepadAction.id);
@@ -588,11 +598,11 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
       <div className="flex flex-wrap gap-2">
         <button type="button" onClick={() => dispatchAction({ type: "playback", target: "clip", mode: "replay" })} title="Replay from start (Space)"
           className="inline-flex items-center gap-2 rounded-lg bg-[#b7d69d] px-3 py-2 text-sm font-medium text-[#1b291f] hover:bg-[#c8e5af]">
-          <span aria-hidden="true" className="text-base leading-none">↻</span><span>Replay from start</span><kbd aria-hidden="true" className="shortcut-key">Space</kbd>
+          <span aria-hidden="true" className="text-base leading-none">↻</span><span>Replay from start</span><ShortcutBadge keyboard="Space" bindingId="replay" />
         </button>
         <button type="button" onClick={() => dispatchAction({ type: "playback", target: "clip", mode: "toggle" })} className="soft-surface inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm"
           aria-label={playing ? "Pause audio" : "Play clip"} title="Play or pause (Shift+Space)">
-          <span aria-hidden="true" className="text-xs leading-none">{playing ? "❚❚" : "▶"}</span><span>{playing ? "Pause" : "Play clip"}</span><kbd aria-hidden="true" className="shortcut-key">Shift+Space</kbd>
+          <span aria-hidden="true" className="text-xs leading-none">{playing ? "❚❚" : "▶"}</span><span>{playing ? "Pause" : "Play clip"}</span><ShortcutBadge keyboard="Shift+Space" bindingId="play-pause" />
         </button>
         <button type="button" onClick={() => dispatchAction({ type: "playback", target: "clip", mode: "audition-start" })} className="soft-surface rounded-lg px-3 py-2 text-sm">Hear start</button>
         <button type="button" onClick={() => dispatchAction({ type: "playback", target: "clip", mode: "audition-end" })} className="soft-surface rounded-lg px-3 py-2 text-sm">Hear end</button>
@@ -621,7 +631,10 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
     </div>
 
     <div className="rounded-xl border border-[#405748] bg-[#1b2b23] p-3">
-      <h4 className="mb-2 text-sm font-medium">Fine boundary views</h4>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <h4 className="text-sm font-medium">Fine boundary views</h4>
+          <span className="subtle text-xs" role="status">Controller boundary: <strong className="text-[#d8edb6]">{selectedBoundary}</strong> · fine 10 ms / coarse 100 ms</span>
+        </div>
       <div className="grid gap-5 md:grid-cols-2">
         {(["start", "end"] as Edge[]).map((which) => {
           const detail = which === "start" ? startDetail : endDetail;
@@ -630,7 +643,8 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
           const setOffset = which === "start" ? setStartOffset : setEndOffset;
           const keyPair = which === "start" ? [",", "."] : ["[", "]"];
           return <div key={which} className="min-w-0">
-            <h5 className="mb-2 text-sm font-medium">Fine {which}</h5>
+            <h5 className="mb-2 text-sm font-medium"><button type="button" onClick={() => dispatchAction({ type: "select-boundary", edge: which })}
+              aria-pressed={selectedBoundary === which} className={selectedBoundary === which ? "accent underline" : "subtle hover:text-[#e7eee7]"}>Fine {which}</button></h5>
             {detail.error ? <p role="alert" className="text-sm text-[#ffb3a8]">{detail.error} <button type="button" onClick={detail.retry} className="underline">Retry</button></p>
               : !detail.window ? <p className="subtle py-8 text-center text-sm">Loading fine waveform…</p>
                 : <WaveformPlot label={`Fine ${which} boundary waveform; drag its boundary nub to fine-tune, or drag the waveform background to select a new range`}
@@ -643,10 +657,13 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
             <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label={`Nudge ${which} boundary`}>
               {[-100, -10, 10, 100].map((amount) => {
                 const key = `${Math.abs(amount) === 100 ? "⇧" : ""}${amount < 0 ? keyPair[0] : keyPair[1]}`;
+                const shortcutId = which === "start"
+                  ? amount === -100 ? "nudge-start-coarse-back" : amount === -10 ? "nudge-start-fine-back" : amount === 10 ? "nudge-start-fine-forward" : "nudge-start-coarse-forward"
+                  : amount === -100 ? "nudge-end-coarse-back" : amount === -10 ? "nudge-end-fine-back" : amount === 10 ? "nudge-end-fine-forward" : "nudge-end-coarse-forward";
                 return <button key={amount} type="button" onClick={() => dispatchAction({ type: "nudge", edge: which, amount, source: "pointer" })}
                   disabled={controlsDisabled} title={`Nudge ${which} boundary ${amount > 0 ? "+" : ""}${amount} ms (${key})`}
                   className="mono inline-flex items-center justify-center gap-2 rounded-lg bg-[#304538] px-3 py-2 text-sm hover:bg-[#3b5543] disabled:opacity-50">
-                  <span>{amount > 0 ? "+" : ""}{amount} ms</span><kbd aria-hidden="true" className="shortcut-key">{key}</kbd>
+                  <span>{amount > 0 ? "+" : ""}{amount} ms</span><ShortcutBadge keyboard={key} bindingId={shortcutId} />
                 </button>;
               })}
               {which === "start" && detectLeadingSilence && <button type="button"

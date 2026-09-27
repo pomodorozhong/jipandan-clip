@@ -1,10 +1,12 @@
 import type { Ref } from "react";
 import GamepadControls from "./GamepadControls";
 import type { GamepadButtonBinding, GamepadStatus } from "./gamepad";
+import type { BadgeMode, UnboundBadgeBehavior } from "./ShortcutBadge";
 
 export default function SettingsScreen({ detectLeadingSilence, showOriginalStart,
   gamepadStatus, gamepadBindings, gamepadMappingButtonRef, onOpenGamepadMapping,
-  onDetectLeadingSilenceChange, onShowOriginalStartChange }: {
+  onDetectLeadingSilenceChange, onShowOriginalStartChange, badgeMode, unboundBadgeBehavior,
+  onBadgeModeChange, onUnboundBadgeBehaviorChange }: {
   detectLeadingSilence: boolean;
   showOriginalStart: boolean;
   gamepadStatus: GamepadStatus;
@@ -13,6 +15,10 @@ export default function SettingsScreen({ detectLeadingSilence, showOriginalStart
   onOpenGamepadMapping: () => void;
   onDetectLeadingSilenceChange: (enabled: boolean) => void;
   onShowOriginalStartChange: (enabled: boolean) => void;
+  badgeMode: BadgeMode;
+  unboundBadgeBehavior: UnboundBadgeBehavior;
+  onBadgeModeChange: (mode: BadgeMode) => void;
+  onUnboundBadgeBehaviorChange: (behavior: UnboundBadgeBehavior) => void;
 }) {
   return <div>
     <p className="subtle mb-5 text-sm">These settings are saved in this browser.</p>
@@ -33,6 +39,28 @@ export default function SettingsScreen({ detectLeadingSilence, showOriginalStart
           <strong className="block text-sm">Show original start time on waveform</strong>
           <span className="subtle mt-1 block text-sm">Draw the SRT start as a separate marker in the waveform views.</span>
         </span>
+      </label>
+    </section>
+    <section className="mt-6 border-t line pt-5">
+      <h3 className="mb-4 text-base font-semibold">Shortcut badges</h3>
+      <label className="mb-4 block text-sm">
+        <span className="font-medium">Badge display</span>
+        <select value={badgeMode} onChange={(event) => onBadgeModeChange(event.target.value as BadgeMode)}
+          className="mt-1 block w-full rounded-lg border line bg-[#101816] px-3 py-2">
+          <option value="auto">Auto — last used input</option>
+          <option value="keyboard">Keyboard</option>
+          <option value="xbox">Xbox controller</option>
+        </select>
+        <span className="subtle mt-1 block text-xs">Auto starts with Xbox badges when a standard controller is connected, then follows the last meaningful input.</span>
+      </label>
+      <label className="block text-sm">
+        <span className="font-medium">Unbound shortcut badges</span>
+        <select value={unboundBadgeBehavior} onChange={(event) => onUnboundBadgeBehaviorChange(event.target.value as UnboundBadgeBehavior)}
+          className="mt-1 block w-full rounded-lg border line bg-[#101816] px-3 py-2">
+          <option value="hide">Hide the badge</option>
+          <option value="keyboard">Fall back to keyboard shortcut</option>
+        </select>
+        <span className="subtle mt-1 block text-xs">New actions remain unbound until you capture a controller button.</span>
       </label>
     </section>
     <GamepadControls status={gamepadStatus} bindings={gamepadBindings}

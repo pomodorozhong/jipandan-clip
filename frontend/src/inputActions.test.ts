@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   actionRepeatPolicy,
+  actionForShortcut,
   createCompositionTracker,
   getInputContext,
   isActionAvailable,
   keyboardInputFromEvent,
   resolveKeyboardAction,
+  SHORTCUT_DEFINITIONS,
   shouldDispatchAction,
   type InputAction,
   type KeyboardInput,
@@ -202,6 +204,14 @@ describe("input contexts", () => {
 });
 
 describe("keyboard action routing", () => {
+  it("uses the shared registry for keyboard actions and future mapping rows", () => {
+    expect(SHORTCUT_DEFINITIONS.some((definition) => definition.id === "nudge-end-coarse-forward")).toBe(true);
+    expect(actionForShortcut("next", "keyboard")).toEqual({ type: "navigate", direction: "next" });
+    expect(actionForShortcut("nudge-start-coarse-back", "keyboard")).toEqual({
+      type: "nudge", edge: "start", amount: -100, source: "keyboard",
+    });
+  });
+
   it("maps review actions to shared action objects", () => {
     expect(resolveKeyboardAction("review", input({ key: "j", code: "KeyJ" }), "review")).toEqual({
       type: "navigate", direction: "next",

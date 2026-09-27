@@ -1,5 +1,6 @@
 import type { Ref } from "react";
 import { GAMEPAD_BINDINGS, type GamepadButtonBinding, type GamepadStatus } from "./gamepad";
+import { XboxButtonIcon } from "./ShortcutBadge";
 
 export function gamepadStatusLabel(status: GamepadStatus): string {
   if (!status.apiSupported) return "Unavailable";
@@ -34,10 +35,13 @@ export default function GamepadControls({ status, bindings = GAMEPAD_BINDINGS, o
     <p className="subtle mt-2 text-sm">{gamepadStatusMessage(status)}</p>
     <div className="mt-4 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm">
       {bindings.map((binding) => <div key={binding.id} className="contents">
-        <kbd className="accent mono">{binding.control}</kbd><span>{binding.actionLabel}</span>
+        {binding.index === null
+          ? <span className="subtle text-xs">Unbound</span>
+          : <XboxButtonIcon index={binding.index} label={binding.control} />}
+        <span>{binding.actionLabel}</span>
       </div>)}
     </div>
-    <p className="subtle mt-4 text-xs">Controller actions pause while typing, a dialog is open, or this tab is inactive; saving blocks mutating actions while navigation remains available. After reconnecting or changing context, release a held control before pressing it again.</p>
+    <p className="subtle mt-4 text-xs">Controller actions pause while typing or this tab is inactive; dialogs use D-pad/left-stick focus, A confirm, and B back. Saving blocks mutating actions while navigation remains available. After reconnecting or changing context, release a held control before pressing it again.</p>
     {onOpenMapping && <button type="button" ref={mappingButtonRef} id="gamepad-mapping-button" onClick={onOpenMapping}
       className="mt-4 rounded-lg border line px-3 py-2 text-sm font-medium hover:bg-[#354b3b]">
       Configure gamepad mapping
