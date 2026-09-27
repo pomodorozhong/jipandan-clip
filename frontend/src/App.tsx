@@ -5,10 +5,15 @@ import ExportPreview from "./ExportPreview";
 import TranscriptionScreen from "./TranscriptionScreen";
 import SettingsScreen from "./SettingsScreen";
 import GamepadControls from "./GamepadControls";
+import GamepadMappingScreen from "./GamepadMappingScreen";
 import {
+  bindingsForGamepadConfig,
   createGamepadAdapter,
   initialGamepadStatus,
+  loadGamepadBindingConfig,
+  saveGamepadBindingConfig,
   type GamepadActionRequest,
+  type GamepadBindingConfig,
   type GamepadStatus,
 } from "./gamepad";
 import {
@@ -85,16 +90,17 @@ function visibleClips(
   });
 }
 
-function ActionButton({ children, onClick, disabled, tone = "normal", title, shortcut }: {
+function ActionButton({ children, onClick, disabled, tone = "normal", title, shortcut, buttonRef }: {
   children: React.ReactNode; onClick: () => void; disabled?: boolean;
   tone?: "normal" | "accent" | "danger"; title?: string; shortcut?: string;
+  buttonRef?: React.Ref<HTMLButtonElement>;
 }) {
   const toneClass = tone === "accent"
     ? "bg-[#b7d69d] text-[#1d2d20] hover:bg-[#d4ecbe]"
     : tone === "danger"
       ? "bg-[#5d3938] text-[#ffe2db] hover:bg-[#754542]"
       : "soft-surface text-[#e7eee7] hover:bg-[#354b3b]";
-  return <button type="button" title={title} disabled={disabled} onClick={onClick}
+  return <button ref={buttonRef} type="button" title={title} disabled={disabled} onClick={onClick}
     className={`inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${toneClass}`}>
     <span>{children}</span>{shortcut && <kbd aria-hidden="true" className="shortcut-key">{shortcut}</kbd>}
   </button>;
@@ -155,7 +161,9 @@ export default function App() {
   const [showDetailMobile, setShowDetailMobile] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showGamepadMapping, setShowGamepadMapping] = useState(false);
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
+  const [gamepadBindingConfig, setGamepadBindingConfig] = useState<GamepadBindingConfig>(loadGamepadBindingConfig);
   const [gamepadActionRequest, setGamepadActionRequest] = useState<GamepadActionRequest | null>(null);
   const [gamepadStatus, setGamepadStatus] = useState<GamepadStatus>(() => initialGamepadStatus(
     typeof navigator !== "undefined" && typeof navigator.getGamepads === "function",
@@ -167,6 +175,8 @@ export default function App() {
   const loadedDetectionAdjustment = useRef<{ id: string; adjusted: number } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
+  const settingsButtonRef = useRef<HTMLButtonElement>(null);
+  const gamepadMappingButtonRef = useRef<HTMLButtonElement>(null);
   const clipMenuRef = useRef<HTMLDivElement>(null);
   const detailScrollRef = useRef<HTMLDivElement>(null);
   const clipListRef = useRef<HTMLDivElement>(null);
@@ -175,6 +185,9 @@ export default function App() {
     dispatch: (action: InputAction) => void;
     availability: InputAvailability;
   } | null>(null);
+  const gamepadBindingConfigRef = useRef(gamepadBindingConfig);
+  gamepadBindingConfigRef.current = gamepadBindingConfig;
+  const configuredGamepadBindings = useMemo(() => bindingsForGamepadConfig(gamepadBindingConfig), [gamepadBindingConfig]);
 
   useEffect(() => installCompositionTracking(), []);
 
@@ -182,6 +195,10 @@ export default function App() {
     try { localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings)); }
     catch { /* Settings still apply for this browser session. */ }
   }, [settings]);
+
+  useEffect(() => {
+    saveGamepadBindingConfig(gamepadBindingConfig);
+  }, [gamepadBindingConfig]);
 
   useEffect(() => {
     let alive = true;
@@ -447,6 +464,7 @@ export default function App() {
     const hasGamepadApi = typeof navigator !== "undefined" && typeof navigator.getGamepads === "function";
     const adapter = createGamepadAdapter({
       getGamepads: hasGamepadApi ? () => navigator.getGamepads() : undefined,
+      getBindings: () => bindingsForGamepadConfig(gamepadBindingConfigRef.current),
       getContext: () => gamepadDispatchRef.current?.availability.context ?? "review",
       onAction: (action) => {
         const current = gamepadDispatchRef.current;
@@ -579,6 +597,21 @@ export default function App() {
     }
   }
 
+  const openGamepadMapping = useCallback(() => {
+    setShowGamepadMapping(true);
+  }, []);
+
+  const closeGamepadMapping = useCallback(() => {
+    setShowGamepadMapping(false);
+    requestAnimationFrame(() => gamepadMappingButtonRef.current?.focus());
+  }, []);
+
+  const closeSettings = useCallback(() => {
+    setShowGamepadMapping(false);
+    setShowSettings(false);
+    requestAnimationFrame(() => settingsButtonRef.current?.focus());
+  }, []);
+
   if (initializing) return <main className="flex min-h-screen items-center justify-center subtle">Opening Jipandan…</main>;
 
   return <div className={`flex flex-col ${session?.audio ? "h-dvh min-h-0 overflow-hidden" : "min-h-screen"}`}>
@@ -599,8 +632,9 @@ export default function App() {
         }} disabled={!session.can_undo || busy} title="Undo recent change (U)" shortcut="U">Undo</ActionButton>}
         {!session?.needs_transcription && <ActionButton onClick={() => dispatchReviewAction({ type: "show-help" })}
           title="Keyboard shortcuts" shortcut="?">Shortcuts</ActionButton>}
-        <ActionButton onClick={() => {
+        <ActionButton buttonRef={settingsButtonRef} onClick={() => {
           setShowSettings(true);
+          setShowGamepadMapping(false);
           setShowHelp(false); setShowJump(false); setShowMerge(false); setShowExportModal(false);
         }}>Settings</ActionButton>
       </div>
@@ -851,12 +885,19 @@ export default function App() {
         }} />}
     </>}
 
-    {showSettings && <Dialog title="Settings" onClose={() => setShowSettings(false)}>
-      <SettingsScreen detectLeadingSilence={settings.detectLeadingSilence}
-        showOriginalStart={settings.showOriginalStart}
-        gamepadStatus={gamepadStatus}
-        onDetectLeadingSilenceChange={(enabled) => setSettings((current) => ({ ...current, detectLeadingSilence: enabled }))}
-        onShowOriginalStartChange={(enabled) => setSettings((current) => ({ ...current, showOriginalStart: enabled }))} />
+    {showSettings && <Dialog title={showGamepadMapping ? "Gamepad mapping" : "Settings"}
+      onClose={showGamepadMapping ? closeGamepadMapping : closeSettings}>
+      {showGamepadMapping
+        ? <GamepadMappingScreen initialConfig={gamepadBindingConfig} status={gamepadStatus}
+            onSave={(config) => { setGamepadBindingConfig(config); closeGamepadMapping(); }} onCancel={closeGamepadMapping} />
+        : <SettingsScreen detectLeadingSilence={settings.detectLeadingSilence}
+            showOriginalStart={settings.showOriginalStart}
+            gamepadStatus={gamepadStatus}
+            gamepadBindings={configuredGamepadBindings}
+            gamepadMappingButtonRef={gamepadMappingButtonRef}
+            onOpenGamepadMapping={openGamepadMapping}
+            onDetectLeadingSilenceChange={(enabled) => setSettings((current) => ({ ...current, detectLeadingSilence: enabled }))}
+            onShowOriginalStartChange={(enabled) => setSettings((current) => ({ ...current, showOriginalStart: enabled }))} />}
     </Dialog>}
 
     {showJump && <Dialog title="Jump to clip index" onClose={() => setShowJump(false)}>
@@ -905,7 +946,7 @@ export default function App() {
           </div>)}
       </div>
       <p className="subtle mt-5 text-xs">Review shortcuts pause while you type. Letter and number shortcuts follow their physical US-QWERTY key positions, so a non-QWERTY layout may show different printed characters. Enter and ⌘ Enter work in the export preview when focus is outside an editable field.</p>
-      <GamepadControls status={gamepadStatus} />
+      <GamepadControls status={gamepadStatus} bindings={configuredGamepadBindings} />
     </Dialog>}
   </div>;
 }

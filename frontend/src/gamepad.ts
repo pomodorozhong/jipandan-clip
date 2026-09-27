@@ -2,13 +2,137 @@ import { actionRepeatPolicy, type InputAction } from "./inputActions";
 
 export const GAMEPAD_REPEAT_DELAY_MS = 400;
 export const GAMEPAD_REPEAT_INTERVAL_MS = 120;
+export const GAMEPAD_BINDINGS_STORAGE_KEY = "jipandan-gamepad-bindings";
+export const GAMEPAD_BINDINGS_STORAGE_VERSION = 1;
+
+export const GAMEPAD_BINDING_IDS = [
+  "previous", "next", "replay", "group1", "group2", "skipped",
+] as const;
+export type GamepadBindingId = typeof GAMEPAD_BINDING_IDS[number];
+
+// These labels follow the button indexes exposed by the browser's standard
+// mapping. Mapping is intentionally limited to buttons; axes remain outside
+// this first configurable slice.
+export const STANDARD_GAMEPAD_CONTROL_LABELS = [
+  "A", "B", "X", "Y", "Left shoulder", "Right shoulder",
+  "Left trigger", "Right trigger", "Back", "Start", "Left stick",
+  "Right stick", "D-pad ↑", "D-pad ↓", "D-pad ←", "D-pad →", "Home",
+] as const;
+export const STANDARD_GAMEPAD_BUTTON_INDEXES = STANDARD_GAMEPAD_CONTROL_LABELS.map((_, index) => index);
 
 export type GamepadButtonBinding = {
+  id: GamepadBindingId;
   index: number;
   control: string;
   actionLabel: string;
   action: InputAction;
 };
+
+export type GamepadBindingConfig = Record<GamepadBindingId, number>;
+
+const bindingDefinitions: readonly {
+  id: GamepadBindingId;
+  defaultIndex: number;
+  actionLabel: string;
+  action: InputAction;
+}[] = [
+  { id: "previous", defaultIndex: 12, actionLabel: "Previous clip", action: { type: "navigate", direction: "previous" } },
+  { id: "next", defaultIndex: 13, actionLabel: "Next clip", action: { type: "navigate", direction: "next" } },
+  { id: "replay", defaultIndex: 0, actionLabel: "Replay clip", action: { type: "playback", target: "clip", mode: "replay" } },
+  { id: "group1", defaultIndex: 1, actionLabel: "Group 1", action: { type: "classify", status: "group1" } },
+  { id: "group2", defaultIndex: 2, actionLabel: "Group 2", action: { type: "classify", status: "group2" } },
+  { id: "skipped", defaultIndex: 3, actionLabel: "Skip clip", action: { type: "classify", status: "skipped" } },
+];
+
+export function defaultGamepadBindingConfig(): GamepadBindingConfig {
+  const config = {} as GamepadBindingConfig;
+  for (const definition of bindingDefinitions) {
+    config[definition.id] = definition.defaultIndex;
+  }
+  return config;
+}
+
+export function gamepadControlLabel(index: number): string {
+  return STANDARD_GAMEPAD_CONTROL_LABELS[index] ?? `Button ${index}`;
+}
+
+export function bindingsForGamepadConfig(config: GamepadBindingConfig): readonly GamepadButtonBinding[] {
+  return bindingDefinitions.map((definition) => ({
+    id: definition.id,
+    actionLabel: definition.actionLabel,
+    action: definition.action,
+    index: config[definition.id],
+    control: gamepadControlLabel(config[definition.id]),
+  }));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isValidButtonIndex(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) &&
+    STANDARD_GAMEPAD_BUTTON_INDEXES.includes(value);
+}
+
+export function normalizeGamepadBindingConfig(value: unknown): GamepadBindingConfig {
+  const fallback = defaultGamepadBindingConfig();
+  let candidate: unknown = value;
+  if (isRecord(value) && Object.hasOwn(value, "version")) {
+    if (value.version !== GAMEPAD_BINDINGS_STORAGE_VERSION || !isRecord(value.bindings)) return fallback;
+    candidate = value.bindings;
+  }
+  if (!isRecord(candidate) || Object.keys(candidate).length !== GAMEPAD_BINDING_IDS.length) return fallback;
+  if (GAMEPAD_BINDING_IDS.some((id) => !Object.hasOwn(candidate, id) || !isValidButtonIndex(candidate[id]))) {
+    return fallback;
+  }
+  const indexes = GAMEPAD_BINDING_IDS.map((id) => candidate[id] as number);
+  if (new Set(indexes).size !== indexes.length) return fallback;
+  const config = {} as GamepadBindingConfig;
+  for (const id of GAMEPAD_BINDING_IDS) config[id] = candidate[id] as number;
+  return config;
+}
+
+type GamepadStorage = Pick<Storage, "getItem" | "setItem">;
+
+function browserStorage(): GamepadStorage | undefined {
+  try {
+    return typeof localStorage === "undefined" ? undefined : localStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+export function loadGamepadBindingConfig(storage: GamepadStorage = browserStorage()!): GamepadBindingConfig {
+  const fallback = defaultGamepadBindingConfig();
+  if (!storage) return fallback;
+  try {
+    const stored = storage.getItem(GAMEPAD_BINDINGS_STORAGE_KEY);
+    return stored ? normalizeGamepadBindingConfig(JSON.parse(stored) as unknown) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export function saveGamepadBindingConfig(config: GamepadBindingConfig, storage: GamepadStorage = browserStorage()!): void {
+  if (!storage) return;
+  try {
+    storage.setItem(GAMEPAD_BINDINGS_STORAGE_KEY, JSON.stringify({
+      version: GAMEPAD_BINDINGS_STORAGE_VERSION,
+      bindings: normalizeGamepadBindingConfig(config),
+    }));
+  } catch {
+    // The bindings still apply for this browser session when storage is unavailable.
+  }
+}
+
+export function findGamepadBindingConflict(
+  config: GamepadBindingConfig,
+  target: GamepadBindingId,
+  index: number,
+): GamepadBindingId | null {
+  return GAMEPAD_BINDING_IDS.find((id) => id !== target && config[id] === index) ?? null;
+}
 
 export type GamepadActionRequest = {
   id: number;
@@ -16,18 +140,9 @@ export type GamepadActionRequest = {
   action: InputAction;
 };
 
-// These are the buttons exposed by the browser's standard mapping. Custom
-// layouts are deliberately ignored until the mapping screen is implemented.
-export const GAMEPAD_BINDINGS: readonly GamepadButtonBinding[] = [
-  { index: 12, control: "D-pad ↑", actionLabel: "Previous clip", action: { type: "navigate", direction: "previous" } },
-  { index: 13, control: "D-pad ↓", actionLabel: "Next clip", action: { type: "navigate", direction: "next" } },
-  { index: 0, control: "A", actionLabel: "Replay clip", action: { type: "playback", target: "clip", mode: "replay" } },
-  { index: 1, control: "B", actionLabel: "Group 1", action: { type: "classify", status: "group1" } },
-  { index: 2, control: "X", actionLabel: "Group 2", action: { type: "classify", status: "group2" } },
-  { index: 3, control: "Y", actionLabel: "Skip clip", action: { type: "classify", status: "skipped" } },
-];
-
-const mappedButtonIndexes = GAMEPAD_BINDINGS.map((binding) => binding.index);
+// The defaults preserve the validated review mapping. Custom layouts are
+// deliberately ignored until a separate mapping design is validated.
+export const GAMEPAD_BINDINGS: readonly GamepadButtonBinding[] = bindingsForGamepadConfig(defaultGamepadBindingConfig());
 
 export type GamepadDescriptor = {
   id: string;
@@ -55,6 +170,7 @@ type GamepadFrameCallback = (timestamp: number) => void;
 
 export type GamepadAdapterOptions = {
   getGamepads?: () => readonly (Gamepad | null)[];
+  getBindings?: () => readonly GamepadButtonBinding[];
   onAction: (action: InputAction) => void;
   onStatusChange?: (status: GamepadStatus) => void;
   getContext?: () => string;
@@ -115,6 +231,10 @@ function sameStatus(left: GamepadStatus, right: GamepadStatus): boolean {
     left.unsupportedControllers.every((controller, index) => sameDescriptor(controller, right.unsupportedControllers[index]));
 }
 
+function bindingsSignature(bindings: readonly GamepadButtonBinding[]): string {
+  return bindings.map((binding) => `${binding.id}:${binding.index}`).join("|");
+}
+
 export function createGamepadAdapter(options: GamepadAdapterOptions): GamepadAdapter {
   const getGamepads = options.getGamepads;
   const now = options.now ?? (() => typeof performance === "undefined" ? Date.now() : performance.now());
@@ -133,6 +253,8 @@ export function createGamepadAdapter(options: GamepadAdapterOptions): GamepadAda
   let pageActive = options.isPageActive?.() ?? defaultPageActive();
   let started = false;
   let frameId: number | null = null;
+  let activeBindings = options.getBindings?.() ?? GAMEPAD_BINDINGS;
+  let activeBindingsSignature = bindingsSignature(activeBindings);
   const previousPressed = new Set<number>();
   const awaitingRelease = new Set<number>();
   const repeatStates = new Map<number, RepeatState>();
@@ -155,7 +277,7 @@ export function createGamepadAdapter(options: GamepadAdapterOptions): GamepadAda
   function resetInput(blockAllButtons = false) {
     for (const index of previousPressed) awaitingRelease.add(index);
     if (blockAllButtons) {
-      for (const index of mappedButtonIndexes) awaitingRelease.add(index);
+      for (const index of STANDARD_GAMEPAD_BUTTON_INDEXES) awaitingRelease.add(index);
     }
     previousPressed.clear();
     repeatStates.clear();
@@ -188,6 +310,17 @@ export function createGamepadAdapter(options: GamepadAdapterOptions): GamepadAda
       unsupportedControllers: selection.unsupported.map(descriptorFor),
     });
     return selection.active;
+  }
+
+  function syncBindings(): readonly GamepadButtonBinding[] {
+    const next = options.getBindings?.() ?? GAMEPAD_BINDINGS;
+    const nextSignature = bindingsSignature(next);
+    if (nextSignature !== activeBindingsSignature) {
+      activeBindings = next;
+      activeBindingsSignature = nextSignature;
+      resetInput(true);
+    }
+    return activeBindings;
   }
 
   function scheduleFrame() {
@@ -250,24 +383,25 @@ export function createGamepadAdapter(options: GamepadAdapterOptions): GamepadAda
   }
 
   function poll(timestamp = now()) {
+    const bindings = syncBindings();
     const context = options.getContext?.();
     if (context !== undefined && context !== currentContext) {
       currentContext = context;
-      resetInput();
+      resetInput(true);
     }
     if (!pageActive) return;
     const active = refreshStatus();
     if (!active) return;
 
     const pressed = new Set<number>();
-    for (const index of mappedButtonIndexes) {
+    for (const index of STANDARD_GAMEPAD_BUTTON_INDEXES) {
       if (buttonIsPressed(active.buttons[index])) pressed.add(index);
     }
     for (const index of awaitingRelease) {
       if (!pressed.has(index)) awaitingRelease.delete(index);
     }
 
-    for (const binding of GAMEPAD_BINDINGS) {
+    for (const binding of bindings) {
       const isPressed = pressed.has(binding.index);
       const wasPressed = previousPressed.has(binding.index);
       if (awaitingRelease.has(binding.index)) {
@@ -303,7 +437,7 @@ export function createGamepadAdapter(options: GamepadAdapterOptions): GamepadAda
   function setContext(context: string) {
     if (context === currentContext) return;
     currentContext = context;
-    resetInput();
+    resetInput(true);
   }
 
   function setPageActive(active: boolean) {

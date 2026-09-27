@@ -1,4 +1,5 @@
-import { GAMEPAD_BINDINGS, type GamepadStatus } from "./gamepad";
+import type { Ref } from "react";
+import { GAMEPAD_BINDINGS, type GamepadButtonBinding, type GamepadStatus } from "./gamepad";
 
 export function gamepadStatusLabel(status: GamepadStatus): string {
   if (!status.apiSupported) return "Unavailable";
@@ -19,7 +20,12 @@ export function gamepadStatusMessage(status: GamepadStatus): string {
   return "Connect a standard-mapped controller, focus this page, and press a button to activate controller input.";
 }
 
-export default function GamepadControls({ status }: { status: GamepadStatus }) {
+export default function GamepadControls({ status, bindings = GAMEPAD_BINDINGS, onOpenMapping, mappingButtonRef }: {
+  status: GamepadStatus;
+  bindings?: readonly GamepadButtonBinding[];
+  onOpenMapping?: () => void;
+  mappingButtonRef?: Ref<HTMLButtonElement>;
+}) {
   return <section aria-labelledby="gamepad-controls-heading" className="mt-6 rounded-xl border line p-4">
     <div className="flex flex-wrap items-center justify-between gap-2">
       <h3 id="gamepad-controls-heading" className="text-base font-semibold">Gamepad controls</h3>
@@ -27,10 +33,14 @@ export default function GamepadControls({ status }: { status: GamepadStatus }) {
     </div>
     <p className="subtle mt-2 text-sm">{gamepadStatusMessage(status)}</p>
     <div className="mt-4 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm">
-      {GAMEPAD_BINDINGS.map((binding) => <div key={binding.index} className="contents">
+      {bindings.map((binding) => <div key={binding.id} className="contents">
         <kbd className="accent mono">{binding.control}</kbd><span>{binding.actionLabel}</span>
       </div>)}
     </div>
     <p className="subtle mt-4 text-xs">Controller actions pause while typing, a dialog is open, or this tab is inactive; saving blocks mutating actions while navigation remains available. After reconnecting or changing context, release a held control before pressing it again.</p>
+    {onOpenMapping && <button type="button" ref={mappingButtonRef} id="gamepad-mapping-button" onClick={onOpenMapping}
+      className="mt-4 rounded-lg border line px-3 py-2 text-sm font-medium hover:bg-[#354b3b]">
+      Configure gamepad mapping
+    </button>}
   </section>;
 }

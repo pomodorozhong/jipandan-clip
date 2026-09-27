@@ -1,11 +1,16 @@
+import type { Ref } from "react";
 import GamepadControls from "./GamepadControls";
-import type { GamepadStatus } from "./gamepad";
+import type { GamepadButtonBinding, GamepadStatus } from "./gamepad";
 
 export default function SettingsScreen({ detectLeadingSilence, showOriginalStart,
-  gamepadStatus, onDetectLeadingSilenceChange, onShowOriginalStartChange }: {
+  gamepadStatus, gamepadBindings, gamepadMappingButtonRef, onOpenGamepadMapping,
+  onDetectLeadingSilenceChange, onShowOriginalStartChange }: {
   detectLeadingSilence: boolean;
   showOriginalStart: boolean;
   gamepadStatus: GamepadStatus;
+  gamepadBindings: readonly GamepadButtonBinding[];
+  gamepadMappingButtonRef?: Ref<HTMLButtonElement>;
+  onOpenGamepadMapping: () => void;
   onDetectLeadingSilenceChange: (enabled: boolean) => void;
   onShowOriginalStartChange: (enabled: boolean) => void;
 }) {
@@ -30,6 +35,7 @@ export default function SettingsScreen({ detectLeadingSilence, showOriginalStart
         </span>
       </label>
     </section>
-    <GamepadControls status={gamepadStatus} />
+    <GamepadControls status={gamepadStatus} bindings={gamepadBindings}
+      mappingButtonRef={gamepadMappingButtonRef} onOpenMapping={onOpenGamepadMapping} />
   </div>;
 }

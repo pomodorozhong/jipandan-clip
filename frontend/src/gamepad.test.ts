@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  bindingsForGamepadConfig,
   createGamepadAdapter,
+  defaultGamepadBindingConfig,
+  findGamepadBindingConflict,
   GAMEPAD_REPEAT_DELAY_MS,
   initialGamepadStatus,
+  loadGamepadBindingConfig,
+  saveGamepadBindingConfig,
+  type GamepadBindingConfig,
+  type GamepadButtonBinding,
   type GamepadStatus,
 } from "./gamepad";
 import type { InputAction } from "./inputActions";
@@ -24,12 +31,13 @@ function press(gamepad: Gamepad & { buttons: FakeButton[] }, index: number, pres
   gamepad.buttons[index].value = pressed ? 1 : 0;
 }
 
-function createHarness() {
+function createHarness(getBindings?: () => readonly GamepadButtonBinding[]) {
   const gamepads: (Gamepad | null)[] = [];
   const actions: InputAction[] = [];
   const statuses: GamepadStatus[] = [];
   const adapter = createGamepadAdapter({
     getGamepads: () => gamepads,
+    getBindings,
     onAction: (action) => actions.push(action),
     onStatusChange: (status) => statuses.push(status),
   });
@@ -167,5 +175,54 @@ describe("gamepad adapter", () => {
       activeController: null,
       unsupportedControllers: [{ id: "Unknown Layout", index: 0, mapping: "unknown" }],
     });
+  });
+
+  it("uses saved bindings and rejects duplicate assignments", () => {
+    const defaults = defaultGamepadBindingConfig();
+    const custom: GamepadBindingConfig = { ...defaults, next: 14 };
+    const bindings = bindingsForGamepadConfig(custom);
+    expect(bindings.find((binding) => binding.id === "next")).toMatchObject({ index: 14, control: "D-pad ←" });
+    expect(findGamepadBindingConflict(custom, "group1", custom.group2)).toBe("group2");
+    expect(findGamepadBindingConflict(custom, "group1", custom.group1)).toBeNull();
+
+    const storageData = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => storageData.get(key) ?? null,
+      setItem: (key: string, value: string) => { storageData.set(key, value); },
+    };
+    saveGamepadBindingConfig(custom, storage);
+    expect(loadGamepadBindingConfig(storage)).toEqual(custom);
+
+    storageData.set("jipandan-gamepad-bindings", JSON.stringify({
+      version: 1,
+      bindings: { ...custom, next: custom.group1 },
+    }));
+    expect(loadGamepadBindingConfig(storage)).toEqual(defaults);
+    storageData.set("jipandan-gamepad-bindings", JSON.stringify({
+      version: 0,
+      bindings: custom,
+    }));
+    expect(loadGamepadBindingConfig(storage)).toEqual(defaults);
+    storageData.set("jipandan-gamepad-bindings", "not json");
+    expect(loadGamepadBindingConfig(storage)).toEqual(defaults);
+  });
+
+  it("applies a changed binding only after a fresh release", () => {
+    let config = defaultGamepadBindingConfig();
+    const { adapter, gamepads, actions } = createHarness(() => bindingsForGamepadConfig(config));
+    const gamepad = fakeGamepad();
+    gamepads.push(gamepad);
+    adapter.poll(0);
+
+    press(gamepad, 14, true);
+    config = { ...config, next: 14 };
+    adapter.poll(1);
+    expect(actions).toHaveLength(0);
+
+    press(gamepad, 14, false);
+    adapter.poll(2);
+    press(gamepad, 14, true);
+    adapter.poll(3);
+    expect(actions).toEqual([{ type: "navigate", direction: "next" }]);
   });
 });
