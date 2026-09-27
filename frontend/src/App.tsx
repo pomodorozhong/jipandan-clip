@@ -1000,7 +1000,6 @@ export default function App() {
         : <SettingsScreen detectLeadingSilence={settings.detectLeadingSilence}
             showOriginalStart={settings.showOriginalStart}
             gamepadStatus={gamepadStatus}
-            gamepadBindings={configuredGamepadBindings}
             gamepadRepeatDelayMs={settings.gamepadRepeatDelayMs}
             gamepadMappingButtonRef={gamepadMappingButtonRef}
             onOpenGamepadMapping={openGamepadMapping}
@@ -1057,7 +1056,7 @@ export default function App() {
         {/* Shortcut help is generated from SHORTCUT_DEFINITIONS above. */}
       </div>
       <p className="subtle mt-5 text-xs">Review shortcuts pause while you type. Letter and number shortcuts follow their physical US-QWERTY key positions, so a non-QWERTY layout may show different printed characters. Enter and ⌘ Enter work in the export preview when focus is outside an editable field.</p>
-      <GamepadControls status={gamepadStatus} bindings={configuredGamepadBindings} />
+      <GamepadControls status={gamepadStatus} />
     </Dialog>}
   </div>
   </ShortcutDisplayProvider>;

@@ -4,20 +4,18 @@ import {
   GAMEPAD_REPEAT_DELAY_MAX_MS,
   GAMEPAD_REPEAT_DELAY_MIN_MS,
   GAMEPAD_REPEAT_DELAY_STEP_MS,
-  type GamepadButtonBinding,
   type GamepadStatus,
 } from "./gamepad";
 import type { BadgeMode, UnboundBadgeBehavior } from "./ShortcutBadge";
 
 export default function SettingsScreen({ detectLeadingSilence, showOriginalStart,
-  gamepadStatus, gamepadBindings, gamepadMappingButtonRef, onOpenGamepadMapping,
+  gamepadStatus, gamepadMappingButtonRef, onOpenGamepadMapping,
   onDetectLeadingSilenceChange, onShowOriginalStartChange, badgeMode, unboundBadgeBehavior,
   onBadgeModeChange, onUnboundBadgeBehaviorChange, gamepadRepeatDelayMs,
   onGamepadRepeatDelayChange }: {
   detectLeadingSilence: boolean;
   showOriginalStart: boolean;
   gamepadStatus: GamepadStatus;
-  gamepadBindings: readonly GamepadButtonBinding[];
   gamepadMappingButtonRef?: Ref<HTMLButtonElement>;
   onOpenGamepadMapping: () => void;
   onDetectLeadingSilenceChange: (enabled: boolean) => void;
@@ -86,7 +84,7 @@ export default function SettingsScreen({ detectLeadingSilence, showOriginalStart
         <span className="subtle mt-1 block text-xs">New actions remain unbound until you capture a controller button.</span>
       </label>
     </section>
-    <GamepadControls status={gamepadStatus} bindings={gamepadBindings}
+    <GamepadControls status={gamepadStatus}
       mappingButtonRef={gamepadMappingButtonRef} onOpenMapping={onOpenGamepadMapping} />
   </div>;
 }
