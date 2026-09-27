@@ -15,6 +15,7 @@ from jipandan.core.srt import (
     srt_time_to_seconds,
     seconds_to_ffmpeg_timestamp,
 )
+from jipandan.core.paths import default_export_dir
 
 ClipStatus = Literal["pending", "group1", "group2", "exported", "skipped"]
 SESSION_VERSION = 2
@@ -126,10 +127,11 @@ class Session:
                     source_text=entry.text,
                 )
             )
+        resolved_audio = audio.resolve()
         return cls(
-            audio=audio.resolve(),
+            audio=resolved_audio,
             srt=srt_path.resolve(),
-            clip_dir=(clip_dir or Path("clip")).resolve(),
+            clip_dir=(clip_dir or default_export_dir(resolved_audio)).resolve(),
             candidates=candidates,
             srt_fingerprint=hashlib.sha256(srt_path.read_bytes()).hexdigest(),
         )

@@ -29,8 +29,8 @@ def main() -> None:
     parser.add_argument(
         "--clip-dir",
         type=Path,
-        default=Path("clip"),
-        help="Directory for exported clips (default: clip).",
+        default=None,
+        help="Directory for exported clips from a new session (default: exports beside the audio).",
     )
     parser.add_argument(
         "--resume",

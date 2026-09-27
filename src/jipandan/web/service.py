@@ -19,6 +19,7 @@ from typing import BinaryIO, Callable
 
 from jipandan.core.ffmpeg import ExportOptions, probe_duration_seconds, publish_prebuilt_clip
 from jipandan.core.leading_silence import detect_leading_silence_start
+from jipandan.core.paths import AppPaths, default_export_dir, get_app_paths
 from jipandan.core.srt import parse_srt
 from jipandan.core.whisper import describe_transcribe_call
 from jipandan.core.models import (
@@ -71,25 +72,38 @@ def clip_payload(candidate: ClipCandidate) -> dict:
 
 class SessionService:
     def __init__(self, clip_dir: Path | None = None, upload_dir: Path | None = None,
-                 preview_dir: Path | None = None, transcription_dir: Path | None = None) -> None:
+                 preview_dir: Path | None = None, transcription_dir: Path | None = None,
+                 *, app_paths: AppPaths | None = None) -> None:
         self._lock = threading.RLock()
+        self.paths = app_paths or get_app_paths()
         self.audio: Path | None = None
         self.srt: Path | None = None
         self.session: Session | None = None
         self.duration_ms: int | None = None
-        self.default_clip_dir = (clip_dir or Path("clip")).resolve()
-        if upload_dir is None:
-            base = Path.home() / ("Library/Application Support/Jipandan" if sys.platform == "darwin" else ".local/share/jipandan")
-            upload_dir = base / "uploads"
-        self.upload_dir = upload_dir
+        self._clip_dir_override = clip_dir.expanduser().resolve() if clip_dir else None
+        self.upload_dir = (upload_dir or self.paths.uploads_dir).expanduser().resolve()
         self._undo: list[tuple[str, dict[str, ClipCandidate], str | None]] = []
         self._waveforms = WaveformCache()
         self._leading_silence_job: dict[str, object] | None = None
-        self._previews = PreviewJobs((preview_dir or Path("tmp/web-previews")).resolve())
+        self._previews = PreviewJobs((preview_dir or self.paths.preview_dir).expanduser().resolve())
         self._transcriptions = TranscriptionJobs(
-            (transcription_dir or Path("tmp/web-transcriptions")).resolve(),
+            (transcription_dir or self.paths.transcription_dir).expanduser().resolve(),
             self._publish_transcription,
+            log_root=self.paths.transcription_log_dir,
         )
+
+    @property
+    def default_clip_dir(self) -> Path:
+        if self._clip_dir_override is not None:
+            return self._clip_dir_override
+        if self.audio is not None:
+            return self._new_session_clip_dir(self.audio)
+        return self.paths.fallback_export_dir.resolve()
+
+    def _new_session_clip_dir(self, audio: Path) -> Path:
+        if self._clip_dir_override is not None:
+            return self._clip_dir_override
+        return default_export_dir(audio, paths=self.paths)
 
     def start_transcription(self, audio: str, settings: dict) -> dict:
         with self._lock:
@@ -149,7 +163,7 @@ class SessionService:
                     target.flush()
                     os.fsync(target.fileno())
                 os.link(staged, destination)
-                session = Session.from_srt(job.audio, destination, self.default_clip_dir)
+                session = Session.from_srt(job.audio, destination, self._new_session_clip_dir(job.audio))
                 session.save()
             finally:
                 staged.unlink(missing_ok=True)
@@ -469,7 +483,7 @@ class SessionService:
             session.audio = resolved
             session.srt = srt
         elif srt.exists():
-            session = Session.from_srt(resolved, srt, self.default_clip_dir)
+            session = Session.from_srt(resolved, srt, self._new_session_clip_dir(resolved))
             session.save()
         else:
             session = None

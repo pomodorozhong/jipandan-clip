@@ -7,6 +7,7 @@ import argparse
 import shutil
 import statistics
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -244,8 +245,7 @@ def main(argv: list[str] | None = None) -> int:
     session.audio = audio
     candidates = stratified_sample(session.candidates, args.sample_size)
 
-    cache_root = Path("tmp/benchmark-waveform")
-    cache_root.mkdir(parents=True, exist_ok=True)
+    cache_root = Path(tempfile.mkdtemp(prefix="jipandan-benchmark-waveform-"))
 
     service = WaveformService(session, cache_root, schedule=_noop_schedule)
 

@@ -13,6 +13,7 @@ from textual.widgets import Footer, Header, Input, ListView, Tab, Tabs
 from jipandan.core import ffmpeg
 from jipandan.core.models import ClipCandidate, ClipStatus, Session
 from jipandan.core.ffmpeg import ExportOptions
+from jipandan.core.paths import waveform_cache_dir
 from jipandan.tui.clip_list import (
     ClipListController,
     ClipListItem,
@@ -138,9 +139,7 @@ class ReviewScreen(Screen):
             on_selection_changed=self._on_clip_selection_changed,
             on_list_state_changed=self._refresh_status_bars,
         )
-        self._waveform_cache_dir = (
-            Path("tmp") / "waveform" / session.audio.stem
-        )
+        self._waveform_cache_dir = waveform_cache_dir(session.audio)
         self._waveform_service: WaveformService | None = None
         self._skip_undo_stack: list[tuple[str, ClipStatus]] = []
         self._waveform_bulk_progress: str | None = None

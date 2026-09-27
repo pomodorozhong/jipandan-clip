@@ -31,6 +31,7 @@ class TranscriptionJob:
     created_at: float = field(default_factory=time.time)
     started_at: float | None = None
     finished_at: float | None = None
+    log_directory: Path | None = None
 
     @property
     def output(self) -> Path:
@@ -38,7 +39,7 @@ class TranscriptionJob:
 
     @property
     def log(self) -> Path:
-        return self.directory / "run.log"
+        return (self.log_directory or self.directory) / "run.log"
 
     def payload(self) -> dict:
         return {
@@ -64,8 +65,15 @@ class TranscriptionJob:
 
 
 class TranscriptionJobs:
-    def __init__(self, root: Path, publish: Callable[[TranscriptionJob], int]) -> None:
-        self.root = root
+    def __init__(
+        self,
+        root: Path,
+        publish: Callable[[TranscriptionJob], int],
+        *,
+        log_root: Path | None = None,
+    ) -> None:
+        self.root = root.resolve()
+        self.log_root = (log_root or root).resolve()
         self._publish = publish
         self._jobs: dict[str, TranscriptionJob] = {}
         self._processes: dict[str, subprocess.Popen] = {}
@@ -91,6 +99,7 @@ class TranscriptionJobs:
                 job = TranscriptionJob(
                     id=data["id"], audio=Path(data["audio"]), settings=data["settings"],
                     directory=path.parent, state=data["state"], phase=data["phase"],
+                    log_directory=self._log_directory_for(path.parent, data["id"]),
                     error=data.get("error"), entry_count=data.get("entry_count"),
                     created_at=data["created_at"], started_at=data.get("started_at"),
                     finished_at=data.get("finished_at"),
@@ -123,7 +132,10 @@ class TranscriptionJobs:
                    for job in self._jobs.values()):
                 raise ValueError("A transcription is already running for this audio")
             job_id = uuid.uuid4().hex
-            job = TranscriptionJob(job_id, audio, settings, self.root / job_id)
+            job = TranscriptionJob(
+                job_id, audio, settings, self.root / job_id,
+                log_directory=self.log_root / job_id,
+            )
             self._write(job)
             self._jobs[job_id] = job
             self._executor.submit(self._run, job)
@@ -150,6 +162,7 @@ class TranscriptionJobs:
     def _run_process(self, job: TranscriptionJob) -> int:
         settings_path = job.directory / "settings.json"
         settings_path.write_text(json.dumps(job.settings), encoding="utf-8")
+        job.log.parent.mkdir(parents=True, exist_ok=True)
         with job.log.open("w", encoding="utf-8") as log:
             started = datetime.now(timezone.utc).isoformat(timespec="seconds")
             print(f"[{started}] Transcription job {job.id} started", file=log, flush=True)
@@ -235,3 +248,12 @@ class TranscriptionJobs:
         for job_id in active:
             self.cancel(job_id)
         self._executor.shutdown(wait=False, cancel_futures=True)
+
+    def _log_directory_for(self, job_directory: Path, job_id: str) -> Path:
+        """Keep logs from new jobs separate while reading legacy in-job logs."""
+
+        legacy_log = job_directory / "run.log"
+        selected = self.log_root / job_id
+        if self.log_root != self.root and legacy_log.exists() and not selected.exists():
+            return job_directory
+        return selected
