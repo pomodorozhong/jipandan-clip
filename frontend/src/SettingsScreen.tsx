@@ -1,7 +1,11 @@
+import GamepadControls from "./GamepadControls";
+import type { GamepadStatus } from "./gamepad";
+
 export default function SettingsScreen({ detectLeadingSilence, showOriginalStart,
-  onDetectLeadingSilenceChange, onShowOriginalStartChange }: {
+  gamepadStatus, onDetectLeadingSilenceChange, onShowOriginalStartChange }: {
   detectLeadingSilence: boolean;
   showOriginalStart: boolean;
+  gamepadStatus: GamepadStatus;
   onDetectLeadingSilenceChange: (enabled: boolean) => void;
   onShowOriginalStartChange: (enabled: boolean) => void;
 }) {
@@ -26,5 +30,6 @@ export default function SettingsScreen({ detectLeadingSilence, showOriginalStart
         </span>
       </label>
     </section>
+    <GamepadControls status={gamepadStatus} />
   </div>;
 }

@@ -4,6 +4,13 @@ import WaveformEditor from "./WaveformEditor";
 import ExportPreview from "./ExportPreview";
 import TranscriptionScreen from "./TranscriptionScreen";
 import SettingsScreen from "./SettingsScreen";
+import GamepadControls from "./GamepadControls";
+import {
+  createGamepadAdapter,
+  initialGamepadStatus,
+  type GamepadActionRequest,
+  type GamepadStatus,
+} from "./gamepad";
 import {
   deactivateTextEditingTarget,
   getInputContext,
@@ -12,6 +19,7 @@ import {
   keyboardInputFromEvent,
   resolveKeyboardAction,
   shouldDispatchAction,
+  type InputAvailability,
   type InputAction,
 } from "./inputActions";
 
@@ -148,6 +156,10 @@ export default function App() {
   const [showExportModal, setShowExportModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
+  const [gamepadActionRequest, setGamepadActionRequest] = useState<GamepadActionRequest | null>(null);
+  const [gamepadStatus, setGamepadStatus] = useState<GamepadStatus>(() => initialGamepadStatus(
+    typeof navigator !== "undefined" && typeof navigator.getGamepads === "function",
+  ));
   const [leadingSilenceJob, setLeadingSilenceJob] = useState<LeadingSilenceJob | null>(null);
   const [dismissedDetectionJobId, setDismissedDetectionJobId] = useState<string | null>(null);
   const autoDetectionRequest = useRef<string | null>(null);
@@ -158,6 +170,11 @@ export default function App() {
   const clipMenuRef = useRef<HTMLDivElement>(null);
   const detailScrollRef = useRef<HTMLDivElement>(null);
   const clipListRef = useRef<HTMLDivElement>(null);
+  const gamepadActionIdRef = useRef(0);
+  const gamepadDispatchRef = useRef<{
+    dispatch: (action: InputAction) => void;
+    availability: InputAvailability;
+  } | null>(null);
 
   useEffect(() => installCompositionTracking(), []);
 
@@ -406,6 +423,43 @@ export default function App() {
     }
   }, [reviewContext, busy, selected, session, effectiveSelectedId, moveSelection, patchSelected,
     undo, duplicateSelected]);
+
+  gamepadDispatchRef.current = {
+    dispatch: (action) => {
+      if (action.type === "playback" && action.target === "clip" && effectiveSelectedId) {
+        gamepadActionIdRef.current += 1;
+        setGamepadActionRequest({ id: gamepadActionIdRef.current, clipId: effectiveSelectedId, action });
+      } else {
+        dispatchReviewAction(action);
+      }
+    },
+    availability: {
+      context: reviewContext,
+      busy,
+      hasSelection: Boolean(selected),
+      canMutate: Boolean(session && session.revision !== null && !busy),
+      canUndo: Boolean(session?.can_undo && session.revision !== null),
+      canDuplicate: Boolean(session && session.revision !== null && effectiveSelectedId),
+    },
+  };
+
+  useEffect(() => {
+    const hasGamepadApi = typeof navigator !== "undefined" && typeof navigator.getGamepads === "function";
+    const adapter = createGamepadAdapter({
+      getGamepads: hasGamepadApi ? () => navigator.getGamepads() : undefined,
+      getContext: () => gamepadDispatchRef.current?.availability.context ?? "review",
+      onAction: (action) => {
+        const current = gamepadDispatchRef.current;
+        if (!current || !isActionAvailable(action, current.availability)) return;
+        current.dispatch(action);
+      },
+      onStatusChange: setGamepadStatus,
+    });
+    adapter.start();
+    return () => {
+      adapter.stop();
+    };
+  }, []);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -760,6 +814,8 @@ export default function App() {
               </div>
               <WaveformEditor key={selected.clip_id} clip={selected}
                 durationMs={session.duration_ms ?? selected.end_ms} audioSrc={audioUrl()} busy={busy}
+                gamepadAction={gamepadActionRequest}
+                onGamepadActionHandled={(id) => setGamepadActionRequest((current) => current?.id === id ? null : current)}
                 shortcutsPaused={showHelp || showJump || showMerge || showExportModal || showSettings || editingTitle}
                 detectLeadingSilence={settings.detectLeadingSilence}
                 showOriginalStart={settings.showOriginalStart}
@@ -798,6 +854,7 @@ export default function App() {
     {showSettings && <Dialog title="Settings" onClose={() => setShowSettings(false)}>
       <SettingsScreen detectLeadingSilence={settings.detectLeadingSilence}
         showOriginalStart={settings.showOriginalStart}
+        gamepadStatus={gamepadStatus}
         onDetectLeadingSilenceChange={(enabled) => setSettings((current) => ({ ...current, detectLeadingSilence: enabled }))}
         onShowOriginalStartChange={(enabled) => setSettings((current) => ({ ...current, showOriginalStart: enabled }))} />
     </Dialog>}
@@ -848,6 +905,7 @@ export default function App() {
           </div>)}
       </div>
       <p className="subtle mt-5 text-xs">Review shortcuts pause while you type. Letter and number shortcuts follow their physical US-QWERTY key positions, so a non-QWERTY layout may show different printed characters. Enter and ⌘ Enter work in the export preview when focus is outside an editable field.</p>
+      <GamepadControls status={gamepadStatus} />
     </Dialog>}
   </div>;
 }
