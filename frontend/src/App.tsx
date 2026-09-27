@@ -242,6 +242,7 @@ export default function App() {
   const detailScrollRef = useRef<HTMLDivElement>(null);
   const clipListRef = useRef<HTMLDivElement>(null);
   const gamepadActionIdRef = useRef(0);
+  const gamepadCaptureActiveRef = useRef(false);
   const dialogControllerHandlerRef = useRef<((action: InputAction) => void) | null>(null);
   const gamepadDispatchRef = useRef<{
     dispatch: (action: InputAction) => void;
@@ -250,6 +251,9 @@ export default function App() {
   const gamepadBindingConfigRef = useRef(gamepadBindingConfig);
   gamepadBindingConfigRef.current = gamepadBindingConfig;
   const configuredGamepadBindings = useMemo(() => bindingsForGamepadConfig(gamepadBindingConfig), [gamepadBindingConfig]);
+  const setGamepadCaptureActive = useCallback((active: boolean) => {
+    gamepadCaptureActiveRef.current = active;
+  }, []);
 
   useEffect(() => installCompositionTracking(), []);
 
@@ -546,6 +550,7 @@ export default function App() {
     const adapter = createGamepadAdapter({
       getGamepads: hasGamepadApi ? () => navigator.getGamepads() : undefined,
       getBindings: () => bindingsForGamepadConfig(gamepadBindingConfigRef.current),
+      isInputSuppressed: () => gamepadCaptureActiveRef.current,
       getContext: () => gamepadDispatchRef.current?.availability.context ?? "review",
       onAction: (action) => {
         const current = gamepadDispatchRef.current;
@@ -977,7 +982,8 @@ export default function App() {
       onClose={showGamepadMapping ? closeGamepadMapping : closeSettings}>
       {showGamepadMapping
         ? <GamepadMappingScreen initialConfig={gamepadBindingConfig} status={gamepadStatus}
-            onSave={(config) => { setGamepadBindingConfig(config); closeGamepadMapping(); }} onCancel={closeGamepadMapping} />
+            onSave={(config) => { setGamepadBindingConfig(config); closeGamepadMapping(); }} onCancel={closeGamepadMapping}
+            onCaptureChange={setGamepadCaptureActive} />
         : <SettingsScreen detectLeadingSilence={settings.detectLeadingSilence}
             showOriginalStart={settings.showOriginalStart}
             gamepadStatus={gamepadStatus}

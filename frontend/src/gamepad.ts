@@ -199,6 +199,7 @@ type GamepadFrameCallback = (timestamp: number) => void;
 export type GamepadAdapterOptions = {
   getGamepads?: () => readonly (Gamepad | null)[];
   getBindings?: () => readonly GamepadButtonBinding[];
+  isInputSuppressed?: () => boolean;
   onAction: (action: InputAction) => void;
   onStatusChange?: (status: GamepadStatus) => void;
   onInputTypeChange?: (inputType: "keyboard" | "xbox") => void;
@@ -470,6 +471,13 @@ export function createGamepadAdapter(options: GamepadAdapterOptions): GamepadAda
     if (!pageActive) return;
     const active = refreshStatus();
     if (!active) return;
+    if (options.isInputSuppressed?.()) {
+      // Mapping capture reads the same controller directly. Do not let the
+      // control being captured move dialog focus or trigger another action.
+      // Keep every control release-armed until capture is finished.
+      resetInput(true);
+      return;
+    }
 
     const pressed = readGamepadPressedControls(active, previousPressed);
     for (const index of awaitingRelease) {

@@ -32,7 +32,10 @@ function press(gamepad: Gamepad & { buttons: FakeButton[] }, index: number, pres
   gamepad.buttons[index].value = pressed ? 1 : 0;
 }
 
-function createHarness(getBindings?: () => readonly GamepadButtonBinding[]) {
+function createHarness(
+  getBindings?: () => readonly GamepadButtonBinding[],
+  isInputSuppressed?: () => boolean,
+) {
   const gamepads: (Gamepad | null)[] = [];
   const actions: InputAction[] = [];
   const statuses: GamepadStatus[] = [];
@@ -40,6 +43,7 @@ function createHarness(getBindings?: () => readonly GamepadButtonBinding[]) {
   const adapter = createGamepadAdapter({
     getGamepads: () => gamepads,
     getBindings,
+    isInputSuppressed,
     onAction: (action) => actions.push(action),
     onStatusChange: (status) => statuses.push(status),
     onInputTypeChange: (inputType) => inputTypes.push(inputType),
@@ -288,6 +292,29 @@ describe("gamepad adapter", () => {
       { type: "focus-move", direction: "down" },
       { type: "dialog-confirm" },
     ]);
+  });
+
+  it("suppresses held controls while mapping capture is active", () => {
+    let suppressed = false;
+    const { adapter, gamepads, actions } = createHarness(undefined, () => suppressed);
+    const gamepad = fakeGamepad();
+    gamepads.push(gamepad);
+    adapter.poll(0);
+    adapter.setContext("active-dialog");
+
+    suppressed = true;
+    gamepad.axes[0] = 0.8;
+    adapter.poll(1);
+    expect(actions).toHaveLength(0);
+
+    suppressed = false;
+    adapter.poll(2);
+    expect(actions).toHaveLength(0);
+    gamepad.axes[0] = 0;
+    adapter.poll(3);
+    gamepad.axes[0] = 0.8;
+    adapter.poll(4);
+    expect(actions).toEqual([{ type: "focus-move", direction: "right" }]);
   });
 
   it("applies a changed binding only after a fresh release", () => {

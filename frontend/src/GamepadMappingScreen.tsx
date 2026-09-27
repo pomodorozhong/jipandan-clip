@@ -33,11 +33,12 @@ function actionLabel(bindings: ReturnType<typeof bindingsForGamepadConfig>, id: 
   return bindings.find((binding) => binding.id === id)?.actionLabel ?? id;
 }
 
-export default function GamepadMappingScreen({ initialConfig, status, onSave, onCancel }: {
+export default function GamepadMappingScreen({ initialConfig, status, onSave, onCancel, onCaptureChange }: {
   initialConfig: GamepadBindingConfig;
   status: GamepadStatus;
   onSave: (config: GamepadBindingConfig) => void;
   onCancel: () => void;
+  onCaptureChange: (capturing: boolean) => void;
 }) {
   const [draft, setDraft] = useState<GamepadBindingConfig>(() => ({ ...initialConfig }));
   const [capturingId, setCapturingId] = useState<GamepadBindingId | null>(null);
@@ -52,7 +53,10 @@ export default function GamepadMappingScreen({ initialConfig, status, onSave, on
     backButtonRef.current?.focus();
   }, []);
 
+  useEffect(() => () => onCaptureChange(false), [onCaptureChange]);
+
   const capture = useCallback((id: GamepadBindingId, index: number) => {
+    onCaptureChange(false);
     setCapturingId(null);
     setMessage("");
     const conflicting = findGamepadBindingConflict(draft, id, index);
@@ -63,7 +67,7 @@ export default function GamepadMappingScreen({ initialConfig, status, onSave, on
     setConflict(null);
     setDraft((current) => ({ ...current, [id]: index }));
     setMessage(`${actionLabel(bindings, id)} will use ${gamepadControlLabel(index)}.`);
-  }, [bindings, draft]);
+  }, [bindings, draft, onCaptureChange]);
 
   useEffect(() => {
     if (!capturingId || !activeController || !status.pageActive) return;
@@ -100,12 +104,14 @@ export default function GamepadMappingScreen({ initialConfig, status, onSave, on
   }, [activeController?.id, activeController?.index, activeController?.mapping, capture, capturingId, status]);
 
   function beginCapture(id: GamepadBindingId) {
+    onCaptureChange(true);
     setConflict(null);
     setMessage(`Release all controls, then press the control for ${actionLabel(bindings, id)}.`);
     setCapturingId(id);
   }
 
   function cancelCapture() {
+    onCaptureChange(false);
     setCapturingId(null);
     setMessage("");
   }
@@ -122,6 +128,7 @@ export default function GamepadMappingScreen({ initialConfig, status, onSave, on
   }
 
   function resetToDefaults() {
+    onCaptureChange(false);
     setCapturingId(null);
     setConflict(null);
     setDraft(defaultGamepadBindingConfig());
