@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, previewUrl, type Clip, type ExportMode, type PreviewJob, type Session, type WaveformWindow } from "./api";
 import PreviewPlayer, { type PreviewPlayerHandle } from "./PreviewPlayer";
+import { ShortcutBadge } from "./ShortcutBadge";
+import type { GamepadActionRequest } from "./gamepad";
 import {
   deactivateTextEditingTarget,
   isActionAvailable,
+  isTextEditingTarget,
   keyboardInputFromEvent,
   resolveKeyboardAction,
   shouldDispatchAction,
@@ -34,10 +37,14 @@ function peak(waveform: WaveformWindow | null): number {
   return result;
 }
 
-export default function ExportPreview({ clip, revision, open, nextClipId, onClose, onPublished }: {
+export default function ExportPreview({ clip, revision, open, nextClipId, onClose, onPublished,
+  gamepadAction, onGamepadActionHandled, controllerHandlerRef }: {
   clip: Clip; revision: number; open: boolean; onClose: () => void;
   nextClipId: string | null;
   onPublished: (session: Session, advance: boolean) => void;
+  gamepadAction?: GamepadActionRequest | null;
+  onGamepadActionHandled?: (id: number) => void;
+  controllerHandlerRef: React.MutableRefObject<((action: InputAction) => void) | null>;
 }) {
   const [mode, setMode] = useState<ExportMode>("trim_edges");
   const [startDb, setStartDb] = useState("-40");
@@ -58,8 +65,23 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
   const referenceRequestId = useRef(0);
   const referencePlayer = useRef<PreviewPlayerHandle>(null);
   const candidatePlayer = useRef<PreviewPlayerHandle>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+  const handledGamepadAction = useRef<number | null>(null);
+  const previousFocus = useRef<HTMLElement | null>(null);
+  const wasOpen = useRef(false);
 
   useEffect(() => { setTitle(clip.title); }, [clip.clip_id, clip.title]);
+
+  useEffect(() => {
+    if (open && !wasOpen.current) {
+      previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    } else if (!open && wasOpen.current) {
+      const target = previousFocus.current;
+      previousFocus.current = null;
+      if (target) requestAnimationFrame(() => target.focus());
+    }
+    wasOpen.current = open;
+  }, [open]);
 
   useEffect(() => {
     if (!open || !job || (job.state !== "queued" && job.state !== "running")) return;
@@ -157,6 +179,7 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
   }
 
   function dispatchAction(action: InputAction) {
+    if (action.type === "reveal-export" && !outputPath) return;
     const playbackReady = action.type !== "playback" || (
       action.target === "candidate" ? candidateReady : action.target === "reference" ? referenceReady : true
     );
@@ -192,6 +215,55 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
         break;
     }
   }
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (action: InputAction) => {
+      const root = dialogRef.current;
+      if (!root) return;
+      if (action.type === "dialog-back" || action.type === "dialog-close") {
+        const active = document.activeElement;
+        if (active instanceof HTMLElement && root.contains(active) && isTextEditingTarget(active)) {
+          active.blur();
+          return;
+        }
+        onClose();
+        return;
+      }
+      const focusable = Array.from(root.querySelectorAll<HTMLElement>(
+        "button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])",
+      )).filter((element) => !element.hidden && element.getClientRects().length > 0);
+      if (action.type === "dialog-confirm") {
+        const active = document.activeElement;
+        const target = active instanceof HTMLElement && root.contains(active) ? active : focusable[0];
+        if (target instanceof HTMLButtonElement) target.click();
+      } else if (action.type === "focus-move" && focusable.length > 0) {
+        const currentIndex = Math.max(0, focusable.findIndex((element) => element === document.activeElement));
+        const delta = action.direction === "up" || action.direction === "left" ? -1 : 1;
+        focusable[(currentIndex + delta + focusable.length) % focusable.length]?.focus();
+      }
+    };
+    controllerHandlerRef.current = handler;
+    requestAnimationFrame(() => {
+      const first = dialogRef.current?.querySelector<HTMLElement>(
+        "button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)",
+      );
+      first?.focus();
+    });
+    return () => {
+      if (controllerHandlerRef.current === handler) controllerHandlerRef.current = null;
+    };
+  }, [controllerHandlerRef, onClose, open]);
+
+  useEffect(() => {
+    if (!open || !gamepadAction || handledGamepadAction.current === gamepadAction.id) return;
+    const action = gamepadAction.action;
+    if (!(action.type === "export" || action.type === "export-mode" || action.type === "reveal-export" ||
+        (action.type === "playback" && (action.target === "candidate" || action.target === "reference")))) return;
+    handledGamepadAction.current = gamepadAction.id;
+    dispatchAction(action);
+    onGamepadActionHandled?.(gamepadAction.id);
+  }, [gamepadAction, onGamepadActionHandled, open, candidateReady, referenceReady, exporting, requesting, nextClipId]);
 
   useEffect(() => {
     if (!open) {
@@ -301,7 +373,7 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
 
   return <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#07100be0] p-2 sm:p-5"
     role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <section role="dialog" aria-modal="true" aria-label={`Export preview for clip ${clip.clip_id}`}
+    <section ref={dialogRef} role="dialog" aria-modal="true" aria-label={`Export preview for clip ${clip.clip_id}`} tabIndex={-1}
       className="surface panel-scroll flex max-h-[95dvh] w-full max-w-[1100px] flex-col overflow-y-auto rounded-2xl shadow-2xl">
       <header className="flex items-center justify-between gap-4 border-b line px-4 py-4 sm:px-7">
         <div className="min-w-0">
@@ -312,7 +384,7 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
           <span className="subtle hidden text-xs sm:block">Compare the original clip with your export</span>
           <button type="button" onClick={() => dispatchAction({ type: "dialog-close" })} aria-label="Close export preview (Esc)"
             className="subtle inline-flex items-center gap-1.5 rounded-lg px-1 py-1 text-xl hover:bg-[#283b30]">
-            <span aria-hidden="true">×</span><kbd aria-hidden="true" className="shortcut-key text-xs">Esc</kbd>
+            <span aria-hidden="true">×</span><ShortcutBadge keyboard="Esc" bindingId="dialog-close" />
           </button>
         </div>
       </header>
@@ -325,7 +397,7 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
               aria-pressed={mode === item.value}
               className={`inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-xs font-semibold ${mode === item.value
                 ? "bg-[#c5dda9] text-[#1f3021]" : "subtle hover:bg-[#304538] hover:text-white"}`}>
-              <span>{item.label}</span><kbd aria-hidden="true" className="shortcut-key">{item.key}</kbd>
+              <span>{item.label}</span><ShortcutBadge keyboard={item.key} bindingId={`export-mode-${item.value === "as_is" ? "as-is" : item.value === "trim_edges" ? "trim-edges" : "trim-all"}`} />
             </button>)}
           </div>
           <p className="subtle text-xs">{descriptions[mode]}</p>
@@ -371,7 +443,7 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
             note="Includes the original edges and pauses" startMs={0} endMs={referenceDuration}
             waveform={referenceReady ? referenceJob?.waveform ?? null : null} sharedPeak={sharedPeak}
             src={referenceReady ? previewUrl(referenceJob!.id) : undefined} placeholder={referencePlaceholder}
-            playShortcut="⇧Q" replayShortcut="Q" onActivate={() => candidatePlayer.current?.pause()}
+            playShortcut="⇧Q" replayShortcut="Q" playShortcutId="reference-play-pause" replayShortcutId="reference-replay" onActivate={() => candidatePlayer.current?.pause()}
             onAction={dispatchAction} />
           {(referenceError || referenceJob?.state === "failed") && <div role="alert" className="flex flex-wrap items-center gap-2 text-xs text-[#ffb3a8]">
             <span>{referenceError || `Reference render failed: ${referenceJob?.error ?? "Unknown error"}`}</span>
@@ -386,7 +458,7 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
               : "Updates automatically when settings change"}
             startMs={0} endMs={candidateDuration} waveform={waveformReady ? job?.waveform ?? null : null}
             sharedPeak={sharedPeak} src={waveformReady ? previewUrl(job!.id) : undefined}
-            placeholder={candidatePlaceholder} playShortcut="⇧Space" replayShortcut="Space"
+            placeholder={candidatePlaceholder} playShortcut="⇧Space" replayShortcut="Space" playShortcutId="candidate-play-pause" replayShortcutId="candidate-replay"
             onActivate={() => referencePlayer.current?.pause()} onAction={dispatchAction} />
           {job?.state === "failed" && !stale && <p role="alert" className="text-xs text-[#ffb3a8]">Render failed: {job.error}. Adjust the settings to retry.</p>}
         </div>
@@ -411,12 +483,12 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
             className="rounded-lg border line px-4 py-2 text-sm font-semibold">Reveal file</button>}
           <button type="button" onClick={() => dispatchAction({ type: "export", advance: false })} disabled={!candidateReady || exporting || requesting}
             className="rounded-lg border line px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50">
-            Export <kbd aria-hidden="true" className="shortcut-key ml-2">Enter</kbd></button>
+            Export <ShortcutBadge keyboard="Enter" bindingId="export" /></button>
           <button type="button" onClick={() => dispatchAction({ type: "export", advance: true })} disabled={!candidateReady || exporting || requesting || !nextClipId}
             title={nextClipId ? "Export and open the next clip (Command+Enter)" : "No next clip in this view"}
             className="rounded-lg bg-[#b7d69d] px-4 py-2 text-sm font-semibold text-[#1d2d20] disabled:cursor-not-allowed disabled:opacity-50">
             {exporting ? "Exporting…" : "Export & Next"}
-            <kbd aria-hidden="true" className="shortcut-key ml-2">⌘ Enter</kbd>
+            <ShortcutBadge keyboard="⌘ Enter" bindingId="export-next" />
           </button>
         </div>
       </footer>

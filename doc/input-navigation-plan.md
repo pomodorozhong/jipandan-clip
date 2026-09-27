@@ -1,6 +1,6 @@
 # Browser input navigation plan
 
-Status: implementation in progress. Issues #7 and #8 are complete; the gamepad controls and controller mapping remain proposals until validated.
+Status: implementation is complete and PR #18 is ready for review. Issues #7 and #8 are complete, #9 landed in PR #17, and PR #18 consolidates the configurable mapping, trimming, dialog/export, and shortcut-badge work. Automated checks pass; real-controller and IME validation remain reviewer follow-up items.
 
 ## Outcome and scope
 
@@ -63,7 +63,11 @@ Export must require a fresh confirmation press after opening its dialog. Renderi
 
 ## Gamepad mapping settings
 
-After the core review controls in #9, add a **Gamepad mapping** screen opened from the existing Settings screen. Make the available review actions configurable early so the controller can be adjusted for comfort during real-device testing. Show the active controller and the current bindings for each implemented action. Let the user capture a control for an action, detect conflicting assignments, reset to the validated defaults, and save or cancel changes. Add trimming bindings with #10 and dialog/export bindings with #11 as those actions become available. Store preferences in this browser alongside the existing UI settings; application-level storage belongs to the separate storage follow-up only if a later requirement calls for it.
+After the core review controls in #9, add a **Gamepad mapping** screen opened from the existing Settings screen. Drive its rows from the shared shortcut/action registry so every keyboard-shortcut action across review, waveform, dialogs, and export appears automatically when registered; future shortcuts must not require a second hand-maintained mapping list. Include controller-only trim actions needed for boundary selection and individual fine/coarse nudges, while standard dialog focus navigation remains contextual rather than configurable.
+
+Show the active controller and current bindings. Let the user capture a control for an action, detect conflicts only when actions can overlap in the same context, reset to the six validated defaults, and save or cancel changes. New actions are unbound until explicitly configured. Persist nullable bindings safely, ignore obsolete entries, and preserve the standard-mapping requirement and unsupported-mapping guidance. Store preferences in this browser alongside the existing UI settings; application-level storage belongs to the separate storage follow-up only if a later requirement calls for it.
+
+Use dependency-free inline SVG Xbox controls for controller badges and mapping labels, with accessible text labels retained for assistive technology.
 
 The gamepad adapter must use the configured bindings without changing action availability, repeat rules, or dialog priority. Keep the standard-mapping requirement and unsupported-mapping guidance until nonstandard layouts are designed and validated separately. Prevent a control press used to open the screen or capture a binding from triggering a review action. Restore appropriate focus when leaving the mapping screen.
 
@@ -75,14 +79,16 @@ Each issue is intended to become one focused implementation PR. Update the split
 | --- | --- | --- | --- | --- |
 | 1 | [#7 Shared actions and contexts](https://github.com/pomodorozhong/jipandan-clip/issues/7) | None | Existing browser behavior preserved; dialog priority, editing guards, and repeat rules covered. | [#13](https://github.com/pomodorozhong/jipandan-clip/pull/13) (merged) |
 | 2 | [#8 IME-friendly navigation](https://github.com/pomodorozhong/jipandan-clip/issues/8) | #7 | Owner's agreed IME/browser combinations navigate without switching language; candidate confirmation/cancellation does not trigger unrelated actions. | [#14](https://github.com/pomodorozhong/jipandan-clip/pull/14) (merged) |
-| 3 | [#9 Gamepad foundation and review](https://github.com/pomodorozhong/jipandan-clip/issues/9) | #7 | Browse, replay, and classify on a real controller; disconnect/focus/context transitions cannot produce stale actions. | Not opened |
-| 4 | [#15 Gamepad mapping settings](https://github.com/pomodorozhong/jipandan-clip/issues/15) | #9 | Open from Settings; inspect, change, save, and reset bindings for available review actions. Conflicts and held/captured presses are handled safely. | Not opened |
-| 5 | [#10 Gamepad trimming](https://github.com/pomodorozhong/jipandan-clip/issues/10) | #9, #15 | Accurate start/end edits with visible step/boundary; add trim actions to mapping settings; held input cannot leak into another clip or conflict with saves. | Not opened |
-| 6 | [#11 Gamepad dialogs and export](https://github.com/pomodorozhong/jipandan-clip/issues/11) | #9, #15 | Reach enabled dialog controls, compare previews, export once per fresh press, and restore focus; add dialog/export actions to mapping settings. | Not opened |
+| 3 | [#9 Gamepad foundation and review](https://github.com/pomodorozhong/jipandan-clip/issues/9) | #7 | Browse, replay, and classify on a real controller; disconnect/focus/context transitions cannot produce stale actions. | [#17](https://github.com/pomodorozhong/jipandan-clip/pull/17) (merged) |
+| 4 | [#15 Gamepad mapping settings](https://github.com/pomodorozhong/jipandan-clip/issues/15) | #9 | Open from Settings; inspect, change, save, and reset registry-driven bindings, including nullable future actions. Conflicts and held/captured presses are handled safely. | [#18](https://github.com/pomodorozhong/jipandan-clip/pull/18) (ready for review) |
+| 5 | [#10 Gamepad trimming](https://github.com/pomodorozhong/jipandan-clip/issues/10) | #9, #15 | Accurate start/end edits with visible step/boundary; individual trim actions appear in mapping settings; held input cannot leak into another clip or conflict with saves. | [#18](https://github.com/pomodorozhong/jipandan-clip/pull/18) (ready for review) |
+| 6 | [#11 Gamepad dialogs and export](https://github.com/pomodorozhong/jipandan-clip/issues/11) | #9, #15 | Reach enabled dialog controls with visible focus, compare previews, export once per fresh press, and restore focus; dialog/export actions appear in mapping settings. | [#18](https://github.com/pomodorozhong/jipandan-clip/pull/18) (ready for review) |
+| 7 | [#19 Expose all keyboard shortcuts through gamepad mapping settings](https://github.com/pomodorozhong/jipandan-clip/issues/19) | #15, #10, #11 | A shared registry drives keyboard resolution, help, badges, and mapping rows; adding a shortcut makes it appear without per-screen setup. | [#18](https://github.com/pomodorozhong/jipandan-clip/pull/18) (ready for review) |
+| 8 | [#20 Add input-aware keyboard/Xbox shortcut badges](https://github.com/pomodorozhong/jipandan-clip/issues/20) | #15 | Inline Xbox icons, last-input-aware display, auto/keyboard/Xbox preference, and configurable handling for unbound badges. | [#18](https://github.com/pomodorozhong/jipandan-clip/pull/18) (ready for review) |
 
-Recommended landing order: **#7 → #8 → #9 → #15 → #10/#11**. Issues #8 and #9 can proceed independently after #7; #10 and #11 can proceed independently after #15. Mapping review actions before trimming and export lets the owner tune controls while testing those later features. Full workflow acceptance waits for all six issues. The initial IME probe is investigation within this work, not an additional PR.
+Recommended landing order: **#7 → #8 → #9 → #15 → #10/#11 plus the two follow-up issues**, consolidated in PR #18 because they share one action registry, binding model, input-mode state, and controller lifecycle. Full workflow acceptance waits for the mapping, trimming, dialog/export, and badge behavior in that PR. The initial IME probe is investigation within this work, not an additional PR.
 
-Implementation PRs should close their respective issues only when their acceptance criteria are met. The planning PR references the issues without closing them. Repository cleanup is a separate PR: [#6](https://github.com/pomodorozhong/jipandan-clip/pull/6).
+PR #18 should close #15, #10, #11, and the two follow-up issues only after their acceptance criteria are met. The plan document is updated before implementation and again after the follow-up issue links are created. Repository cleanup is a separate PR: [#6](https://github.com/pomodorozhong/jipandan-clip/pull/6).
 
 ## Validation
 
@@ -91,9 +97,22 @@ Implementation PRs should close their respective issues only when their acceptan
 - Exercise real IME candidate entry/confirmation/cancellation on the agreed browser combinations. Record versions, observations, and limitations in the implementing PR.
 - Exercise the actual controller, including held buttons, unplug/reconnect, background/foreground changes, and unsupported mappings. Record device, transport, and browser.
 - For mapping settings, verify capture and conflict handling, reset, persistence across reload, dialog focus, and that changed bindings still obey hold-repeat and action-availability rules.
+- Verify that every registered keyboard shortcut appears in help, button badges, and mapping settings without duplicated per-screen setup. Verify six existing defaults, nullable/unbound future actions, safe context reuse, and obsolete stored values.
+- Verify inline Xbox icons, automatic keyboard/Xbox switching, forced badge modes, hidden unbound badges, and keyboard fallback for unbound actions.
 - Validate the final session on disposable data: navigate, replay, classify, trim, rename with IME, export, reload, and compare saved bounds/output with what was reviewed.
 
-## Decisions to settle during implementation
+## Locked implementation decisions
+
+- One shared shortcut/action registry drives keyboard resolution, help, button badges, and gamepad mapping rows.
+- The six existing gamepad defaults remain unchanged. New actions are unbound until the user captures them.
+- Bindings may be reused across non-overlapping contexts; conflicts are rejected only when actions can run together.
+- Trim uses individual boundary-selection and fine/coarse actions, not modifier chords. The active boundary and step remain visible.
+- Dialog navigation uses standard controller conventions: D-pad/left stick moves focus, A confirms, and B backs out. These navigation primitives are contextual rather than configurable rows.
+- Xbox visuals use inline SVG icons with accessible text labels.
+- Badge modes are `auto`, `keyboard`, and `xbox`. Auto starts with Xbox when a standard controller is connected, switches to keyboard after meaningful keyboard input, and returns to Xbox after controller input.
+- Unbound badges are hidden by default, with a Settings option to fall back to the keyboard badge.
+
+## Decisions to settle during validation
 
 - Initial OS/browser/IME coverage, based on the owner's setup and the event probe.
 - Initial controller and browser coverage; physical button labels and confirm/back conventions.

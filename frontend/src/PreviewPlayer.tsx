@@ -1,6 +1,7 @@
 import { forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from "react";
 import type { WaveformWindow } from "./api";
 import type { InputAction } from "./inputActions";
+import { ShortcutBadge } from "./ShortcutBadge";
 
 export interface PreviewPlayerHandle {
   toggle(): void;
@@ -23,6 +24,8 @@ type Props = {
   placeholder: string;
   playShortcut: string;
   replayShortcut: string;
+  playShortcutId: string;
+  replayShortcutId: string;
   onActivate(): void;
   onAction(action: InputAction): void;
 };
@@ -76,7 +79,7 @@ function clock(ms: number): string {
 
 const PreviewPlayer = forwardRef<PreviewPlayerHandle, Props>(function PreviewPlayer({
   variant, eyebrow, title, durationLabel, durationText, note, startMs, endMs,
-  waveform, sharedPeak, src, placeholder, playShortcut, replayShortcut, onActivate, onAction,
+  waveform, sharedPeak, src, placeholder, playShortcut, replayShortcut, playShortcutId, replayShortcutId, onActivate, onAction,
 }, ref) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const maskId = useId();
@@ -187,7 +190,7 @@ const PreviewPlayer = forwardRef<PreviewPlayerHandle, Props>(function PreviewPla
           className={`inline-flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-semibold disabled:opacity-45 ${reference
             ? "bg-[#b8dbe6] text-[#1d3038]" : "bg-[#c9e5a6] text-[#1d3020]"}`}>
           <span aria-hidden="true">{playing ? "Ⅱ" : "▶"}</span><span>{playing ? "Pause" : "Play"}</span>
-          <kbd aria-hidden="true" className="shortcut-key">{playShortcut}</kbd>
+          <ShortcutBadge keyboard={playShortcut} bindingId={playShortcutId} />
         </button>
         <button type="button" disabled={!ready} onClick={() => onAction({
           type: "playback", target: reference ? "reference" : "candidate", mode: "replay",
@@ -196,7 +199,7 @@ const PreviewPlayer = forwardRef<PreviewPlayerHandle, Props>(function PreviewPla
           className={`inline-flex min-w-0 flex-1 items-center justify-center gap-1 rounded-lg px-2 py-2 text-xs font-semibold disabled:opacity-45 ${reference
             ? "bg-[#344c55]" : "bg-[#38563c]"}`}>
           <span aria-hidden="true">↺</span><span>Replay</span>
-          <kbd aria-hidden="true" className="shortcut-key">{replayShortcut}</kbd>
+          <ShortcutBadge keyboard={replayShortcut} bindingId={replayShortcutId} />
         </button>
       </div>
       <p className="mono mt-2 text-xs font-semibold">{clock(positionMs - startMs)} <span className="subtle font-normal">/ {clock(durationMs)}</span></p>
