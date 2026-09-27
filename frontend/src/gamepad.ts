@@ -9,12 +9,21 @@ import {
 } from "./inputActions";
 
 export const GAMEPAD_REPEAT_DELAY_MS = 400;
+export const GAMEPAD_REPEAT_DELAY_MIN_MS = 100;
+export const GAMEPAD_REPEAT_DELAY_MAX_MS = 1000;
+export const GAMEPAD_REPEAT_DELAY_STEP_MS = 50;
 export const GAMEPAD_REPEAT_INTERVAL_MS = 120;
 export const GAMEPAD_BINDINGS_STORAGE_KEY = "jipandan-gamepad-bindings";
 export const GAMEPAD_BINDINGS_STORAGE_VERSION = 2;
 
 export const GAMEPAD_BINDING_IDS = SHORTCUT_DEFINITIONS.map((definition) => definition.id) as readonly ShortcutId[];
 export type GamepadBindingId = ShortcutId;
+
+export function normalizeGamepadRepeatDelay(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return GAMEPAD_REPEAT_DELAY_MS;
+  const stepped = Math.round(value / GAMEPAD_REPEAT_DELAY_STEP_MS) * GAMEPAD_REPEAT_DELAY_STEP_MS;
+  return Math.max(GAMEPAD_REPEAT_DELAY_MIN_MS, Math.min(GAMEPAD_REPEAT_DELAY_MAX_MS, stepped));
+}
 
 // These labels follow the button indexes exposed by the browser's standard
 // mapping. Stick directions use virtual indexes so they can share the same
@@ -199,6 +208,7 @@ type GamepadFrameCallback = (timestamp: number) => void;
 export type GamepadAdapterOptions = {
   getGamepads?: () => readonly (Gamepad | null)[];
   getBindings?: () => readonly GamepadButtonBinding[];
+  getRepeatDelayMs?: () => number;
   isInputSuppressed?: () => boolean;
   onAction: (action: InputAction) => void;
   onStatusChange?: (status: GamepadStatus) => void;
@@ -504,7 +514,7 @@ export function createGamepadAdapter(options: GamepadAdapterOptions): GamepadAda
         if (actionRepeatPolicy(action) === "repeat") {
           repeatStates.set(index, {
             action,
-            nextAt: timestamp + GAMEPAD_REPEAT_DELAY_MS,
+            nextAt: timestamp + normalizeGamepadRepeatDelay(options.getRepeatDelayMs?.()),
           });
         }
       } else {

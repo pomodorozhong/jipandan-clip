@@ -7,6 +7,7 @@ import {
   GAMEPAD_REPEAT_DELAY_MS,
   initialGamepadStatus,
   loadGamepadBindingConfig,
+  normalizeGamepadRepeatDelay,
   saveGamepadBindingConfig,
   type GamepadBindingConfig,
   type GamepadButtonBinding,
@@ -35,6 +36,7 @@ function press(gamepad: Gamepad & { buttons: FakeButton[] }, index: number, pres
 function createHarness(
   getBindings?: () => readonly GamepadButtonBinding[],
   isInputSuppressed?: () => boolean,
+  getRepeatDelayMs?: () => number,
 ) {
   const gamepads: (Gamepad | null)[] = [];
   const actions: InputAction[] = [];
@@ -44,6 +46,7 @@ function createHarness(
     getGamepads: () => gamepads,
     getBindings,
     isInputSuppressed,
+    getRepeatDelayMs,
     onAction: (action) => actions.push(action),
     onStatusChange: (status) => statuses.push(status),
     onInputTypeChange: (inputType) => inputTypes.push(inputType),
@@ -119,6 +122,23 @@ describe("gamepad adapter", () => {
     adapter.poll(601);
     adapter.poll(1200);
     expect(actions.filter((action) => action.type === "classify")).toHaveLength(1);
+  });
+
+  it("uses the configured controller debounce delay", () => {
+    expect(normalizeGamepadRepeatDelay(25)).toBe(100);
+    expect(normalizeGamepadRepeatDelay(625)).toBe(650);
+    expect(normalizeGamepadRepeatDelay(2000)).toBe(1000);
+
+    const { adapter, gamepads, actions } = createHarness(undefined, undefined, () => 650);
+    const gamepad = fakeGamepad();
+    gamepads.push(gamepad);
+    adapter.poll(0);
+    press(gamepad, 13, true);
+    adapter.poll(1);
+    adapter.poll(650);
+    expect(actions).toHaveLength(1);
+    adapter.poll(651);
+    expect(actions).toHaveLength(2);
   });
 
   it("requires release after a context transition", () => {

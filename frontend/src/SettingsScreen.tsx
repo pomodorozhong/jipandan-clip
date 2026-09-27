@@ -1,12 +1,19 @@
 import type { Ref } from "react";
 import GamepadControls from "./GamepadControls";
-import type { GamepadButtonBinding, GamepadStatus } from "./gamepad";
+import {
+  GAMEPAD_REPEAT_DELAY_MAX_MS,
+  GAMEPAD_REPEAT_DELAY_MIN_MS,
+  GAMEPAD_REPEAT_DELAY_STEP_MS,
+  type GamepadButtonBinding,
+  type GamepadStatus,
+} from "./gamepad";
 import type { BadgeMode, UnboundBadgeBehavior } from "./ShortcutBadge";
 
 export default function SettingsScreen({ detectLeadingSilence, showOriginalStart,
   gamepadStatus, gamepadBindings, gamepadMappingButtonRef, onOpenGamepadMapping,
   onDetectLeadingSilenceChange, onShowOriginalStartChange, badgeMode, unboundBadgeBehavior,
-  onBadgeModeChange, onUnboundBadgeBehaviorChange }: {
+  onBadgeModeChange, onUnboundBadgeBehaviorChange, gamepadRepeatDelayMs,
+  onGamepadRepeatDelayChange }: {
   detectLeadingSilence: boolean;
   showOriginalStart: boolean;
   gamepadStatus: GamepadStatus;
@@ -19,6 +26,8 @@ export default function SettingsScreen({ detectLeadingSilence, showOriginalStart
   unboundBadgeBehavior: UnboundBadgeBehavior;
   onBadgeModeChange: (mode: BadgeMode) => void;
   onUnboundBadgeBehaviorChange: (behavior: UnboundBadgeBehavior) => void;
+  gamepadRepeatDelayMs: number;
+  onGamepadRepeatDelayChange: (delayMs: number) => void;
 }) {
   return <div>
     <p className="subtle mb-5 text-sm">These settings are saved in this browser.</p>
@@ -39,6 +48,20 @@ export default function SettingsScreen({ detectLeadingSilence, showOriginalStart
           <strong className="block text-sm">Show original start time on waveform</strong>
           <span className="subtle mt-1 block text-sm">Draw the SRT start as a separate marker in the waveform views.</span>
         </span>
+      </label>
+    </section>
+    <section className="mt-6 border-t line pt-5">
+      <h3 className="mb-4 text-base font-semibold">Controller input</h3>
+      <label className="block text-sm">
+        <span className="flex items-center justify-between gap-3 font-medium">
+          <span>Debounce time</span>
+          <output className="mono subtle" aria-live="polite">{gamepadRepeatDelayMs} ms</output>
+        </span>
+        <input type="range" min={GAMEPAD_REPEAT_DELAY_MIN_MS} max={GAMEPAD_REPEAT_DELAY_MAX_MS}
+          step={GAMEPAD_REPEAT_DELAY_STEP_MS} value={gamepadRepeatDelayMs}
+          onChange={(event) => onGamepadRepeatDelayChange(Number(event.target.value))}
+          className="mt-3 w-full accent-[#b7d69d]" />
+        <span className="subtle mt-1 block text-xs">Delay before a held navigation or stick control repeats. Lower values respond faster; higher values filter accidental holds.</span>
       </label>
     </section>
     <section className="mt-6 border-t line pt-5">

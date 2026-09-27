@@ -10,8 +10,10 @@ import { ShortcutBadge, ShortcutDisplayProvider, type BadgeMode, type DisplayInp
 import {
   bindingsForGamepadConfig,
   createGamepadAdapter,
+  GAMEPAD_REPEAT_DELAY_MS,
   initialGamepadStatus,
   loadGamepadBindingConfig,
+  normalizeGamepadRepeatDelay,
   saveGamepadBindingConfig,
   type GamepadActionRequest,
   type GamepadBindingConfig,
@@ -40,6 +42,7 @@ type AppSettings = {
   showOriginalStart: boolean;
   badgeMode: BadgeMode;
   unboundBadgeBehavior: UnboundBadgeBehavior;
+  gamepadRepeatDelayMs: number;
 };
 
 const SETTINGS_STORAGE_KEY = "jipandan-settings";
@@ -54,10 +57,17 @@ function loadSettings(): AppSettings {
         showOriginalStart: typeof parsed.showOriginalStart === "boolean" ? parsed.showOriginalStart : false,
         badgeMode: parsed.badgeMode === "keyboard" || parsed.badgeMode === "xbox" ? parsed.badgeMode : "auto",
         unboundBadgeBehavior: parsed.unboundBadgeBehavior === "keyboard" ? "keyboard" : "hide",
+        gamepadRepeatDelayMs: normalizeGamepadRepeatDelay(parsed.gamepadRepeatDelayMs),
       };
     }
   } catch { /* Use defaults when browser storage is unavailable or invalid. */ }
-  return { detectLeadingSilence: true, showOriginalStart: false, badgeMode: "auto", unboundBadgeBehavior: "hide" };
+  return {
+    detectLeadingSilence: true,
+    showOriginalStart: false,
+    badgeMode: "auto",
+    unboundBadgeBehavior: "hide",
+    gamepadRepeatDelayMs: GAMEPAD_REPEAT_DELAY_MS,
+  };
 }
 
 const filters: { key: Filter; label: string }[] = [
@@ -249,7 +259,9 @@ export default function App() {
     availability: InputAvailability;
   } | null>(null);
   const gamepadBindingConfigRef = useRef(gamepadBindingConfig);
+  const gamepadRepeatDelayRef = useRef(settings.gamepadRepeatDelayMs);
   gamepadBindingConfigRef.current = gamepadBindingConfig;
+  gamepadRepeatDelayRef.current = settings.gamepadRepeatDelayMs;
   const configuredGamepadBindings = useMemo(() => bindingsForGamepadConfig(gamepadBindingConfig), [gamepadBindingConfig]);
   const setGamepadCaptureActive = useCallback((active: boolean) => {
     gamepadCaptureActiveRef.current = active;
@@ -550,6 +562,7 @@ export default function App() {
     const adapter = createGamepadAdapter({
       getGamepads: hasGamepadApi ? () => navigator.getGamepads() : undefined,
       getBindings: () => bindingsForGamepadConfig(gamepadBindingConfigRef.current),
+      getRepeatDelayMs: () => gamepadRepeatDelayRef.current,
       isInputSuppressed: () => gamepadCaptureActiveRef.current,
       getContext: () => gamepadDispatchRef.current?.availability.context ?? "review",
       onAction: (action) => {
@@ -988,6 +1001,7 @@ export default function App() {
             showOriginalStart={settings.showOriginalStart}
             gamepadStatus={gamepadStatus}
             gamepadBindings={configuredGamepadBindings}
+            gamepadRepeatDelayMs={settings.gamepadRepeatDelayMs}
             gamepadMappingButtonRef={gamepadMappingButtonRef}
             onOpenGamepadMapping={openGamepadMapping}
             onDetectLeadingSilenceChange={(enabled) => setSettings((current) => ({ ...current, detectLeadingSilence: enabled }))}
@@ -995,7 +1009,11 @@ export default function App() {
             badgeMode={settings.badgeMode}
             unboundBadgeBehavior={settings.unboundBadgeBehavior}
             onBadgeModeChange={(badgeMode) => setSettings((current) => ({ ...current, badgeMode }))}
-            onUnboundBadgeBehaviorChange={(unboundBadgeBehavior) => setSettings((current) => ({ ...current, unboundBadgeBehavior }))} />}
+            onUnboundBadgeBehaviorChange={(unboundBadgeBehavior) => setSettings((current) => ({ ...current, unboundBadgeBehavior }))}
+            onGamepadRepeatDelayChange={(gamepadRepeatDelayMs) => setSettings((current) => ({
+              ...current,
+              gamepadRepeatDelayMs: normalizeGamepadRepeatDelay(gamepadRepeatDelayMs),
+            }))} />}
     </Dialog>}
 
     {showJump && <Dialog title="Jump to clip index" controllerHandlerRef={dialogControllerHandlerRef} onClose={() => setShowJump(false)}>
