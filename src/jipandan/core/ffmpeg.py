@@ -120,56 +120,6 @@ def _extract_audio_slice(
     _run(cmd)
 
 
-def _extract_audio_slice_fast(
-    input_audio: Path,
-    start: str,
-    duration: str,
-    out_mp3: Path,
-) -> None:
-    """Extract an MP3 slice with fast input-side seek (re-encoded).
-
-    Places ``-ss`` before ``-i`` so ffmpeg can jump into long files quickly.
-    Boundaries may be slightly less accurate than :func:`_extract_audio_slice`.
-    """
-    out_mp3.parent.mkdir(parents=True, exist_ok=True)
-    _run(
-        [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            "quiet",
-            "-ss",
-            start,
-            "-i",
-            str(input_audio),
-            "-t",
-            duration,
-            "-q:a",
-            "2",
-            str(out_mp3),
-        ]
-    )
-
-
-def extract_preview(
-    input_audio: Path,
-    start: str,
-    duration: str,
-    out_mp3: Path,
-) -> None:
-    """Extract a preview MP3 slice with sample-accurate seek (re-encoded)."""
-    _extract_audio_slice(input_audio, start, duration, out_mp3)
-
-
-def extract_preview_fast(
-    input_audio: Path,
-    start: str,
-    duration: str,
-    out_mp3: Path,
-) -> None:
-    """Extract a preview MP3 slice optimized for waveform rendering."""
-    _extract_audio_slice_fast(input_audio, start, duration, out_mp3)
-
 _INVALID_FILENAME_CHARS = re.compile(r'[/\\:*?"<>|\n\r\t]+')
 
 
@@ -254,50 +204,6 @@ def _publish_clip(source: Path, final_clip: Path, *, replace_existing: bool) -> 
         except FileExistsError:
             candidate = final_clip.with_name(f"{final_clip.stem} ({number}){final_clip.suffix}")
             number += 1
-
-
-def export_clip(
-    input_audio: Path,
-    candidate: ClipCandidate,
-    clip_dir: Path,
-    export_title: str | None = None,
-    export_options: ExportOptions | None = None,
-    tmp_dir: Path | None = None,
-    replace_existing: bool = False,
-) -> Path:
-    temporary_root: str | None = None
-    if tmp_dir is not None:
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        temporary_root = str(tmp_dir)
-    clip_dir.mkdir(parents=True, exist_ok=True)
-
-    title = export_title if export_title is not None else candidate.title
-    basename = export_basename(input_audio, candidate.filename_token, title)
-    final_clip = clip_dir / f"{basename}.mp3"
-    with tempfile.TemporaryDirectory(prefix="jipandan-export-", dir=temporary_root) as directory:
-        work_dir = Path(directory)
-        tmp_clip = work_dir / "source.mp3"
-        rendered_clip = work_dir / "rendered.mp3"
-        _extract_audio_slice(
-            input_audio, candidate.start, candidate.duration, tmp_clip,
-            metadata=(("title", title), ("TXXX:ORIGINAL_START_TIME", candidate.original_start)),
-        )
-        options = export_options or ExportOptions(mode="trim_edges")
-        audio_filter = _audio_filter_for_options(options)
-        if audio_filter is None:
-            shutil.copy2(tmp_clip, rendered_clip)
-        else:
-            _run([
-                "ffmpeg", "-y", "-loglevel", "quiet", "-i", str(tmp_clip),
-                "-af", audio_filter, str(rendered_clip),
-            ])
-        temporary_final = clip_dir / f".{basename}.{uuid4().hex}.mp3"
-        try:
-            shutil.copy2(rendered_clip, temporary_final)
-            final_clip = _publish_clip(temporary_final, final_clip, replace_existing=replace_existing)
-        finally:
-            temporary_final.unlink(missing_ok=True)
-    return final_clip
 
 
 def render_export_preview(

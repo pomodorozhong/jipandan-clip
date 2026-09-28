@@ -10,16 +10,12 @@ dependencies = [
     "numpy>=2.0",
     "platformdirs>=4.0",
     "python-multipart>=0.0.32",
-    "textual>=1.0.0",
-    "textual-plot>=0.10.0",
     "uvicorn>=0.35",
 ]
 
 [project.scripts]
 transcribe = "jipandan.cli.transcribe:main"
 generate-commands = "jipandan.cli.generate_commands:main"
-jipandan = "jipandan.cli.main:main"
-jipandan-serve = "jipandan.cli.serve:main"
 jipandan-web = "jipandan.cli.web:main"
 
 [build-system]
@@ -33,7 +29,6 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-"jipandan.cli" = ["serve_templates/*.html"]
 "jipandan.web" = ["static/index.html", "static/assets/*"]
 
 [dependency-groups]
@@ -41,6 +36,4 @@ dev = [
     "httpx>=0.28.1",
     "ipykernel>=7.2.0",
     "pip>=26.0.1",
-    "textual-dev>=1.8.0",
-    "textual-serve-asgi[server]>=0.2.1",
 ]
