@@ -110,7 +110,7 @@ The frontend interaction-policy tests run with Vitest. To check the browser inte
 
 ## Storage locations
 
-The selected recording stays where it was opened. Its `.srt` transcript and `.jipandan.json` session remain beside it. New sessions export to an `exports/` directory beside the recording; `--clip-dir` overrides that choice for new sessions. Existing sessions keep the export directory recorded in their session file.
+The selected recording stays where it was opened. Its `.srt` transcript and `.jipandan.json` session remain beside it. New sessions export to an `exports/` directory beside the recording; `--clip-dir` overrides that choice for new sessions. Existing sessions keep the export directory recorded in their session file. In the browser GUI, open **Settings → Storage** to change the export directory for the active session without creating a new session. Existing exported files remain in their previous directories; future exports use the new directory.
 
 Browser uploads, transcription job records, and their settings use the platform's application data directory. Regenerable browser previews and TUI waveform envelopes use the application cache directory. Transcription logs use the application log directory. These locations are selected with `platformdirs` (for example, macOS uses `~/Library/Application Support/Jipandan`, `~/Library/Caches/Jipandan`, and `~/Library/Logs/Jipandan`).
 

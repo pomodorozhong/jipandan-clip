@@ -19,7 +19,7 @@ from typing import BinaryIO, Callable
 
 from jipandan.core.ffmpeg import ExportOptions, probe_duration_seconds, publish_prebuilt_clip
 from jipandan.core.leading_silence import detect_leading_silence_start
-from jipandan.core.paths import AppPaths, default_export_dir, get_app_paths
+from jipandan.core.paths import AppPaths, default_export_dir, get_app_paths, resolve_export_dir
 from jipandan.core.srt import parse_srt
 from jipandan.core.whisper import describe_transcribe_call
 from jipandan.core.models import (
@@ -104,6 +104,34 @@ class SessionService:
         if self._clip_dir_override is not None:
             return self._clip_dir_override
         return default_export_dir(audio, paths=self.paths)
+
+    def set_export_dir(self, path: str, expected_revision: int | None = None) -> dict:
+        """Set the export directory for the active session and future sessions."""
+
+        try:
+            selected = resolve_export_dir(path)
+        except OSError as exc:
+            raise InvalidEdit(str(exc)) from exc
+
+        with self._lock:
+            if self.session is None:
+                self._clip_dir_override = selected
+                return self.snapshot()
+            if expected_revision is None:
+                raise InvalidEdit("A session revision is required to change its export directory")
+            if self.session.clip_dir.resolve() == selected:
+                self._clip_dir_override = selected
+                return self.snapshot()
+
+            def change(session: Session) -> str:
+                session.clip_dir = selected
+                if not any(directory.resolve() == selected for directory in session.export_dirs):
+                    session.export_dirs.append(selected)
+                return "Change export directory"
+
+            snapshot, _ = self._mutate(expected_revision, change)
+            self._clip_dir_override = selected
+            return snapshot
 
     def start_transcription(self, audio: str, settings: dict) -> dict:
         with self._lock:
@@ -279,7 +307,8 @@ class SessionService:
             if candidate is None or not candidate.last_export_path:
                 raise InvalidEdit("This clip has no saved export")
             output = Path(candidate.last_export_path).resolve()
-            if not output.is_relative_to(session.clip_dir.resolve()) or not output.is_file():
+            allowed_dirs = session.export_dirs or [session.clip_dir]
+            if not any(output.is_relative_to(directory.resolve()) for directory in allowed_dirs) or not output.is_file():
                 raise InvalidEdit("Exported file is unavailable")
         if sys.platform == "darwin":
             try:

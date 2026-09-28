@@ -95,6 +95,21 @@ def default_export_dir(audio: Path, *, paths: AppPaths | None = None) -> Path:
     return fallback.resolve()
 
 
+def resolve_export_dir(path: str | Path) -> Path:
+    """Resolve and validate a user-selected export directory."""
+
+    selected = Path(path).expanduser().resolve()
+    try:
+        selected.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise OSError(f"Could not create export directory: {selected}") from exc
+    if not selected.is_dir():
+        raise OSError(f"Export path is not a directory: {selected}")
+    if not os.access(selected, os.W_OK):
+        raise OSError(f"Export directory is not writable: {selected}")
+    return selected
+
+
 def waveform_cache_dir(audio: Path, *, paths: AppPaths | None = None) -> Path:
     """Return a stable, collision-resistant cache directory for one recording."""
 

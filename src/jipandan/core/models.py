@@ -92,6 +92,7 @@ class Session:
     audio: Path
     srt: Path
     clip_dir: Path
+    export_dirs: list[Path] = field(default_factory=list)
     candidates: list[ClipCandidate] = field(default_factory=list)
     version: int = SESSION_VERSION
     revision: int = 0
@@ -128,10 +129,12 @@ class Session:
                 )
             )
         resolved_audio = audio.resolve()
+        resolved_clip_dir = (clip_dir or default_export_dir(resolved_audio)).resolve()
         return cls(
             audio=resolved_audio,
             srt=srt_path.resolve(),
-            clip_dir=(clip_dir or default_export_dir(resolved_audio)).resolve(),
+            clip_dir=resolved_clip_dir,
+            export_dirs=[resolved_clip_dir],
             candidates=candidates,
             srt_fingerprint=hashlib.sha256(srt_path.read_bytes()).hexdigest(),
         )
@@ -147,6 +150,10 @@ class Session:
             audio=Path(data["audio"]),
             srt=Path(data["srt"]),
             clip_dir=Path(data["clip_dir"]),
+            export_dirs=[
+                Path(directory)
+                for directory in data.get("export_dirs", [data["clip_dir"]])
+            ],
             candidates=candidates,
             version=data.get("version", SESSION_VERSION),
             revision=data.get("revision", 0),
@@ -176,6 +183,10 @@ class Session:
                 "audio": str(self.audio),
                 "srt": str(self.srt),
                 "clip_dir": str(self.clip_dir),
+                "export_dirs": [
+                    str(directory.resolve())
+                    for directory in dict.fromkeys([*self.export_dirs, self.clip_dir])
+                ],
                 "candidates": [asdict(candidate) for candidate in self.candidates],
             }
             temporary_path: Path | None = None

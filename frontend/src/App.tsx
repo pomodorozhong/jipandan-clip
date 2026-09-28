@@ -232,6 +232,8 @@ export default function App() {
   const [showExportModal, setShowExportModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showGamepadMapping, setShowGamepadMapping] = useState(false);
+  const [clipDirDraft, setClipDirDraft] = useState("");
+  const [storageMessage, setStorageMessage] = useState("");
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
   const [inputType, setInputType] = useState<DisplayInputType>("keyboard");
   const [gamepadBindingConfig, setGamepadBindingConfig] = useState<GamepadBindingConfig>(loadGamepadBindingConfig);
@@ -292,6 +294,13 @@ export default function App() {
   useEffect(() => {
     saveGamepadBindingConfig(gamepadBindingConfig);
   }, [gamepadBindingConfig]);
+
+  useEffect(() => {
+    if (showSettings && session) {
+      setClipDirDraft(session.clip_dir);
+      setStorageMessage("");
+    }
+  }, [showSettings, session?.audio]);
 
   useEffect(() => {
     let alive = true;
@@ -686,6 +695,19 @@ export default function App() {
     if (next) { setShowMerge(false); setRemoveIndexes([]); }
   }
 
+  async function applyClipDir() {
+    if (!session || !clipDirDraft.trim()) return;
+    setStorageMessage("");
+    const next = await mutate(() => api<Session>("/session/storage", "PATCH", {
+      expected_revision: session.revision,
+      clip_dir: clipDirDraft.trim(),
+    }));
+    if (next) {
+      setClipDirDraft(next.clip_dir);
+      setStorageMessage("Export directory updated.");
+    }
+  }
+
   async function retryLeadingSilenceDetection() {
     try {
       const job = await api<LeadingSilenceJob>("/session/leading-silence-detection", "POST");
@@ -997,7 +1019,10 @@ export default function App() {
         ? <GamepadMappingScreen initialConfig={gamepadBindingConfig} status={gamepadStatus}
             onSave={(config) => { setGamepadBindingConfig(config); closeGamepadMapping(); }} onCancel={closeGamepadMapping}
             onCaptureChange={setGamepadCaptureActive} />
-        : <SettingsScreen detectLeadingSilence={settings.detectLeadingSilence}
+        : <SettingsScreen clipDir={clipDirDraft} storageEnabled={Boolean(session?.audio)}
+            storageBusy={busy} storageMessage={storageMessage}
+            onClipDirChange={setClipDirDraft} onApplyClipDir={() => void applyClipDir()}
+            detectLeadingSilence={settings.detectLeadingSilence}
             showOriginalStart={settings.showOriginalStart}
             gamepadStatus={gamepadStatus}
             gamepadRepeatDelayMs={settings.gamepadRepeatDelayMs}

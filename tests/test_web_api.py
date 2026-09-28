@@ -90,6 +90,42 @@ class WebApiTests(unittest.TestCase):
         reopened.open_audio(self.audio)
         self.assertEqual(reopened.snapshot()["candidates"][0]["status"], "group1")
 
+    def test_storage_setting_changes_future_exports_without_moving_existing_files(self):
+        self.open()
+        old_output = self.root / "clips" / "existing.mp3"
+        old_output.parent.mkdir(parents=True, exist_ok=True)
+        old_output.write_bytes(b"existing export")
+        candidate = self.service.session.get_candidate("1")
+        candidate.last_export_path = str(old_output)
+        self.service.session.save()
+
+        new_dir = self.root / "new exports"
+        changed = self.client.patch(
+            "/api/session/storage",
+            json={
+                "expected_revision": self.service.session.revision,
+                "clip_dir": str(new_dir),
+            },
+            headers=self.headers,
+        )
+        self.assertEqual(changed.status_code, 200, changed.text)
+        self.assertEqual(changed.json()["clip_dir"], str(new_dir.resolve()))
+        self.assertTrue(old_output.is_file())
+        self.assertTrue(new_dir.is_dir())
+
+        persisted = json.loads(self.audio.with_suffix(".jipandan.json").read_text())
+        self.assertEqual(persisted["clip_dir"], str(new_dir.resolve()))
+        self.assertIn(str((self.root / "clips").resolve()), persisted["export_dirs"])
+        self.assertIn(str(new_dir.resolve()), persisted["export_dirs"])
+
+        with patch("jipandan.web.service.sys.platform", "linux"), \
+             patch("jipandan.web.service.subprocess.Popen") as launch:
+            revealed = self.client.post(
+                "/api/clips/1/reveal-export", headers=self.headers,
+            )
+        self.assertEqual(revealed.status_code, 200, revealed.text)
+        launch.assert_called_once_with(["xdg-open", str(old_output.parent.resolve())])
+
     def test_leading_silence_batches_share_one_undo_and_persist_completion(self):
         self.open()
         path = "/api/session/leading-silence-detection"
