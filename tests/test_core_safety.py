@@ -8,8 +8,6 @@ from unittest.mock import patch
 
 from jipandan.core import ffmpeg, whisper
 from jipandan.core.models import ConcurrentSessionChange, Session
-from jipandan.tui.clip_list import ClipListController
-from jipandan.tui.screens.export_preview import build_export_preview_artifacts
 
 
 SRT = "1\n00:00:01,000 --> 00:00:02,000\nFirst\n\n2\n00:00:03,000 --> 00:00:04,000\nSecond\n"
@@ -80,40 +78,6 @@ class SessionSafetyTests(unittest.TestCase):
         stored = json.loads(session.session_path.read_text(encoding="utf-8"))
         self.assertEqual(stored["candidates"][0]["status"], "group2")
         self.assertEqual(stored["revision"], 2)
-
-    def test_search_stays_in_selected_filter(self):
-        session = self.session()
-        session.candidates[0].title = "match one"
-        session.candidates[1].title = "match two"
-        session.candidates[0].status = "group1"
-        controller = ClipListController(session, on_selection_changed=lambda _: None)
-        controller.filter_mode = "group1"
-        controller.set_search_query("match")
-        self.assertEqual([c.clip_id for c in controller.visible_candidates()], ["1"])
-
-    def test_preview_jobs_use_different_paths(self):
-        session = self.session()
-        paths = []
-
-        def fake_export(audio, candidate, clip_dir, **kwargs):
-            output = clip_dir / "preview.mp3"
-            output.write_bytes(b"preview")
-            paths.append(output)
-            return output
-
-        with patch("jipandan.tui.screens.export_preview.ffmpeg.export_clip", fake_export), patch(
-            "jipandan.tui.screens.export_preview.ffmpeg.probe_duration_seconds", return_value=1.0
-        ):
-            first = build_export_preview_artifacts(
-                self.audio, session.candidates[0], ffmpeg.ExportOptions("as_is"),
-                preview_dir=self.root / "previews",
-            )
-            second = build_export_preview_artifacts(
-                self.audio, session.candidates[0], ffmpeg.ExportOptions("trim_all"),
-                preview_dir=self.root / "previews",
-            )
-        self.assertNotEqual(first.preview_path, second.preview_path)
-        self.assertTrue(all(path.exists() for path in paths))
 
     def test_existing_export_gets_new_name(self):
         first = self.root / "clip.mp3"

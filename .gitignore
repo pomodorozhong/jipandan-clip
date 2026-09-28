@@ -21,6 +21,3 @@ src/jipandan/web/static/
 raw/*
 clip/*
 tmp/*
-
-# Textual
-textual.log

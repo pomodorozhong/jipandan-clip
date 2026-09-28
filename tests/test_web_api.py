@@ -455,6 +455,43 @@ class WebApiTests(unittest.TestCase):
                 "title": "First", "start_threshold_db": -100,
             }, headers=self.headers).status_code, 422)
 
+    def test_real_waveforms_and_all_export_modes_survive_reload(self):
+        self.probe.stop()
+        subprocess.run([
+            "ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+            "sine=frequency=440:duration=5", str(self.audio),
+        ], check=True)
+        state = self.open()
+        waveform = self.client.get(
+            "/api/waveforms/1", params={"start_ms": 1000, "end_ms": 2000, "buckets": 128},
+        )
+        self.assertEqual(waveform.status_code, 200, waveform.text)
+        self.assertGreater(max(waveform.json()["maxs"]), 0)
+
+        for mode in ("as_is", "trim_edges", "trim_all"):
+            with self.subTest(mode=mode):
+                response = self.client.post("/api/previews", json={
+                    "clip_id": "1", "expected_revision": state["revision"],
+                    "mode": mode, "title": "First",
+                }, headers=self.headers)
+                self.assertEqual(response.status_code, 200, response.text)
+                job_id = response.json()["id"]
+                preview = self.wait_for_job(f"/api/previews/{job_id}", "completed")
+                self.assertGreater(preview["duration_ms"], 0)
+                self.assertIsNotNone(preview["waveform"])
+                self.assertGreater(max(preview["waveform"]["maxs"]), 0)
+                published = self.client.post("/api/exports", json={
+                    "preview_id": job_id, "expected_revision": state["revision"],
+                }, headers=self.headers)
+                self.assertEqual(published.status_code, 200, published.text)
+                state = published.json()
+                self.assertGreater(Path(state["output_path"]).stat().st_size, 0)
+
+        self.assertEqual(len(list((self.root / "clips").glob("*.mp3"))), 3)
+        reopened = self.open()
+        self.assertEqual(reopened["candidates"][0]["status"], "exported")
+        self.assertEqual(reopened["candidates"][0]["last_export_path"], state["output_path"])
+
     def test_publish_reviewed_preview_is_collision_safe_and_stale_preview_is_rejected(self):
         self.open()
         valid_mp3 = self.root / "valid.mp3"
