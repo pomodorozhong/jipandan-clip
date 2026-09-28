@@ -90,6 +90,71 @@ class WebApiTests(unittest.TestCase):
         reopened.open_audio(self.audio)
         self.assertEqual(reopened.snapshot()["candidates"][0]["status"], "group1")
 
+    def test_storage_setting_changes_future_exports_without_moving_existing_files(self):
+        self.open()
+        old_output = self.root / "clips" / "existing.mp3"
+        old_output.parent.mkdir(parents=True, exist_ok=True)
+        old_output.write_bytes(b"existing export")
+        candidate = self.service.session.get_candidate("1")
+        candidate.last_export_path = str(old_output)
+        self.service.session.save()
+
+        new_dir = self.root / "new exports"
+        changed = self.client.patch(
+            "/api/session/storage",
+            json={
+                "expected_revision": self.service.session.revision,
+                "clip_dir": str(new_dir),
+            },
+            headers=self.headers,
+        )
+        self.assertEqual(changed.status_code, 200, changed.text)
+        self.assertEqual(changed.json()["clip_dir"], str(new_dir.resolve()))
+        self.assertTrue(old_output.is_file())
+        self.assertTrue(new_dir.is_dir())
+
+        persisted = json.loads(self.audio.with_suffix(".jipandan.json").read_text())
+        self.assertEqual(persisted["clip_dir"], str(new_dir.resolve()))
+        self.assertIn(str((self.root / "clips").resolve()), persisted["export_dirs"])
+        self.assertIn(str(new_dir.resolve()), persisted["export_dirs"])
+
+        with patch("jipandan.web.service.sys.platform", "linux"), \
+             patch("jipandan.web.service.subprocess.Popen") as launch:
+            revealed = self.client.post(
+                "/api/clips/1/reveal-export", headers=self.headers,
+            )
+        self.assertEqual(revealed.status_code, 200, revealed.text)
+        launch.assert_called_once_with(["xdg-open", str(old_output.parent.resolve())])
+
+    def test_storage_default_and_native_picker(self):
+        self.open()
+        default = self.client.get("/api/session/storage/default")
+        self.assertEqual(default.status_code, 200, default.text)
+        self.assertEqual(default.json()["clip_dir"], str((self.root / "exports").resolve()))
+
+        selected = self.root / "picked exports"
+        selected.mkdir()
+        with patch("jipandan.web.service.sys.platform", "darwin"), patch(
+            "jipandan.web.service.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                ["osascript"], 0, stdout=f"{selected}/\n", stderr="",
+            ),
+        ) as picker:
+            picked = self.client.post("/api/session/storage/pick", headers=self.headers)
+        self.assertEqual(picked.status_code, 200, picked.text)
+        self.assertEqual(picked.json(), {"path": str(selected.resolve()), "cancelled": False})
+        picker.assert_called_once()
+
+        with patch("jipandan.web.service.sys.platform", "darwin"), patch(
+            "jipandan.web.service.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                ["osascript"], 1, stdout="", stderr="execution error: User canceled. (-128)\n",
+            ),
+        ):
+            cancelled = self.client.post("/api/session/storage/pick", headers=self.headers)
+        self.assertEqual(cancelled.status_code, 200, cancelled.text)
+        self.assertEqual(cancelled.json(), {"path": None, "cancelled": True})
+
     def test_leading_silence_batches_share_one_undo_and_persist_completion(self):
         self.open()
         path = "/api/session/leading-silence-detection"

@@ -26,8 +26,6 @@ from jipandan.tui.widgets.waveform import (
     format_playback_remaining,
 )
 
-_PREVIEW_DIR = Path("tmp") / "preview"
-
 DEFAULT_PRELOAD_EXPORT_OPTIONS = ExportOptions(mode="trim_edges")
 
 
@@ -72,11 +70,17 @@ def build_export_preview_artifacts(
     candidate: ClipCandidate,
     options: ExportOptions,
     *,
-    preview_dir: Path = _PREVIEW_DIR,
+    preview_dir: Path | None = None,
 ) -> ExportPreviewArtifacts:
     preview_title = default_export_title(candidate)
-    preview_dir.mkdir(parents=True, exist_ok=True)
-    job_dir = Path(tempfile.mkdtemp(prefix="render-", dir=preview_dir))
+    if preview_dir is not None:
+        preview_dir.mkdir(parents=True, exist_ok=True)
+    job_dir = Path(
+        tempfile.mkdtemp(
+            prefix="jipandan-render-",
+            dir=str(preview_dir) if preview_dir is not None else None,
+        )
+    )
     try:
         preview_path = ffmpeg.export_clip(
             audio,

@@ -19,6 +19,7 @@ from typing import BinaryIO, Callable
 
 from jipandan.core.ffmpeg import ExportOptions, probe_duration_seconds, publish_prebuilt_clip
 from jipandan.core.leading_silence import detect_leading_silence_start
+from jipandan.core.paths import AppPaths, default_export_dir, get_app_paths, resolve_export_dir
 from jipandan.core.srt import parse_srt
 from jipandan.core.whisper import describe_transcribe_call
 from jipandan.core.models import (
@@ -71,25 +72,101 @@ def clip_payload(candidate: ClipCandidate) -> dict:
 
 class SessionService:
     def __init__(self, clip_dir: Path | None = None, upload_dir: Path | None = None,
-                 preview_dir: Path | None = None, transcription_dir: Path | None = None) -> None:
+                 preview_dir: Path | None = None, transcription_dir: Path | None = None,
+                 *, app_paths: AppPaths | None = None) -> None:
         self._lock = threading.RLock()
+        self.paths = app_paths or get_app_paths()
         self.audio: Path | None = None
         self.srt: Path | None = None
         self.session: Session | None = None
         self.duration_ms: int | None = None
-        self.default_clip_dir = (clip_dir or Path("clip")).resolve()
-        if upload_dir is None:
-            base = Path.home() / ("Library/Application Support/Jipandan" if sys.platform == "darwin" else ".local/share/jipandan")
-            upload_dir = base / "uploads"
-        self.upload_dir = upload_dir
+        self._clip_dir_override = clip_dir.expanduser().resolve() if clip_dir else None
+        self.upload_dir = (upload_dir or self.paths.uploads_dir).expanduser().resolve()
         self._undo: list[tuple[str, dict[str, ClipCandidate], str | None]] = []
         self._waveforms = WaveformCache()
         self._leading_silence_job: dict[str, object] | None = None
-        self._previews = PreviewJobs((preview_dir or Path("tmp/web-previews")).resolve())
+        self._previews = PreviewJobs((preview_dir or self.paths.preview_dir).expanduser().resolve())
         self._transcriptions = TranscriptionJobs(
-            (transcription_dir or Path("tmp/web-transcriptions")).resolve(),
+            (transcription_dir or self.paths.transcription_dir).expanduser().resolve(),
             self._publish_transcription,
+            log_root=self.paths.transcription_log_dir,
         )
+
+    @property
+    def default_clip_dir(self) -> Path:
+        if self._clip_dir_override is not None:
+            return self._clip_dir_override
+        if self.audio is not None:
+            return self._new_session_clip_dir(self.audio)
+        return self.paths.fallback_export_dir.resolve()
+
+    def _new_session_clip_dir(self, audio: Path) -> Path:
+        if self._clip_dir_override is not None:
+            return self._clip_dir_override
+        return default_export_dir(audio, paths=self.paths)
+
+    def set_export_dir(self, path: str, expected_revision: int | None = None) -> dict:
+        """Set the export directory for the active session and future sessions."""
+
+        try:
+            selected = resolve_export_dir(path)
+        except OSError as exc:
+            raise InvalidEdit(str(exc)) from exc
+
+        with self._lock:
+            if self.session is None:
+                self._clip_dir_override = selected
+                return self.snapshot()
+            if expected_revision is None:
+                raise InvalidEdit("A session revision is required to change its export directory")
+            if self.session.clip_dir.resolve() == selected:
+                self._clip_dir_override = selected
+                return self.snapshot()
+
+            def change(session: Session) -> str:
+                session.clip_dir = selected
+                if not any(directory.resolve() == selected for directory in session.export_dirs):
+                    session.export_dirs.append(selected)
+                return "Change export directory"
+
+            snapshot, _ = self._mutate(expected_revision, change)
+            self._clip_dir_override = selected
+            return snapshot
+
+    def default_export_dir_for_current_audio(self) -> dict:
+        with self._lock:
+            if self.audio is None:
+                raise InvalidEdit("Open an audio session before choosing a default export directory")
+            return {"clip_dir": str(default_export_dir(self.audio, paths=self.paths))}
+
+    def pick_export_dir(self) -> dict:
+        """Open the macOS folder picker and return its selected directory."""
+
+        if sys.platform != "darwin":
+            raise InvalidEdit("The native folder picker is only available on macOS")
+        script = (
+            'set chosenFolder to choose folder with prompt "Choose Jipandan export directory"\n'
+            "POSIX path of chosenFolder"
+        )
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError as exc:
+            raise InvalidEdit(f"Could not open the macOS folder picker: {exc}") from exc
+        if result.returncode != 0:
+            if "User canceled" in result.stderr or "-128" in result.stderr:
+                return {"path": None, "cancelled": True}
+            detail = result.stderr.strip() or "osascript failed"
+            raise InvalidEdit(f"Could not choose an export directory: {detail}")
+        try:
+            selected = resolve_export_dir(result.stdout.strip())
+        except OSError as exc:
+            raise InvalidEdit(str(exc)) from exc
+        return {"path": str(selected), "cancelled": False}
 
     def start_transcription(self, audio: str, settings: dict) -> dict:
         with self._lock:
@@ -149,7 +226,7 @@ class SessionService:
                     target.flush()
                     os.fsync(target.fileno())
                 os.link(staged, destination)
-                session = Session.from_srt(job.audio, destination, self.default_clip_dir)
+                session = Session.from_srt(job.audio, destination, self._new_session_clip_dir(job.audio))
                 session.save()
             finally:
                 staged.unlink(missing_ok=True)
@@ -265,7 +342,8 @@ class SessionService:
             if candidate is None or not candidate.last_export_path:
                 raise InvalidEdit("This clip has no saved export")
             output = Path(candidate.last_export_path).resolve()
-            if not output.is_relative_to(session.clip_dir.resolve()) or not output.is_file():
+            allowed_dirs = session.export_dirs or [session.clip_dir]
+            if not any(output.is_relative_to(directory.resolve()) for directory in allowed_dirs) or not output.is_file():
                 raise InvalidEdit("Exported file is unavailable")
         if sys.platform == "darwin":
             try:
@@ -469,7 +547,7 @@ class SessionService:
             session.audio = resolved
             session.srt = srt
         elif srt.exists():
-            session = Session.from_srt(resolved, srt, self.default_clip_dir)
+            session = Session.from_srt(resolved, srt, self._new_session_clip_dir(resolved))
             session.save()
         else:
             session = None

@@ -231,7 +231,11 @@ export default function App() {
   const [showDetailMobile, setShowDetailMobile] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showStorageConfirm, setShowStorageConfirm] = useState(false);
   const [showGamepadMapping, setShowGamepadMapping] = useState(false);
+  const [clipDirDraft, setClipDirDraft] = useState("");
+  const [storageMessage, setStorageMessage] = useState("");
+  const [storagePickerBusy, setStoragePickerBusy] = useState(false);
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
   const [inputType, setInputType] = useState<DisplayInputType>("keyboard");
   const [gamepadBindingConfig, setGamepadBindingConfig] = useState<GamepadBindingConfig>(loadGamepadBindingConfig);
@@ -292,6 +296,13 @@ export default function App() {
   useEffect(() => {
     saveGamepadBindingConfig(gamepadBindingConfig);
   }, [gamepadBindingConfig]);
+
+  useEffect(() => {
+    if (showSettings && session) {
+      setClipDirDraft(session.clip_dir);
+      setStorageMessage("");
+    }
+  }, [showSettings, session?.audio]);
 
   useEffect(() => {
     let alive = true;
@@ -472,7 +483,7 @@ export default function App() {
     setShowDetailMobile(false);
   }, [visible, selectedPosition]);
 
-  const activeDialog = showSettings || showHelp || showJump || showMerge || showExportModal;
+  const activeDialog = showSettings || showStorageConfirm || showHelp || showJump || showMerge || showExportModal;
   const reviewContext = getInputContext({ activeDialog, textEditing: editingTitle });
 
   const undo = useCallback(() => {
@@ -686,6 +697,54 @@ export default function App() {
     if (next) { setShowMerge(false); setRemoveIndexes([]); }
   }
 
+  async function applyClipDir() {
+    if (!session || !clipDirDraft.trim()) return;
+    setStorageMessage("");
+    const next = await mutate(() => api<Session>("/session/storage", "PATCH", {
+      expected_revision: session.revision,
+      clip_dir: clipDirDraft.trim(),
+    }));
+    if (next) {
+      setClipDirDraft(next.clip_dir);
+      setStorageMessage("Export directory updated.");
+    }
+  }
+
+  async function chooseClipDir() {
+    setStoragePickerBusy(true);
+    setStorageMessage("");
+    try {
+      const result = await api<{ path: string | null; cancelled: boolean }>("/session/storage/pick", "POST");
+      if (result.path) {
+        setClipDirDraft(result.path);
+        setStorageMessage("Folder selected. Review and apply to save it.");
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setStoragePickerBusy(false);
+    }
+  }
+
+  async function resetClipDir() {
+    setStoragePickerBusy(true);
+    setStorageMessage("");
+    try {
+      const result = await api<{ clip_dir: string }>("/session/storage/default");
+      setClipDirDraft(result.clip_dir);
+      setStorageMessage("Default path selected. Review and apply to save it.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setStoragePickerBusy(false);
+    }
+  }
+
+  async function confirmClipDir() {
+    setShowStorageConfirm(false);
+    await applyClipDir();
+  }
+
   async function retryLeadingSilenceDetection() {
     try {
       const job = await api<LeadingSilenceJob>("/session/leading-silence-detection", "POST");
@@ -707,6 +766,7 @@ export default function App() {
   }, []);
 
   const closeSettings = useCallback(() => {
+    setShowStorageConfirm(false);
     setShowGamepadMapping(false);
     setShowSettings(false);
     requestAnimationFrame(() => settingsButtonRef.current?.focus());
@@ -997,7 +1057,12 @@ export default function App() {
         ? <GamepadMappingScreen initialConfig={gamepadBindingConfig} status={gamepadStatus}
             onSave={(config) => { setGamepadBindingConfig(config); closeGamepadMapping(); }} onCancel={closeGamepadMapping}
             onCaptureChange={setGamepadCaptureActive} />
-        : <SettingsScreen detectLeadingSilence={settings.detectLeadingSilence}
+        : <SettingsScreen clipDir={clipDirDraft} storageEnabled={Boolean(session?.audio)}
+            storageBusy={busy || storagePickerBusy} storageMessage={storageMessage}
+            onClipDirChange={setClipDirDraft} onChooseClipDir={() => void chooseClipDir()}
+            onResetClipDir={() => void resetClipDir()}
+            onApplyClipDir={() => setShowStorageConfirm(true)}
+            detectLeadingSilence={settings.detectLeadingSilence}
             showOriginalStart={settings.showOriginalStart}
             gamepadStatus={gamepadStatus}
             gamepadRepeatDelayMs={settings.gamepadRepeatDelayMs}
@@ -1013,6 +1078,19 @@ export default function App() {
               ...current,
               gamepadRepeatDelayMs: normalizeGamepadRepeatDelay(gamepadRepeatDelayMs),
             }))} />}
+    </Dialog>}
+
+    {showStorageConfirm && <Dialog title="Confirm export directory"
+      controllerHandlerRef={dialogControllerHandlerRef} onClose={() => setShowStorageConfirm(false)}>
+      <p className="subtle mb-3 text-sm">Use this directory for future audio exports?</p>
+      <div className="surface mb-4 rounded-lg border line p-3 font-mono text-xs break-all">{clipDirDraft}</div>
+      <p className="subtle mb-5 text-xs">Existing exported files will stay in their current directories.</p>
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={() => setShowStorageConfirm(false)}
+          className="soft-surface rounded-lg px-4 py-2 text-sm font-medium hover:bg-[#354b3b]">Cancel</button>
+        <button type="button" disabled={busy || !clipDirDraft.trim()} onClick={() => void confirmClipDir()}
+          className="rounded-lg bg-[#b7d69d] px-4 py-2 text-sm font-semibold text-[#1d2d20] disabled:cursor-not-allowed disabled:opacity-50">Confirm</button>
+      </div>
     </Dialog>}
 
     {showJump && <Dialog title="Jump to clip index" controllerHandlerRef={dialogControllerHandlerRef} onClose={() => setShowJump(false)}>

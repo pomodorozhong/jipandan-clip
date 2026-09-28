@@ -265,14 +265,16 @@ def export_clip(
     tmp_dir: Path | None = None,
     replace_existing: bool = False,
 ) -> Path:
-    tmp_root = tmp_dir or Path("tmp")
-    tmp_root.mkdir(parents=True, exist_ok=True)
+    temporary_root: str | None = None
+    if tmp_dir is not None:
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        temporary_root = str(tmp_dir)
     clip_dir.mkdir(parents=True, exist_ok=True)
 
     title = export_title if export_title is not None else candidate.title
     basename = export_basename(input_audio, candidate.filename_token, title)
     final_clip = clip_dir / f"{basename}.mp3"
-    with tempfile.TemporaryDirectory(prefix="export-", dir=tmp_root) as directory:
+    with tempfile.TemporaryDirectory(prefix="jipandan-export-", dir=temporary_root) as directory:
         work_dir = Path(directory)
         tmp_clip = work_dir / "source.mp3"
         rendered_clip = work_dir / "rendered.mp3"
@@ -306,7 +308,7 @@ def render_export_preview(
 ) -> None:
     """Render one immutable export preview without publishing a clip."""
     output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="work-", dir=output.parent) as directory:
+    with tempfile.TemporaryDirectory(prefix="jipandan-preview-") as directory:
         source = Path(directory) / "source.mp3"
         _extract_audio_slice(input_audio, candidate.start, candidate.duration, source)
         audio_filter = _audio_filter_for_options(options)

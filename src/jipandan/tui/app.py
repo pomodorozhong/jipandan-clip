@@ -4,6 +4,7 @@ import hashlib
 from textual.app import App
 
 from jipandan.core.models import Session
+from jipandan.core.paths import default_export_dir
 from jipandan.tui.screens.review import ReviewScreen
 from jipandan.tui.screens.transcribe import TranscribeWizardScreen
 
@@ -27,7 +28,7 @@ class JipandanApp(App):
         super().__init__()
         self.audio = audio.resolve()
         self.srt_path = (srt_path or self.audio.with_suffix(".srt")).resolve()
-        self.clip_dir = (clip_dir or Path("clip")).resolve()
+        self.clip_dir = clip_dir.expanduser().resolve() if clip_dir else None
         self.resume = resume
         self.model = model
         self.language = language
@@ -43,7 +44,7 @@ class JipandanApp(App):
                 TranscribeWizardScreen(
                     audio=self.audio,
                     srt_path=self.srt_path,
-                    clip_dir=self.clip_dir,
+                    clip_dir=self.clip_dir or default_export_dir(self.audio),
                     model=self.model,
                     language=self.language,
                     temperature=self.temperature,
@@ -57,7 +58,6 @@ class JipandanApp(App):
             session = Session.load(session_path)
             session.audio = self.audio
             session.srt = self.srt_path
-            session.clip_dir = self.clip_dir
             changes = session.srt_merge_preview() if self.srt_path.exists() else None
             uncertain_text_change = (
                 self.srt_path.exists()

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from jipandan.core.audio_playback import default_audio_playback
+from jipandan.core.paths import default_export_dir
 from jipandan.core.srt import (
     SubtitleEntry,
     compute_duration,
@@ -18,15 +19,6 @@ _MPV_FLAGS = " ".join(default_audio_playback.cli_base_args())
 CELLS_PER_CLIP = 5
 NOTEBOOK_CONTROL_CELLS = 1
 DEFAULT_MAX_CELLS_PER_NOTEBOOK = 2000
-
-
-def _escape_for_double_quotes(value: str) -> str:
-    return (
-        value.replace("\\", "\\\\")
-        .replace('"', '\\"')
-        .replace("$", "\\$")
-        .replace("`", "\\`")
-    )
 
 
 def _code_cell(source: str) -> dict:
@@ -48,7 +40,13 @@ def _markdown_cell(source: str) -> dict:
 
 
 def _control_cell() -> dict:
-    return _code_cell("RUN_MPV_PREVIEW = False\nRUN_CLIP = False\n")
+    return _code_cell(
+        "RUN_MPV_PREVIEW = False\n"
+        "RUN_CLIP = False\n"
+        "from pathlib import Path\n"
+        "import tempfile\n"
+        "TMP_DIR = Path(tempfile.mkdtemp(prefix='jipandan-notebook-'))\n"
+    )
 
 
 def _cells_for_entry(
@@ -57,47 +55,52 @@ def _cells_for_entry(
     start_ffmpeg = srt_time_to_ffmpeg(entry.start)
     duration_str = compute_duration(entry.start, entry.end)
 
-    output_prefix = str(clip_dir / f"clip_{entry.index:04d}_")
-
     safe_input = shlex.quote(str(input_audio))
     title_literal = json.dumps(entry.text, ensure_ascii=False)
-
-    tmp_clip = f"tmp/clip_{entry.index:04d}.mp3"
-    tmp_wave = f"tmp/clip_{entry.index:04d}.png"
+    title_var = f"title{entry.index}"
+    timestamp_var = f"timestamp{entry.index}"
+    duration_var = f"duration{entry.index}"
+    tmp_clip_var = f"tmp_clip{entry.index}"
+    tmp_wave_var = f"tmp_wave{entry.index}"
+    output_var = f"output{entry.index}"
+    clip_dir_literal = json.dumps(str(clip_dir.resolve()), ensure_ascii=False)
 
     soundwave_cmd = (
-        f"title{entry.index} = {title_literal}\n"
-        f"timestamp{entry.index} = {json.dumps(start_ffmpeg)}\n"
-        f"duration{entry.index} = {json.dumps(duration_str)}\n"
-        f'!ffmpeg -y -loglevel quiet -i {safe_input} -ss $timestamp{entry.index} '
-        f'-t $duration{entry.index} -c copy "{tmp_clip}"\n'
-        f'!ffmpeg -y -loglevel quiet -i "{tmp_clip}" -filter_complex '
-        f'"showwavespic=s=800x200:colors=cyan" -frames:v 1 "{tmp_wave}"\n\n'
+        f"{title_var} = {title_literal}\n"
+        f"{timestamp_var} = {json.dumps(start_ffmpeg)}\n"
+        f"{duration_var} = {json.dumps(duration_str)}\n"
+        f"{tmp_clip_var} = TMP_DIR / {json.dumps(f'clip_{entry.index:04d}.mp3')}\n"
+        f"{tmp_wave_var} = TMP_DIR / {json.dumps(f'clip_{entry.index:04d}.png')}\n"
+        f"{output_var} = Path({clip_dir_literal}) / f'clip_{entry.index:04d}_{{{{{title_var}}}}}.mp3'\n"
+        f'!ffmpeg -y -loglevel quiet -i {safe_input} -ss {{{timestamp_var}}} '
+        f'-t {{{duration_var}}} -c copy "{{{tmp_clip_var}}}"\n'
+        f'!ffmpeg -y -loglevel quiet -i "{{{tmp_clip_var}}}" -filter_complex '
+        f'"showwavespic=s=800x200:colors=cyan" -frames:v 1 "{{{tmp_wave_var}}}"\n\n'
         "from IPython.display import Image, display\n"
-        f'display(Image(filename="{tmp_wave}"))'
+        f"display(Image(filename={tmp_wave_var}))"
     )
 
     mpv_preview_cmd = (
         "if RUN_MPV_PREVIEW:\n"
-        f"    !mpv {_MPV_FLAGS} --start=$timestamp{entry.index} "
-        f"--length=$duration{entry.index} {safe_input}\n"
+        f"    !mpv {_MPV_FLAGS} --start={{{timestamp_var}}} "
+        f"--length={{{duration_var}}} {safe_input}\n"
     )
 
     clip_cmd = (
         "if RUN_CLIP:\n"
-        f'    !ffmpeg -y -loglevel quiet -i {safe_input} -ss $timestamp{entry.index} -t $duration{entry.index} '
-        f'-c copy -metadata title="$title{entry.index}" -metadata TXXX:ORIGINAL_START_TIME="{start_ffmpeg}" '
-        f'"tmp/clip_{entry.index:04d}_{{title{entry.index}}}.mp3"\n'
-        f'    !ffmpeg -y -loglevel quiet -i "tmp/clip_{entry.index:04d}_{{title{entry.index}}}.mp3" '
+        f'    !ffmpeg -y -loglevel quiet -i {safe_input} -ss {{{timestamp_var}}} -t {{{duration_var}}} '
+        f'-c copy -metadata title="{{{title_var}}}" -metadata TXXX:ORIGINAL_START_TIME="{start_ffmpeg}" '
+        f'"{{{tmp_clip_var}}}"\n'
+        f'    !ffmpeg -y -loglevel quiet -i "{{{tmp_clip_var}}}" '
         '-af silenceremove=start_periods=1:start_duration=0.1:start_silence=0.2:start_threshold=-40dB:'
         'stop_periods=1:stop_duration=1:stop_threshold=-50dB '
-        f'"{_escape_for_double_quotes(output_prefix)}{{title{entry.index}}}.mp3"\n'
-        f'    !ffmpeg -y -loglevel quiet -i "{_escape_for_double_quotes(output_prefix)}{{title{entry.index}}}.mp3" '
+        f'"{{{output_var}}}"\n'
+        f'    !ffmpeg -y -loglevel quiet -i "{{{output_var}}}" '
         '-filter_complex "showwavespic=s=800x200:colors=cyan" -frames:v 1 '
-        f'"tmp/clip_{entry.index:04d}.png"\n'
-        f'    !mpv {_MPV_FLAGS} "{_escape_for_double_quotes(output_prefix)}{{title{entry.index}}}.mp3"\n'
+        f'"{{{tmp_wave_var}}}"\n'
+        f'    !mpv {_MPV_FLAGS} "{{{output_var}}}"\n'
         "\n    from IPython.display import Image, display\n"
-        f'    display(Image(filename="tmp/clip_{entry.index:04d}.png"))'
+        f"    display(Image(filename={tmp_wave_var}))"
     )
 
     return [
@@ -174,8 +177,8 @@ def main() -> None:
     parser.add_argument(
         "--clip-dir",
         type=Path,
-        default=Path("clip"),
-        help="Directory used by generated ffmpeg output paths.",
+        default=None,
+        help="Directory used by generated ffmpeg output paths (default: exports beside the audio).",
     )
     parser.add_argument(
         "-o",
@@ -208,6 +211,7 @@ def main() -> None:
         raise ValueError(f"No valid subtitle entries found in {args.input}")
 
     iso_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
+    clip_dir = args.clip_dir or default_export_dir(args.audio)
     entry_chunks = _chunk_entries(entries, max_cells_per_notebook=args.max_cells)
     max_clips_per_notebook = args.max_cells // CELLS_PER_CLIP
     written_paths: list[Path] = []
@@ -217,7 +221,7 @@ def main() -> None:
             output_path = _unsplit_output_path(base_output, iso_ts)
         else:
             output_path = _split_output_path(base_output, part, iso_ts)
-        notebook = _build_notebook(chunk, input_audio=args.audio, clip_dir=args.clip_dir)
+        notebook = _build_notebook(chunk, input_audio=args.audio, clip_dir=clip_dir)
         output_path.write_text(json.dumps(notebook, indent=2), encoding="utf-8")
         written_paths.append(output_path)
 

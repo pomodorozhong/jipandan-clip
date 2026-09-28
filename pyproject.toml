@@ -8,6 +8,7 @@ dependencies = [
     "fastapi>=0.117",
     "mlx-whisper>=0.4.3",
     "numpy>=2.0",
+    "platformdirs>=4.0",
     "python-multipart>=0.0.32",
     "textual>=1.0.0",
     "textual-plot>=0.10.0",

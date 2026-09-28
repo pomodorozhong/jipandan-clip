@@ -34,6 +34,11 @@ class RevisionRequest(BaseModel):
     expected_revision: int = Field(ge=0)
 
 
+class StorageRequest(BaseModel):
+    expected_revision: int | None = Field(default=None, ge=0)
+    clip_dir: str = Field(min_length=1, max_length=4096)
+
+
 class BulkSkip(RevisionRequest):
     clip_ids: list[str]
 
@@ -128,6 +133,18 @@ def create_app(
     @app.get("/api/session")
     def get_session():
         return app.state.service.snapshot()
+
+    @app.patch("/api/session/storage")
+    def update_storage(request: StorageRequest):
+        return app.state.service.set_export_dir(request.clip_dir, request.expected_revision)
+
+    @app.get("/api/session/storage/default")
+    def default_storage():
+        return app.state.service.default_export_dir_for_current_audio()
+
+    @app.post("/api/session/storage/pick")
+    def pick_storage():
+        return app.state.service.pick_export_dir()
 
     @app.get("/api/events")
     async def events(request: Request, token: str):

@@ -8,11 +8,21 @@ import {
 } from "./gamepad";
 import type { BadgeMode, UnboundBadgeBehavior } from "./ShortcutBadge";
 
-export default function SettingsScreen({ detectLeadingSilence, showOriginalStart,
+export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, storageMessage, onClipDirChange,
+  onChooseClipDir, onResetClipDir, onApplyClipDir,
+  detectLeadingSilence, showOriginalStart,
   gamepadStatus, gamepadMappingButtonRef, onOpenGamepadMapping,
   onDetectLeadingSilenceChange, onShowOriginalStartChange, badgeMode, unboundBadgeBehavior,
   onBadgeModeChange, onUnboundBadgeBehaviorChange, gamepadRepeatDelayMs,
   onGamepadRepeatDelayChange }: {
+  clipDir: string;
+  storageEnabled: boolean;
+  storageBusy: boolean;
+  storageMessage: string;
+  onClipDirChange: (path: string) => void;
+  onChooseClipDir: () => void;
+  onResetClipDir: () => void;
+  onApplyClipDir: () => void;
   detectLeadingSilence: boolean;
   showOriginalStart: boolean;
   gamepadStatus: GamepadStatus;
@@ -28,7 +38,39 @@ export default function SettingsScreen({ detectLeadingSilence, showOriginalStart
   onGamepadRepeatDelayChange: (delayMs: number) => void;
 }) {
   return <div>
-    <p className="subtle mb-5 text-sm">These settings are saved in this browser.</p>
+    <p className="subtle mb-5 text-sm">Interface settings are saved in this browser. Storage settings are saved with the active session.</p>
+    <section>
+      <h3 className="mb-4 text-base font-semibold">Storage</h3>
+      <p className="subtle mb-4 text-sm">{storageEnabled
+        ? "Choose where new audio exports from this session are saved. Existing exported files stay in their current folder."
+        : "Open an audio session to choose its export directory."}</p>
+      <label className="block text-sm">
+        <span className="font-medium">Export directory</span>
+        <input type="text" value={clipDir} disabled={!storageEnabled || storageBusy}
+          onChange={(event) => onClipDirChange(event.target.value)}
+          placeholder="/path/to/exports"
+          aria-label="Export directory"
+          className="mt-1 block w-full rounded-lg border line bg-[#101816] px-3 py-2 font-mono text-xs" />
+        <span className="subtle mt-1 block text-xs">Absolute paths and paths beginning with <code>~</code> are supported.</span>
+      </label>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <button type="button" disabled={!storageEnabled || storageBusy} onClick={onChooseClipDir}
+          className="soft-surface rounded-lg px-4 py-2 text-sm font-medium hover:bg-[#354b3b] disabled:cursor-not-allowed disabled:opacity-50">
+          Choose folder…
+        </button>
+        <button type="button" disabled={!storageEnabled || storageBusy} onClick={onResetClipDir}
+          className="soft-surface rounded-lg px-4 py-2 text-sm font-medium hover:bg-[#354b3b] disabled:cursor-not-allowed disabled:opacity-50">
+          Reset to default
+        </button>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <button type="button" disabled={!storageEnabled || storageBusy || !clipDir.trim()} onClick={onApplyClipDir}
+          className="rounded-lg bg-[#b7d69d] px-4 py-2 text-sm font-semibold text-[#1d2d20] disabled:cursor-not-allowed disabled:opacity-50">
+          {storageBusy ? "Saving…" : "Apply export directory"}
+        </button>
+        {storageMessage && <span role="status" className="accent text-xs">{storageMessage}</span>}
+      </div>
+    </section>
     <section>
       <h3 className="mb-4 text-base font-semibold">Clip timing</h3>
       <label className="flex cursor-pointer items-start gap-3 border-b line pb-4">
