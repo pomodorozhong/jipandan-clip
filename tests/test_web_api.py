@@ -126,6 +126,35 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(revealed.status_code, 200, revealed.text)
         launch.assert_called_once_with(["xdg-open", str(old_output.parent.resolve())])
 
+    def test_storage_default_and_native_picker(self):
+        self.open()
+        default = self.client.get("/api/session/storage/default")
+        self.assertEqual(default.status_code, 200, default.text)
+        self.assertEqual(default.json()["clip_dir"], str((self.root / "exports").resolve()))
+
+        selected = self.root / "picked exports"
+        selected.mkdir()
+        with patch("jipandan.web.service.sys.platform", "darwin"), patch(
+            "jipandan.web.service.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                ["osascript"], 0, stdout=f"{selected}/\n", stderr="",
+            ),
+        ) as picker:
+            picked = self.client.post("/api/session/storage/pick", headers=self.headers)
+        self.assertEqual(picked.status_code, 200, picked.text)
+        self.assertEqual(picked.json(), {"path": str(selected.resolve()), "cancelled": False})
+        picker.assert_called_once()
+
+        with patch("jipandan.web.service.sys.platform", "darwin"), patch(
+            "jipandan.web.service.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                ["osascript"], 1, stdout="", stderr="execution error: User canceled. (-128)\n",
+            ),
+        ):
+            cancelled = self.client.post("/api/session/storage/pick", headers=self.headers)
+        self.assertEqual(cancelled.status_code, 200, cancelled.text)
+        self.assertEqual(cancelled.json(), {"path": None, "cancelled": True})
+
     def test_leading_silence_batches_share_one_undo_and_persist_completion(self):
         self.open()
         path = "/api/session/leading-silence-detection"

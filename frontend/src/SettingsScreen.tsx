@@ -8,7 +8,8 @@ import {
 } from "./gamepad";
 import type { BadgeMode, UnboundBadgeBehavior } from "./ShortcutBadge";
 
-export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, storageMessage, onClipDirChange, onApplyClipDir,
+export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, storageMessage, onClipDirChange,
+  onChooseClipDir, onResetClipDir, onApplyClipDir,
   detectLeadingSilence, showOriginalStart,
   gamepadStatus, gamepadMappingButtonRef, onOpenGamepadMapping,
   onDetectLeadingSilenceChange, onShowOriginalStartChange, badgeMode, unboundBadgeBehavior,
@@ -19,6 +20,8 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
   storageBusy: boolean;
   storageMessage: string;
   onClipDirChange: (path: string) => void;
+  onChooseClipDir: () => void;
+  onResetClipDir: () => void;
   onApplyClipDir: () => void;
   detectLeadingSilence: boolean;
   showOriginalStart: boolean;
@@ -50,6 +53,16 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
           className="mt-1 block w-full rounded-lg border line bg-[#101816] px-3 py-2 font-mono text-xs" />
         <span className="subtle mt-1 block text-xs">Absolute paths and paths beginning with <code>~</code> are supported.</span>
       </label>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <button type="button" disabled={!storageEnabled || storageBusy} onClick={onChooseClipDir}
+          className="soft-surface rounded-lg px-4 py-2 text-sm font-medium hover:bg-[#354b3b] disabled:cursor-not-allowed disabled:opacity-50">
+          Choose folder…
+        </button>
+        <button type="button" disabled={!storageEnabled || storageBusy} onClick={onResetClipDir}
+          className="soft-surface rounded-lg px-4 py-2 text-sm font-medium hover:bg-[#354b3b] disabled:cursor-not-allowed disabled:opacity-50">
+          Reset to default
+        </button>
+      </div>
       <div className="mt-3 flex flex-wrap items-center gap-3">
         <button type="button" disabled={!storageEnabled || storageBusy || !clipDir.trim()} onClick={onApplyClipDir}
           className="rounded-lg bg-[#b7d69d] px-4 py-2 text-sm font-semibold text-[#1d2d20] disabled:cursor-not-allowed disabled:opacity-50">

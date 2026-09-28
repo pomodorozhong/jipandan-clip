@@ -133,6 +133,41 @@ class SessionService:
             self._clip_dir_override = selected
             return snapshot
 
+    def default_export_dir_for_current_audio(self) -> dict:
+        with self._lock:
+            if self.audio is None:
+                raise InvalidEdit("Open an audio session before choosing a default export directory")
+            return {"clip_dir": str(default_export_dir(self.audio, paths=self.paths))}
+
+    def pick_export_dir(self) -> dict:
+        """Open the macOS folder picker and return its selected directory."""
+
+        if sys.platform != "darwin":
+            raise InvalidEdit("The native folder picker is only available on macOS")
+        script = (
+            'set chosenFolder to choose folder with prompt "Choose Jipandan export directory"\n'
+            "POSIX path of chosenFolder"
+        )
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError as exc:
+            raise InvalidEdit(f"Could not open the macOS folder picker: {exc}") from exc
+        if result.returncode != 0:
+            if "User canceled" in result.stderr or "-128" in result.stderr:
+                return {"path": None, "cancelled": True}
+            detail = result.stderr.strip() or "osascript failed"
+            raise InvalidEdit(f"Could not choose an export directory: {detail}")
+        try:
+            selected = resolve_export_dir(result.stdout.strip())
+        except OSError as exc:
+            raise InvalidEdit(str(exc)) from exc
+        return {"path": str(selected), "cancelled": False}
+
     def start_transcription(self, audio: str, settings: dict) -> dict:
         with self._lock:
             if self.audio is None or str(self.audio) != audio:

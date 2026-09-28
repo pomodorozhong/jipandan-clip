@@ -138,6 +138,14 @@ def create_app(
     def update_storage(request: StorageRequest):
         return app.state.service.set_export_dir(request.clip_dir, request.expected_revision)
 
+    @app.get("/api/session/storage/default")
+    def default_storage():
+        return app.state.service.default_export_dir_for_current_audio()
+
+    @app.post("/api/session/storage/pick")
+    def pick_storage():
+        return app.state.service.pick_export_dir()
+
     @app.get("/api/events")
     async def events(request: Request, token: str):
         if not secrets.compare_digest(token, app.state.token):
