@@ -14,7 +14,6 @@ ExportMode = Literal["as_is", "trim_edges", "trim_all"]
 
 DEFAULT_START_THRESHOLD_DB = -40.0
 DEFAULT_STOP_THRESHOLD_DB = -50.0
-DEFAULT_TRIM_ALL_THRESHOLD_DB = -30.0
 
 
 @dataclass(frozen=True)
@@ -44,26 +43,6 @@ def build_silence_filter(
     if trim_middle:
         parts.extend(["start_mode=any", "stop_mode=any"])
     return "silenceremove=" + ":".join(parts)
-
-
-SILENCE_TRIM_EDGES_FILTER = build_silence_filter(
-    stop_periods=1,
-    start_threshold_db=DEFAULT_START_THRESHOLD_DB,
-    stop_threshold_db=DEFAULT_STOP_THRESHOLD_DB,
-    stop_duration="1",
-    trim_middle=False,
-)
-
-SILENCE_TRIM_ALL_FILTER = build_silence_filter(
-    stop_periods=-1,
-    start_threshold_db=DEFAULT_TRIM_ALL_THRESHOLD_DB,
-    stop_threshold_db=DEFAULT_TRIM_ALL_THRESHOLD_DB,
-    stop_duration="0.2",
-    trim_middle=True,
-)
-
-# Backwards-compatible alias used by notebooks.
-SILENCE_REMOVE_FILTER = SILENCE_TRIM_EDGES_FILTER
 
 
 def _run(cmd: list[str]) -> None:

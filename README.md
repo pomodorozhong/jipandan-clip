@@ -6,7 +6,6 @@ Jipandan-clips is a small tool to make clips from lengthy, raw audio files.
 
 ```bash
 brew install ffmpeg
-brew install mpv
 brew install uv
 brew install node
 
@@ -36,16 +35,11 @@ To build the frontend manually without starting the server, run:
 cd frontend && npm run build
 ```
 
-### Standalone transcription and notebook generation
+### Standalone transcription
 
 ```bash
 # Transcribe audio into timestamped text
 uv run transcribe raw.mp3
-
-# Generate the ipynb file for making clips
-uv run generate-commands raw.srt --audio raw.mp3
-
-# Open the ipynb file and run preview/clip cells manually
 ```
 
 New sessions save exported clips as `exports/raw_0001_title.mp3`, `exports/raw_0002_title.mp3`, etc. Here, `raw` is the stem of the source audio filename (for example, `raw.mp3` -> `raw`); an explicit `--clip-dir` can choose another directory.
@@ -86,14 +80,14 @@ The selected recording stays where it was opened. Its `.srt` transcript and `.ji
 
 Browser uploads, transcription job records, and their settings use the platform's application data directory. Regenerable browser previews use the application cache directory. Transcription logs use the application log directory. These locations are selected with `platformdirs` (for example, macOS uses `~/Library/Application Support/Jipandan`, `~/Library/Caches/Jipandan`, and `~/Library/Logs/Jipandan`).
 
-Cache files and failed preview work can be removed at any time and will be rebuilt. Completed transcription records and logs are retained for recovery and diagnostics until the user removes them; active jobs should not be removed. System-temporary preview and notebook intermediates are disposable. None of these cleanup actions remove recordings, sidecar sessions, or published exports.
+Cache files and failed preview work can be removed at any time and will be rebuilt. Completed transcription records and logs are retained for recovery and diagnostics until the user removes them; active jobs should not be removed. System-temporary preview intermediates are disposable. None of these cleanup actions remove recordings, sidecar sessions, or published exports.
 
 ## Repository layout
 
 - `frontend/`: React browser interface.
 - `src/jipandan/web/`: local API, sessions, transcription jobs, and previews.
 - `src/jipandan/core/`: shared audio, subtitle, and persistence logic.
-- `src/jipandan/cli/`: browser GUI, standalone transcription, and notebook generation entry points.
+- `src/jipandan/cli/`: browser GUI and standalone transcription entry points.
 - `tests/`: Python regression and API tests.
 - `scripts/`: disposable web-review fixture preparation.
 - `doc/`: [documentation index](doc/README.md), reviews, and archived project plans.
@@ -105,4 +99,4 @@ Cache files and failed preview work can be removed at any time and will be rebui
 
 ## Retired interfaces
 
-The TUI (`jipandan`) and browser terminal (`jipandan-serve`) have been retired. Use `uv run jipandan-web` for interactive review and export. Standalone `transcribe` and notebook generation through `generate-commands` remain available. Existing `.srt` and `.jipandan.json` sidecars can be opened in the browser GUI, and saved sessions retain their export destinations.
+The TUI (`jipandan`), browser terminal (`jipandan-serve`), and notebook generator (`generate-commands`) have been retired. Use `uv run jipandan-web` for interactive review and export; `uv run transcribe` remains available for standalone transcription. Existing `.srt` and `.jipandan.json` sidecars can be opened in the browser GUI, and saved sessions retain their export destinations. mpv and Jupyter are no longer required.
