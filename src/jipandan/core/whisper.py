@@ -9,17 +9,16 @@ from pathlib import Path
 
 from jipandan.core.srt import parse_srt, srt_time_to_seconds
 
-# Textual (and other TUIs) expose stderr.fileno() == -1. tqdm then tries to
-# create a multiprocessing lock for progress bars, which crashes with
-# "bad value(s) in fds_to_keep" when Hugging Face downloads models from a
-# background worker thread.
+# Transcription runs in workers with redirected output. Disable download
+# progress bars and use thread locks to avoid multiprocessing-lock setup in
+# those workers.
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
 _PROGRESS_BARS_CONFIGURED = False
 
 
 def configure_progress_bars() -> None:
-    """Configure tqdm locks before mlx/Hugging Face run in a TUI subprocess."""
+    """Configure tqdm locks before mlx/Hugging Face run in transcription workers."""
     global _PROGRESS_BARS_CONFIGURED
     if _PROGRESS_BARS_CONFIGURED:
         return

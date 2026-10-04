@@ -47,10 +47,6 @@ class AppPaths:
         return self.cache_dir / "web-previews"
 
     @property
-    def waveform_dir(self) -> Path:
-        return self.cache_dir / "waveforms"
-
-    @property
     def fallback_export_dir(self) -> Path:
         return self.data_dir / "exports"
 
@@ -108,10 +104,3 @@ def resolve_export_dir(path: str | Path) -> Path:
     if not os.access(selected, os.W_OK):
         raise OSError(f"Export directory is not writable: {selected}")
     return selected
-
-
-def waveform_cache_dir(audio: Path, *, paths: AppPaths | None = None) -> Path:
-    """Return a stable, collision-resistant cache directory for one recording."""
-
-    selected_paths = paths or get_app_paths()
-    return selected_paths.waveform_dir / _audio_key(audio)

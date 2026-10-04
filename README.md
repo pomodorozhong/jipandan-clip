@@ -6,7 +6,6 @@ Jipandan-clips is a small tool to make clips from lengthy, raw audio files.
 
 ```bash
 brew install ffmpeg
-brew install mpv
 brew install uv
 brew install node
 
@@ -17,7 +16,7 @@ uv sync
 
 ## Usage
 
-### 1. Browser GUI (recommended)
+### Browser GUI
 
 Open an audio file directly in the local browser interface:
 
@@ -36,44 +35,11 @@ To build the frontend manually without starting the server, run:
 cd frontend && npm run build
 ```
 
-### 2. TUI
-
-Run the full pipeline in one interactive session.
-
-```bash
-uv run jipandan raw.mp3
-```
-
-If no SRT exists, transcription runs first. Then review clips in the TUI:
-
-1. Skim waveforms and press `1` to mark Group 1 candidates.
-2. Press `Space` to preview in `mpv`, then press `2` for Group 2.
-3. Use `[`/`]` to nudge the start and `{`/`}` to nudge the end. Press `,` for fine start nudge or `.` for fine end nudge (10ms steps); `Esc` or `j`/`k` returns to basic mode.
-4. Press `Ctrl+Shift+X` to skip the current clip and all clips above it.
-5. Press `e` to export the current clip to the session's export directory.
-
-Session state is saved to `{audio_stem}.jipandan.json`.
-
-### 3. Browser terminal (via `jipandan-serve`)
-
-Use the browser UI if you prefer a web-based review session.
-
-Pros: Asian IMEs are handled better by browsers. If you're having trouble typing clip titles in the terminal, consider trying this mode.
-
-```bash
-uv run jipandan-serve raw.mp3
-```
-
-### 4. CLI (legacy)
+### Standalone transcription
 
 ```bash
 # Transcribe audio into timestamped text
 uv run transcribe raw.mp3
-
-# Generate the ipynb file for making clips
-uv run generate-commands raw.srt --audio raw.mp3
-
-# Open the ipynb file and run preview/clip cells manually
 ```
 
 New sessions save exported clips as `exports/raw_0001_title.mp3`, `exports/raw_0002_title.mp3`, etc. Here, `raw` is the stem of the source audio filename (for example, `raw.mp3` -> `raw`); an explicit `--clip-dir` can choose another directory.
@@ -88,7 +54,7 @@ Run the full Python suite:
 uv run python -m unittest discover -s tests -v
 ```
 
-The TUI regression test generates a short temporary recording, SRT, and session, so the full suite does not require private recordings. The optional `scripts/prepare_web_review.py` helper still requires the private `raw/0526.mp3`, `raw/0526.srt`, and `raw/0526.jipandan.json` review fixtures; it writes disposable copies under the system temporary directory.
+The Python suite uses temporary recordings, SRT files, and sessions, so it does not require private recordings. The optional `scripts/prepare_web_review.py` helper still requires the private `raw/0526.mp3`, `raw/0526.srt`, and `raw/0526.jipandan.json` review fixtures; it writes disposable copies under the system temporary directory.
 
 For a faster focused run, execute the core, web API, and leading-silence tests separately:
 
@@ -112,23 +78,25 @@ The frontend interaction-policy tests run with Vitest. To check the browser inte
 
 The selected recording stays where it was opened. Its `.srt` transcript and `.jipandan.json` session remain beside it. New sessions export to an `exports/` directory beside the recording; `--clip-dir` overrides that choice for new sessions. Existing sessions keep the export directory recorded in their session file. In the browser GUI, open **Settings → Storage** to change the export directory for the active session without creating a new session. **Choose folder…** opens the native macOS folder picker, **Reset to default** restores the platform-aware default in the draft, and **Apply export directory** asks for confirmation before saving. Existing exported files remain in their previous directories; future exports use the new directory.
 
-Browser uploads, transcription job records, and their settings use the platform's application data directory. Regenerable browser previews and TUI waveform envelopes use the application cache directory. Transcription logs use the application log directory. These locations are selected with `platformdirs` (for example, macOS uses `~/Library/Application Support/Jipandan`, `~/Library/Caches/Jipandan`, and `~/Library/Logs/Jipandan`).
+Browser uploads, transcription job records, and their settings use the platform's application data directory. Regenerable browser previews use the application cache directory. Transcription logs use the application log directory. These locations are selected with `platformdirs` (for example, macOS uses `~/Library/Application Support/Jipandan`, `~/Library/Caches/Jipandan`, and `~/Library/Logs/Jipandan`).
 
-Cache files and failed preview work can be removed at any time and will be rebuilt. Completed transcription records and logs are retained for recovery and diagnostics until the user removes them; active jobs should not be removed. System-temporary preview and notebook intermediates are disposable. None of these cleanup actions remove recordings, sidecar sessions, or published exports.
+Cache files and failed preview work can be removed at any time and will be rebuilt. Completed transcription records and logs are retained for recovery and diagnostics until the user removes them; active jobs should not be removed. System-temporary preview intermediates are disposable. None of these cleanup actions remove recordings, sidecar sessions, or published exports.
 
 ## Repository layout
 
 - `frontend/`: React browser interface.
 - `src/jipandan/web/`: local API, sessions, transcription jobs, and previews.
 - `src/jipandan/core/`: shared audio, subtitle, and persistence logic.
-- `src/jipandan/tui/`: terminal interface and widgets.
-- `src/jipandan/cli/`: command entry points and browser-terminal template.
+- `src/jipandan/cli/`: browser GUI and standalone transcription entry points.
 - `tests/`: Python regression and API tests.
-- `scripts/`: waveform benchmarking and disposable web-review fixture preparation.
+- `scripts/`: disposable web-review fixture preparation.
 - `doc/`: [documentation index](doc/README.md), reviews, and archived project plans.
 - Audio sources may live anywhere; application data, caches, logs, and temporary work use the storage locations described above.
 
 ## Notice
 
 - The project is only tested on macOS.
-- The TUI and browser terminal render waveforms with textual-plot; the browser GUI has its own waveform editor.
+
+## Retired interfaces
+
+The TUI (`jipandan`), browser terminal (`jipandan-serve`), and notebook generator (`generate-commands`) have been retired. Use `uv run jipandan-web` for interactive review and export; `uv run transcribe` remains available for standalone transcription. Existing `.srt` and `.jipandan.json` sidecars can be opened in the browser GUI, and saved sessions retain their export destinations. mpv and Jupyter are no longer required.
