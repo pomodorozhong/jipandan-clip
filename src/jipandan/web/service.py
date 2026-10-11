@@ -17,10 +17,11 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import BinaryIO, Callable
 
+from jipandan.core.clip_features import compute_clip_features, likely_keep_scores
 from jipandan.core.ffmpeg import ExportOptions, probe_duration_seconds, publish_prebuilt_clip
 from jipandan.core.leading_silence import detect_leading_silence_start
 from jipandan.core.paths import AppPaths, default_export_dir, get_app_paths, resolve_export_dir
-from jipandan.core.srt import parse_srt
+from jipandan.core.srt import parse_srt, segment_scores_path
 from jipandan.core.whisper import describe_transcribe_call
 from jipandan.core.models import (
     ClipCandidate,
@@ -59,9 +60,10 @@ def _time_ms(value: str) -> int:
 LEADING_SILENCE_BATCH_SIZE = 25
 
 
-def clip_payload(candidate: ClipCandidate) -> dict:
+def clip_payload(candidate: ClipCandidate, likely_keep: float | None = None) -> dict:
     return {
         **asdict(candidate),
+        "likely_keep": likely_keep,
         "clip_id": candidate.clip_id,
         "start_ms": _time_ms(candidate.start),
         "end_ms": _time_ms(candidate.end),
@@ -85,6 +87,7 @@ class SessionService:
         self._undo: list[tuple[str, dict[str, ClipCandidate], str | None]] = []
         self._waveforms = WaveformCache()
         self._leading_silence_job: dict[str, object] | None = None
+        self._clip_features_job: dict[str, object] | None = None
         self._previews = PreviewJobs((preview_dir or self.paths.preview_dir).expanduser().resolve())
         self._transcriptions = TranscriptionJobs(
             (transcription_dir or self.paths.transcription_dir).expanduser().resolve(),
@@ -217,6 +220,7 @@ class SessionService:
                 raise ValueError("Transcription contains invalid clip times")
         destination = job.audio.with_suffix(".srt")
         staged = destination.with_name(f".{destination.name}.{job.id}.tmp")
+        scores = segment_scores_path(job.output)
         with self._lock:
             if destination.exists() or job.audio.with_suffix(".jipandan.json").exists():
                 raise SessionConflict("An SRT or session was created while transcription ran")
@@ -226,6 +230,8 @@ class SessionService:
                     target.flush()
                     os.fsync(target.fileno())
                 os.link(staged, destination)
+                if scores.is_file():
+                    shutil.copyfile(scores, segment_scores_path(destination))
                 session = Session.from_srt(job.audio, destination, self._new_session_clip_dir(job.audio))
                 session.save()
             finally:
@@ -509,6 +515,100 @@ class SessionService:
                     job["state"] = "failed"
                     job["error"] = str(exc)
 
+    def clip_features_status(self) -> dict | None:
+        with self._lock:
+            job = self._clip_features_job
+            if job is None or job["audio"] != str(self.audio):
+                return None
+            return {key: value for key, value in job.items() if key != "audio"}
+
+    def start_clip_features(self) -> dict:
+        """Measure loudness and tone for clips that lack them, in the background."""
+        with self._lock:
+            session = self._ready()
+            if session.clip_features_complete:
+                return {"id": "completed", "state": "completed", "progress": 0, "total": 0, "error": None}
+            existing = self._clip_features_job
+            if (
+                existing is not None
+                and existing["audio"] == str(session.audio)
+                and existing["state"] in {"queued", "running"}
+            ):
+                return {key: value for key, value in existing.items() if key != "audio"}
+            spans = {
+                (candidate.original_start, candidate.original_end): (
+                    _time_ms(candidate.original_start) / 1000, _time_ms(candidate.original_end) / 1000,
+                )
+                for candidate in session.candidates if candidate.peak_db is None
+            }
+            job: dict[str, object] = {
+                "id": uuid.uuid4().hex, "audio": str(session.audio), "state": "queued",
+                "progress": 0, "total": len(spans), "error": None,
+            }
+            self._clip_features_job = job
+            threading.Thread(
+                target=self._run_clip_features,
+                args=(str(job["id"]), session.audio, session.srt_fingerprint, spans),
+                name="jipandan-clip-features", daemon=True,
+            ).start()
+            return {key: value for key, value in job.items() if key != "audio"}
+
+    def _run_clip_features(
+        self, job_id: str, audio: Path, srt_fingerprint: str | None,
+        spans: dict[tuple[str, str], tuple[float, float]],
+    ) -> None:
+        def current_job() -> dict[str, object] | None:
+            job = self._clip_features_job
+            return job if job is not None and job["id"] == job_id else None
+
+        def report(finished: int) -> bool:
+            with self._lock:
+                job = current_job()
+                if job is None:
+                    return False
+                job["progress"] = finished
+                return True
+
+        try:
+            with self._lock:
+                job = current_job()
+                if job is None:
+                    return
+                job["state"] = "running"
+            keys = list(spans)
+            measured = dict(zip(keys, compute_clip_features(
+                audio, [spans[key] for key in keys], progress=report,
+            )))
+            with self._lock:
+                job = current_job()
+                if job is None:
+                    return
+                session = self.session
+                if self.audio != audio or session is None or session.srt_fingerprint != srt_fingerprint:
+                    job["state"] = "cancelled"
+                    return
+
+                def apply_features(draft: Session) -> str:
+                    for candidate in draft.candidates:
+                        features = measured.get((candidate.original_start, candidate.original_end))
+                        if candidate.peak_db is None and features is not None:
+                            candidate.peak_db = features.peak_db
+                            candidate.mid_share_db = features.mid_share_db
+                            candidate.bass_share_db = features.bass_share_db
+                    draft.clip_features_complete = True
+                    return "Measure clip audio"
+
+                self._mutate(session.revision, apply_features)
+                job["progress"] = job["total"]
+                job["state"] = "completed"
+        except Exception as exc:
+            logger.exception("Clip feature measurement failed")
+            with self._lock:
+                job = current_job()
+                if job is not None:
+                    job["state"] = "failed"
+                    job["error"] = str(exc)
+
     def import_audio(self, filename: str, source: BinaryIO) -> dict:
         name = Path(filename).name
         if not name or name in {".", ".."} or Path(name).suffix.lower() not in {
@@ -578,10 +678,14 @@ class SessionService:
                 "leading_silence_detection_complete": (
                     session.leading_silence_detection_complete if session else False
                 ),
+                "clip_features_complete": session.clip_features_complete if session else False,
                 "needs_transcription": bool(self.audio and session is None),
                 "transcription": self._transcriptions.latest(self.audio),
                 "revision": session.revision if session else None,
-                "candidates": [clip_payload(c) for c in session.candidates] if session else [],
+                "candidates": [
+                    clip_payload(candidate, score)
+                    for candidate, score in zip(session.candidates, likely_keep_scores(session.candidates))
+                ] if session else [],
                 "counts": counts,
                 "can_undo": bool(self._undo),
                 "merge_preview": self.merge_preview() if session and self.srt and self.srt.exists() else None,

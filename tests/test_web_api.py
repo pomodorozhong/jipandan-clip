@@ -12,7 +12,9 @@ from unittest.mock import patch
 import numpy as np
 from fastapi.testclient import TestClient
 
+from jipandan.core.clip_features import ClipFeatures
 from jipandan.core.waveform_envelope import WaveformEnvelopeCache
+from jipandan.core.whisper import write_segment_scores
 from jipandan.web.api import create_app
 from jipandan.web.service import SessionService
 
@@ -178,6 +180,26 @@ class WebApiTests(unittest.TestCase):
         with patch("jipandan.web.service.detect_leading_silence_start") as detect:
             self.assertEqual(self.client.post(path, headers=self.headers).json()["state"], "completed")
             detect.assert_not_called()
+
+    def test_clip_features_score_clips_and_persist_without_undo(self):
+        self.open()
+        path = "/api/session/clip-features"
+        measured = [ClipFeatures(-12.0, -3.0, -25.0), ClipFeatures(-35.0, -9.0, -6.0)]
+        with patch("jipandan.web.service.compute_clip_features", return_value=measured) as compute:
+            response = self.client.post(path, headers=self.headers)
+            self.assertEqual(response.status_code, 200, response.text)
+            job = self.wait_for_job(path, "completed")
+        self.assertEqual(job["total"], 2)
+        self.assertEqual(compute.call_args.args[1], [(1.0, 2.0), (3.0, 4.0)])
+        state = self.client.get("/api/session").json()
+        self.assertTrue(state["clip_features_complete"])
+        self.assertFalse(state["can_undo"])
+        self.assertEqual([clip["likely_keep"] for clip in state["candidates"]], [100.0, 0.0])
+        persisted = json.loads(self.audio.with_suffix(".jipandan.json").read_text())
+        self.assertEqual(persisted["candidates"][1]["peak_db"], -35.0)
+        with patch("jipandan.web.service.compute_clip_features") as compute:
+            self.assertEqual(self.client.post(path, headers=self.headers).json()["state"], "completed")
+            compute.assert_not_called()
 
     def test_leading_silence_preserves_manual_trim_during_detection(self):
         self.open()
@@ -571,6 +593,7 @@ class WebApiTests(unittest.TestCase):
 
         def succeed(_manager, job):
             job.output.write_text(SRT, encoding="utf-8")
+            write_segment_scores(job.output, [{"no_speech_prob": 0.1}, {"no_speech_prob": 0.8}])
             return 0
 
         with patch("jipandan.web.transcription.TranscriptionJobs._run_process", succeed):
@@ -581,7 +604,9 @@ class WebApiTests(unittest.TestCase):
             completed = self.wait_for_job(f"/api/transcriptions/{retried.json()['id']}", "completed")
             self.assertEqual(completed["entry_count"], 2)
             self.assertEqual(self.srt.read_text(encoding="utf-8"), SRT)
-            self.assertEqual(len(self.client.get("/api/session").json()["candidates"]), 2)
+            published = self.client.get("/api/session").json()["candidates"]
+            self.assertEqual([clip["no_speech_prob"] for clip in published], [0.1, 0.8])
+            self.assertEqual([clip["likely_keep"] for clip in published], [100.0, 0.0])
             self.assertEqual(self.client.post(
                 "/api/transcriptions", json=settings, headers=self.headers,
             ).status_code, 409)

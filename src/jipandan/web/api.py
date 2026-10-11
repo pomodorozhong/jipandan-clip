@@ -262,6 +262,14 @@ def create_app(
     def start_leading_silence_detection():
         return app.state.service.start_leading_silence_detection()
 
+    @app.get("/api/session/clip-features")
+    def clip_features_status():
+        return app.state.service.clip_features_status()
+
+    @app.post("/api/session/clip-features")
+    def start_clip_features():
+        return app.state.service.start_clip_features()
+
     @app.post("/api/previews")
     def start_preview(request: PreviewRequest):
         return app.state.service.start_preview(
