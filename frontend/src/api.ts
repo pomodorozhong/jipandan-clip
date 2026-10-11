@@ -14,6 +14,8 @@ export interface Clip {
   last_export_path: string | null;
   /** 0–100 review-order score; null until the clip has been measured. */
   likely_keep: number | null;
+  /** Title from re-transcribing this clip's audio, awaiting review. */
+  suggested_title: string | null;
 }
 
 export interface MergePreview {
@@ -65,6 +67,15 @@ export interface ClipFeaturesJob {
   state: "queued" | "running" | "completed" | "failed" | "cancelled";
   progress: number;
   total: number;
+  error: string | null;
+}
+
+export interface ClipTranscriptionJob {
+  id: string;
+  state: "queued" | "running" | "completed" | "failed" | "cancelled";
+  progress: number;
+  total: number;
+  clip_ids: string[];
   error: string | null;
 }
 

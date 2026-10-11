@@ -30,6 +30,10 @@ class ClipPatch(BaseModel):
     end_ms: int | None = None
 
 
+class ClipTranscriptionRequest(BaseModel):
+    clip_ids: list[str] = Field(min_length=1, max_length=5000)
+
+
 class RevisionRequest(BaseModel):
     expected_revision: int = Field(ge=0)
 
@@ -269,6 +273,22 @@ def create_app(
     @app.post("/api/session/clip-features")
     def start_clip_features():
         return app.state.service.start_clip_features()
+
+    @app.get("/api/session/clip-transcription")
+    def clip_transcription_status():
+        return app.state.service.clip_transcription_status()
+
+    @app.post("/api/session/clip-transcription")
+    def start_clip_transcription(request: ClipTranscriptionRequest):
+        return app.state.service.start_clip_transcription(request.clip_ids)
+
+    @app.post("/api/session/clip-transcription/cancel")
+    def cancel_clip_transcription():
+        return app.state.service.cancel_clip_transcription()
+
+    @app.delete("/api/clips/{clip_id}/suggested-title")
+    def dismiss_title_suggestion(clip_id: str):
+        return app.state.service.dismiss_title_suggestion(clip_id)
 
     @app.post("/api/previews")
     def start_preview(request: PreviewRequest):
