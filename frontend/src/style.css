@@ -35,5 +35,6 @@ input:focus-visible, button:focus-visible { outline: 2px solid #b4e2b6; outline-
 .clip-tag-exported { background: #4d375a; border-color: #825e9c; color: #e9cbf8; }
 .clip-tag-skipped { background: #36413e; border-color: #66756e; color: #d6e0da; }
 .clip-tag-trimmed { background: #59402b; border-color: #a16d3e; color: #ffd5a0; }
+.clip-score { min-width: 1.9rem; border-radius: .4rem; background: #1f2b26; padding: .1rem .35rem; text-align: center; font-size: .72rem; color: #b7d69d; }
 .panel-scroll { scrollbar-color: #54705c transparent; scrollbar-width: thin; }
 .mono { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }

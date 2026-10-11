@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import math
 import sys
@@ -7,7 +9,12 @@ import tempfile
 import threading
 from pathlib import Path
 
-from jipandan.core.srt import parse_srt, srt_time_to_seconds
+from jipandan.core.srt import (
+    SEGMENT_SCORES_VERSION,
+    parse_srt,
+    segment_scores_path,
+    srt_time_to_seconds,
+)
 
 # Transcription runs in workers with redirected output. Disable download
 # progress bars and use thread locks to avoid multiprocessing-lock setup in
@@ -206,6 +213,42 @@ def transcribe_to_text(
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
+    if output_format == "srt":
+        write_segment_scores(output_text, segments)
+
+
+def _finite_or_none(value: object) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def write_segment_scores(srt_path: Path, segments: list[dict]) -> None:
+    """Save Whisper's per-segment confidence beside ``srt_path``, keyed by SRT index."""
+    payload = {
+        "version": SEGMENT_SCORES_VERSION,
+        "srt_sha256": hashlib.sha256(srt_path.read_bytes()).hexdigest(),
+        "segments": [
+            {
+                "index": index,
+                "avg_logprob": _finite_or_none(segment.get("avg_logprob")),
+                "no_speech_prob": _finite_or_none(segment.get("no_speech_prob")),
+                "compression_ratio": _finite_or_none(segment.get("compression_ratio")),
+            }
+            for index, segment in enumerate(segments, start=1)
+        ],
+    }
+    destination = segment_scores_path(srt_path)
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=destination.parent,
+        prefix=f".{destination.name}.", suffix=".tmp", delete=False,
+    ) as handle:
+        json.dump(payload, handle)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(handle.name, destination)
 
 
 def _format_srt_timestamp(seconds: float) -> str:

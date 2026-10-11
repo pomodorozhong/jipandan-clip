@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, audioUrl, bootstrap, uploadAudio, type Clip, type LeadingSilenceJob, type Session, type Status } from "./api";
+import { api, audioUrl, bootstrap, uploadAudio, type Clip, type ClipFeaturesJob, type LeadingSilenceJob, type Session, type Status } from "./api";
 import WaveformEditor from "./WaveformEditor";
 import ExportPreview from "./ExportPreview";
 import TranscriptionScreen from "./TranscriptionScreen";
@@ -35,7 +35,7 @@ import {
 
 type Filter = "unsorted" | "group1" | "group2" | "exported" | "all";
 type AllStatusFilter = "all" | Status;
-type AllOrder = "clip-asc" | "clip-desc" | "start-asc" | "start-desc" | "title-asc";
+type AllOrder = "clip-asc" | "clip-desc" | "start-asc" | "start-desc" | "title-asc" | "likely-desc";
 type SaveState = "saved" | "saving" | "failed";
 type AppSettings = {
   detectLeadingSilence: boolean;
@@ -89,6 +89,7 @@ const allOrders: { key: AllOrder; label: string }[] = [
   { key: "start-asc", label: "Start time ↑" },
   { key: "start-desc", label: "Start time ↓" },
   { key: "title-asc", label: "Title A–Z" },
+  { key: "likely-desc", label: "Likely keep ↓" },
 ];
 
 function formatDuration(ms: number): string {
@@ -244,6 +245,8 @@ export default function App() {
     typeof navigator !== "undefined" && typeof navigator.getGamepads === "function",
   ));
   const [leadingSilenceJob, setLeadingSilenceJob] = useState<LeadingSilenceJob | null>(null);
+  const [clipFeaturesJob, setClipFeaturesJob] = useState<ClipFeaturesJob | null>(null);
+  const [clipFeaturesAttempt, setClipFeaturesAttempt] = useState(0);
   const [dismissedDetectionJobId, setDismissedDetectionJobId] = useState<string | null>(null);
   const autoDetectionRequest = useRef<string | null>(null);
   const loadedDetectionJob = useRef<string | null>(null);
@@ -411,15 +414,48 @@ export default function App() {
     };
   }, [session?.audio, session?.needs_transcription, leadingSilenceJob?.id, leadingSilenceJob?.state]);
 
+  useEffect(() => {
+    setClipFeaturesJob(null);
+    if (!session?.audio || session.needs_transcription || session.clip_features_complete) return;
+    let active = true;
+    let timer: number | null = null;
+    // Starting is idempotent on the server: a second request returns the running job.
+    async function poll(start: boolean) {
+      try {
+        const job = start
+          ? await api<ClipFeaturesJob>("/session/clip-features", "POST")
+          : await api<ClipFeaturesJob | null>("/session/clip-features");
+        if (!active) return;
+        setClipFeaturesJob(job);
+        if (job?.state === "queued" || job?.state === "running") {
+          timer = window.setTimeout(() => { void poll(false); }, 1000);
+        } else if (job?.state === "completed") {
+          const latest = await api<Session>("/session");
+          if (active) setSession(latest);
+        }
+      } catch (cause) {
+        if (active) setClipFeaturesJob({
+          id: "request", state: "failed", progress: 0, total: 0,
+          error: cause instanceof Error ? cause.message : String(cause),
+        });
+      }
+    }
+    void poll(true);
+    return () => {
+      active = false;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [session?.audio, session?.needs_transcription, session?.clip_features_complete, clipFeaturesAttempt]);
+
   const visible = useMemo(() => {
     const clips = visibleClips(session?.candidates ?? [], filter, query, allStatusFilter);
-    if (filter !== "all") return clips;
     const compareClipId = (a: Clip, b: Clip) => a.index - b.index || a.suffix - b.suffix;
     return clips.sort((a, b) => {
       if (allOrder === "clip-desc") return compareClipId(b, a);
       if (allOrder === "start-asc") return a.start_ms - b.start_ms || compareClipId(a, b);
       if (allOrder === "start-desc") return b.start_ms - a.start_ms || compareClipId(a, b);
       if (allOrder === "title-asc") return a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: "base" }) || compareClipId(a, b);
+      if (allOrder === "likely-desc") return (b.likely_keep ?? -1) - (a.likely_keep ?? -1) || compareClipId(a, b);
       return compareClipId(a, b);
     });
   }, [session?.candidates, filter, query, allStatusFilter, allOrder]);
@@ -892,21 +928,29 @@ export default function App() {
               </div>
               <ActionButton onClick={() => setShowJump(true)} title="Jump to clip index (G)" shortcut="G" shortcutId="jump">Go to #</ActionButton>
             </div>
-            {filter === "all" && <div className="mt-3 grid grid-cols-2 gap-2">
-              <label className="subtle min-w-0 text-xs">Filter status
+            <div className={`mt-3 grid gap-2 ${filter === "all" ? "grid-cols-2" : "grid-cols-1"}`}>
+              {filter === "all" && <label className="subtle min-w-0 text-xs">Filter status
                 <select value={allStatusFilter} onChange={(event) => setAllStatusFilter(event.target.value as AllStatusFilter)}
                   aria-label="Filter clips by status" className="mt-1 block w-full rounded-lg border line bg-[#101816] px-2.5 py-2 text-sm text-[#e7eee7]">
                   <option value="all">All statuses</option>
                   {Object.entries(labels).map(([status, label]) => <option key={status} value={status}>{label}</option>)}
                 </select>
-              </label>
+              </label>}
               <label className="subtle min-w-0 text-xs">Order by
                 <select value={allOrder} onChange={(event) => setAllOrder(event.target.value as AllOrder)}
                   aria-label="Order clips" className="mt-1 block w-full rounded-lg border line bg-[#101816] px-2.5 py-2 text-sm text-[#e7eee7]">
                   {allOrders.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
                 </select>
               </label>
-            </div>}
+            </div>
+            {(clipFeaturesJob?.state === "queued" || clipFeaturesJob?.state === "running") &&
+              <p className="subtle mt-2 text-xs" role="status">
+                Measuring clips for likely keep · {clipFeaturesJob.progress.toLocaleString()} of {clipFeaturesJob.total.toLocaleString()}
+              </p>}
+            {clipFeaturesJob?.state === "failed" && <p className="mt-2 text-xs text-[#ffcfc4]" role="status">
+              Could not measure clips: {clipFeaturesJob.error}{" "}
+              <button type="button" className="underline" onClick={() => setClipFeaturesAttempt((attempt) => attempt + 1)}>Retry</button>
+            </p>}
           </div>
           <div ref={clipListRef} className="panel-scroll min-h-0 flex-1 overflow-auto" role="listbox" aria-label="Clips">
             {visible.length === 0 ? <p className="subtle px-5 py-8 text-sm">No clips match this view.</p> : visible.map((clip) => {
@@ -924,6 +968,10 @@ export default function App() {
                   </span>}
                 </span>
                 {filter !== "all" && changed && <span className="clip-tag clip-tag-trimmed shrink-0">Trimmed</span>}
+                {clip.likely_keep !== null && <span className="clip-score mono shrink-0"
+                  title="Likely keep score (0–100): louder, voice-like, and confidently transcribed clips score higher">
+                  {Math.round(clip.likely_keep)}
+                </span>}
                 <span className="subtle mono shrink-0 text-xs">{formatDuration(clip.end_ms - clip.start_ms)}</span>
               </button>;
             })}

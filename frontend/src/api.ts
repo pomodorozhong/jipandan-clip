@@ -12,6 +12,8 @@ export interface Clip {
   original_end_ms: number;
   duration: string;
   last_export_path: string | null;
+  /** 0–100 review-order score; null until the clip has been measured. */
+  likely_keep: number | null;
 }
 
 export interface MergePreview {
@@ -35,6 +37,7 @@ export interface Session {
   session_path: string | null;
   srt_fingerprint: string | null;
   leading_silence_detection_complete: boolean;
+  clip_features_complete: boolean;
   clip_dir: string;
   needs_transcription: boolean;
   transcription: TranscriptionJob | null;
@@ -54,6 +57,14 @@ export interface LeadingSilenceJob {
   progress: number;
   total: number;
   adjusted: number;
+  error: string | null;
+}
+
+export interface ClipFeaturesJob {
+  id: string;
+  state: "queued" | "running" | "completed" | "failed" | "cancelled";
+  progress: number;
+  total: number;
   error: string | null;
 }
 

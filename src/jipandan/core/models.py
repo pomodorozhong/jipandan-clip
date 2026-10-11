@@ -10,6 +10,7 @@ from typing import Literal
 
 from jipandan.core.srt import (
     compute_duration,
+    load_segment_scores,
     parse_srt,
     srt_time_to_ffmpeg,
     srt_time_to_seconds,
@@ -48,6 +49,12 @@ class ClipCandidate:
     last_export_start_threshold_db: float | None = None
     last_export_stop_threshold_db: float | None = None
     last_export_path: str | None = None
+    # Review-ordering signals measured on the original SRT span.
+    avg_logprob: float | None = None
+    no_speech_prob: float | None = None
+    peak_db: float | None = None
+    mid_share_db: float | None = None
+    bass_share_db: float | None = None
 
     @property
     def clip_id(self) -> str:
@@ -78,6 +85,17 @@ class ClipCandidate:
 
 
 _CLIP_CANDIDATE_FIELD_NAMES = {f.name for f in fields(ClipCandidate)}
+_SCORE_FIELD_NAMES = ("avg_logprob", "no_speech_prob", "peak_db", "mid_share_db", "bass_share_db")
+
+
+def _carried_scores(prior: ClipCandidate, fresh: ClipCandidate) -> dict[str, float | None]:
+    """Keep measured signals only while the original SRT span is unchanged."""
+    if (prior.original_start, prior.original_end) != (fresh.original_start, fresh.original_end):
+        return {name: getattr(fresh, name) for name in _SCORE_FIELD_NAMES}
+    return {
+        name: getattr(fresh, name) if getattr(fresh, name) is not None else getattr(prior, name)
+        for name in _SCORE_FIELD_NAMES
+    }
 
 
 def _clip_candidate_from_dict(item: dict) -> ClipCandidate:
@@ -98,6 +116,7 @@ class Session:
     revision: int = 0
     srt_fingerprint: str | None = None
     leading_silence_detection_complete: bool = False
+    clip_features_complete: bool = False
 
     @property
     def session_path(self) -> Path:
@@ -114,9 +133,12 @@ class Session:
         if not entries:
             raise ValueError(f"No valid subtitle entries found in {srt_path}")
 
+        fingerprint = hashlib.sha256(srt_path.read_bytes()).hexdigest()
+        scores = load_segment_scores(srt_path, fingerprint)
         candidates = []
         for entry in entries:
             start = srt_time_to_ffmpeg(entry.start)
+            segment = scores.get(entry.index, {})
             candidates.append(
                 ClipCandidate(
                     index=entry.index,
@@ -126,6 +148,8 @@ class Session:
                     start=start,
                     duration=compute_duration(entry.start, entry.end),
                     source_text=entry.text,
+                    avg_logprob=segment.get("avg_logprob"),
+                    no_speech_prob=segment.get("no_speech_prob"),
                 )
             )
         resolved_audio = audio.resolve()
@@ -136,7 +160,7 @@ class Session:
             clip_dir=resolved_clip_dir,
             export_dirs=[resolved_clip_dir],
             candidates=candidates,
-            srt_fingerprint=hashlib.sha256(srt_path.read_bytes()).hexdigest(),
+            srt_fingerprint=fingerprint,
         )
 
     @classmethod
@@ -159,6 +183,7 @@ class Session:
             revision=data.get("revision", 0),
             srt_fingerprint=data.get("srt_fingerprint"),
             leading_silence_detection_complete=data.get("leading_silence_detection_complete", False),
+            clip_features_complete=data.get("clip_features_complete", False),
         )
 
     def save(self) -> None:
@@ -180,6 +205,7 @@ class Session:
                 "revision": next_revision,
                 "srt_fingerprint": self.srt_fingerprint,
                 "leading_silence_detection_complete": self.leading_silence_detection_complete,
+                "clip_features_complete": self.clip_features_complete,
                 "audio": str(self.audio),
                 "srt": str(self.srt),
                 "clip_dir": str(self.clip_dir),
@@ -271,6 +297,7 @@ class Session:
                             last_export_start_threshold_db=prior.last_export_start_threshold_db,
                             last_export_stop_threshold_db=prior.last_export_stop_threshold_db,
                             last_export_path=prior.last_export_path,
+                            **_carried_scores(prior, fresh_candidate),
                         )
                     )
                 else:
@@ -290,6 +317,7 @@ class Session:
                             last_export_start_threshold_db=prior.last_export_start_threshold_db,
                             last_export_stop_threshold_db=prior.last_export_stop_threshold_db,
                             last_export_path=prior.last_export_path,
+                            **_carried_scores(prior, fresh_candidate),
                         )
                     )
 
@@ -323,6 +351,7 @@ class Session:
         self.candidates = merged
         self.srt_fingerprint = fresh.srt_fingerprint
         self.leading_silence_detection_complete = False
+        self.clip_features_complete = False
         return warnings
 
     def get_candidate(self, clip_id: str) -> ClipCandidate | None:
@@ -369,6 +398,7 @@ class Session:
             last_export_mode=source.last_export_mode,
             last_export_start_threshold_db=source.last_export_start_threshold_db,
             last_export_stop_threshold_db=source.last_export_stop_threshold_db,
+            **{name: getattr(source, name) for name in _SCORE_FIELD_NAMES},
         )
         last_sibling_position = position
         for offset in range(position + 1, len(self.candidates)):

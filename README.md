@@ -27,6 +27,7 @@ uv run jipandan-web raw.mp3
 You can also run `uv run jipandan-web` first and choose an audio file in the browser. The server listens on loopback only. Each launch builds the frontend before starting the server. Node.js and npm dependencies are required; install the locked dependencies once with `cd frontend && npm ci`.
 
 The GUI can transcribe audio, review and trim clips, compare rendered export previews, and save collision-safe MP3s. Session state is saved beside the audio.
+When a session opens, the GUI measures each clip's loudness and tone in the background (about 30 seconds for a 7-hour recording). Choose **Order by → Likely keep ↓** to review louder, voice-like clips first; each row shows its 0–100 score. Transcriptions also save Whisper's per-segment confidence as `<audio>.segments.json` beside the SRT, which new sessions add to the score.
 Each transcription keeps its full worker output and traceback in the application log directory under `transcriptions/<job-id>/run.log`; the Transcription screen shows the log path and offers a download link. Zero-duration segments are omitted from the SRT and listed in that log.
 
 To build the frontend manually without starting the server, run:

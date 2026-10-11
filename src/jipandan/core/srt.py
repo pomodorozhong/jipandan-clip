@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,3 +52,22 @@ def parse_srt(srt_path: Path) -> list[SubtitleEntry]:
         text = " ".join(line.strip() for line in lines[2:] if line.strip())
         entries.append(SubtitleEntry(index=index, start=start, end=end, text=text))
     return entries
+
+
+SEGMENT_SCORES_VERSION = 1
+
+
+def segment_scores_path(srt_path: Path) -> Path:
+    """Sidecar holding Whisper's per-segment confidence for ``srt_path``."""
+    return srt_path.with_suffix(".segments.json")
+
+
+def load_segment_scores(srt_path: Path, srt_fingerprint: str) -> dict[int, dict]:
+    """Return scores by SRT index when the sidecar matches this exact SRT, else {}."""
+    try:
+        data = json.loads(segment_scores_path(srt_path).read_text(encoding="utf-8"))
+        if data.get("version") != SEGMENT_SCORES_VERSION or data.get("srt_sha256") != srt_fingerprint:
+            return {}
+        return {int(item["index"]): item for item in data["segments"]}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return {}
