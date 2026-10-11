@@ -230,7 +230,12 @@ describe("keyboard action routing", () => {
       type: "export", advance: false,
     });
     expect(resolveKeyboardAction("export", input({ key: "Enter", code: "Enter", metaKey: true, targetEditable: true }), "active-dialog")).toBeNull();
-    expect(resolveKeyboardAction("export", input({ code: "Space", targetInteractive: true }), "active-dialog")).toBeNull();
+    expect(resolveKeyboardAction("export", input({ code: "Space", targetInteractive: true }), "active-dialog")).toEqual({
+      type: "playback", target: "candidate", mode: "replay",
+    });
+    expect(resolveKeyboardAction("waveform", input({ code: "Space", targetInteractive: true }), "review")).toEqual({
+      type: "playback", target: "clip", mode: "replay",
+    });
   });
 
   it("deactivates text editing without closing its parent context", () => {

@@ -337,6 +337,7 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
         deactivateTextEditingTarget(event.target);
         return;
       }
+      if (action.type === "playback") event.preventDefault();
       const playbackReady = action.type !== "playback" || (
         action.target === "candidate" ? candidateReady : action.target === "reference" ? referenceReady : true
       );

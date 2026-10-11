@@ -461,6 +461,7 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
         deactivateTextEditingTarget(event.target);
         return;
       }
+      if (action.type === "playback") event.preventDefault();
       if (savingRef.current || !isActionAvailable(action, {
         context: waveformContext,
         busy: controlsDisabled,
