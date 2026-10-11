@@ -354,10 +354,13 @@ function resolveReviewAction(input: KeyboardInput, context: InputContext): Input
 }
 
 function resolveWaveformAction(input: KeyboardInput, context: InputContext): InputAction | null {
-  if (context !== "review" || input.targetEditable || input.targetInteractive || input.altKey || input.ctrlKey || input.metaKey) return null;
+  if (context !== "review" || input.targetEditable || input.altKey || input.ctrlKey || input.metaKey) return null;
+  // Space always drives playback, even when a button has focus; otherwise the
+  // browser would activate whichever button was last clicked.
   if (input.code === "Space") {
     return actionForShortcut(input.shiftKey ? "play-pause" : "replay", "keyboard");
   }
+  if (input.targetInteractive) return null;
   const edge = input.code === "BracketLeft" || input.code === "BracketRight" ? "end"
     : input.code === "Comma" || input.code === "Period" ? "start" : null;
   if (!edge) return null;
@@ -380,10 +383,10 @@ function resolveExportAction(input: KeyboardInput, context: InputContext): Input
   if (isCode(input, "Enter", "NumpadEnter") && !input.shiftKey && !input.targetInteractive) {
     return actionForShortcut("export", "keyboard");
   }
-  if (input.targetInteractive) return null;
   if (input.code === "Space") {
     return actionForShortcut(input.shiftKey ? "candidate-play-pause" : "candidate-replay", "keyboard");
   }
+  if (input.targetInteractive) return null;
   if (isCode(input, "KeyQ")) {
     return actionForShortcut(input.shiftKey ? "reference-play-pause" : "reference-replay", "keyboard");
   }
