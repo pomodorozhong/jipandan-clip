@@ -20,6 +20,12 @@ const KEYBOARD_NUDGE_DEBOUNCE_MS = 300;
 const BOUNDARY_AUDITION_MS = 500;
 const MAX_WINDOW_MS = 120_000;
 const FINE_WINDOW_MS = 700;
+const MIN_OVERVIEW_SPAN_MS = 500;
+const MIN_FINE_SPAN_MS = 100;
+const MAX_FINE_SPAN_MS = 10_000;
+const WAVEFORM_FETCH_DELAY_MS = 80;
+// Trackpad pinch arrives as ctrlKey wheel events; this maps deltaY to a zoom factor.
+const PINCH_ZOOM_SPEED = 0.01;
 const PLOT_WIDTH = 1000;
 const PLOT_HEIGHT = 160;
 const NUB_WIDTH = 18;
@@ -60,30 +66,34 @@ function signed(ms: number): string {
 }
 
 function useWaveform(clipId: string, range: TimeRange, buckets: number) {
-  const [window, setWindow] = useState<WaveformWindow | null>(null);
+  const [waveform, setWindow] = useState<WaveformWindow | null>(null);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
-    setWindow(null);
     setError("");
-    const query = new URLSearchParams({
-      start_ms: String(range.start), end_ms: String(range.end), buckets: String(buckets),
-    });
-    void api<WaveformWindow>(`/waveforms/${encodeURIComponent(clipId)}?${query}`, "GET", undefined, controller.signal)
-      .then(setWindow)
-      .catch((cause) => {
-        if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : String(cause));
+    // Keep the previous window on screen while the next one loads so panning
+    // and zooming stay continuous; the plot positions it by its own time span.
+    const timer = window.setTimeout(() => {
+      const query = new URLSearchParams({
+        start_ms: String(range.start), end_ms: String(range.end), buckets: String(buckets),
       });
-    return () => controller.abort();
+      void api<WaveformWindow>(`/waveforms/${encodeURIComponent(clipId)}?${query}`, "GET", undefined, controller.signal)
+        .then(setWindow)
+        .catch((cause) => {
+          if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : String(cause));
+        });
+    }, WAVEFORM_FETCH_DELAY_MS);
+    return () => { window.clearTimeout(timer); controller.abort(); };
   }, [clipId, range.start, range.end, buckets, retry]);
 
-  return { window, error, retry: () => setRetry((value) => value + 1) };
+  return { window: waveform, error, retry: () => setRetry((value) => value + 1) };
 }
 
 function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, editableEdge,
-  originalStartMs, disabled, onPreviewRange, onCommitRange, onPreviewEdge, onCommitEdge, onCancel }: {
+  originalStartMs, disabled, minSpan, maxSpan, onViewportChange,
+  onPreviewRange, onCommitRange, onPreviewEdge, onCommitEdge, onCancel }: {
   label: string;
   range: TimeRange;
   waveform: WaveformWindow | null;
@@ -93,6 +103,9 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
   originalStartMs: number | null;
   editableEdge?: Edge;
   disabled: boolean;
+  minSpan: number;
+  maxSpan: number;
+  onViewportChange: (start: number, span: number) => TimeRange;
   onPreviewRange: (start: number, end: number) => void;
   onCommitRange: (start: number, end: number) => void;
   onPreviewEdge: (edge: Edge, time: number) => void;
@@ -116,6 +129,85 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
   }, [waveform]);
 
   const span = range.end - range.start;
+  // The waveform may be a stale window from before the latest pan or zoom.
+  const waveformTransform = waveform
+    ? `translate(${(waveform.start_ms - range.start) / span * PLOT_WIDTH} 0) scale(${(waveform.end_ms - waveform.start_ms) / span} 1)`
+    : undefined;
+
+  // Wheel events arrive faster than React re-renders, so gestures accumulate
+  // against this ref instead of the last rendered range.
+  const view = useRef(range);
+  view.current = range;
+  const gesture = useRef({ minSpan, maxSpan, onViewportChange, dragging });
+  gesture.current = { minSpan, maxSpan, onViewportChange, dragging };
+
+  useEffect(() => {
+    const svg = svgRef.current!;
+    let pinchStartSpan: number | null = null;
+
+    function apply(start: number, nextSpan: number) {
+      const { minSpan: low, maxSpan: high, onViewportChange: change } = gesture.current;
+      view.current = change(start, clamp(nextSpan, low, high));
+    }
+
+    function zoomAround(clientX: number, nextSpan: number) {
+      const { start, end } = view.current;
+      const current = end - start;
+      const { minSpan: low, maxSpan: high } = gesture.current;
+      const bounded = clamp(nextSpan, low, high);
+      const rectangle = svg.getBoundingClientRect();
+      const ratio = clamp((clientX - rectangle.left) / rectangle.width, 0, 1);
+      apply(start + ratio * current - ratio * bounded, bounded);
+    }
+
+    function wheel(event: WheelEvent) {
+      if (gesture.current.dragging.current) return;
+      const scale = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? svg.clientWidth : 1;
+      const { start, end } = view.current;
+      const current = end - start;
+      if (event.ctrlKey) {
+        event.preventDefault();
+        zoomAround(event.clientX, current * Math.exp(event.deltaY * scale * PINCH_ZOOM_SPEED));
+        return;
+      }
+      // Horizontal two-finger swipes pan; vertical ones keep scrolling the page
+      // unless Shift turns them into a horizontal scroll.
+      const delta = Math.abs(event.deltaX) >= Math.abs(event.deltaY) ? event.deltaX
+        : event.shiftKey ? event.deltaY : 0;
+      if (!delta) return;
+      event.preventDefault();
+      apply(start + delta * scale / svg.clientWidth * current, current);
+    }
+
+    // Safari reports trackpad pinches as gesture events instead of ctrl+wheel.
+    function gestureStart(event: Event) {
+      event.preventDefault();
+      pinchStartSpan = view.current.end - view.current.start;
+    }
+    function gestureChange(event: Event) {
+      event.preventDefault();
+      const detail = event as Event & { scale: number; clientX: number };
+      if (pinchStartSpan === null || !detail.scale) return;
+      zoomAround(detail.clientX, pinchStartSpan / detail.scale);
+    }
+    function gestureEnd(event: Event) {
+      event.preventDefault();
+      pinchStartSpan = null;
+    }
+
+    svg.addEventListener("wheel", wheel, { passive: false });
+    svg.addEventListener("gesturestart", gestureStart);
+    svg.addEventListener("gesturechange", gestureChange);
+    svg.addEventListener("gestureend", gestureEnd);
+    return () => {
+      svg.removeEventListener("wheel", wheel);
+      svg.removeEventListener("gesturestart", gestureStart);
+      svg.removeEventListener("gesturechange", gestureChange);
+      svg.removeEventListener("gestureend", gestureEnd);
+    };
+  }, []);
+
   const markerX = (time: number) => (time - range.start) / span * PLOT_WIDTH;
   const inRange = (time: number) => time >= range.start && time <= range.end;
   const startX = markerX(startMs);
@@ -210,11 +302,12 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
     <svg ref={svgRef} role="img" aria-label={label} viewBox={`0 0 ${PLOT_WIDTH} ${PLOT_HEIGHT}`}
       preserveAspectRatio="none" onPointerDown={pointerDown} onPointerMove={pointerMove}
       onPointerUp={pointerUp} onPointerCancel={pointerCancel}
-      className="block h-36 w-full cursor-crosshair rounded-lg border border-[#46584c] bg-[#101a17] touch-none">
+      className="block h-36 w-full cursor-crosshair overscroll-x-none rounded-lg border border-[#46584c] bg-[#101a17] touch-none">
       {[250, 500, 750].map((x) => <line key={x} x1={x} y1="0" x2={x} y2={PLOT_HEIGHT} stroke="#526259" strokeWidth="1" opacity="0.35" />)}
       <line x1="0" y1={PLOT_HEIGHT / 2} x2={PLOT_WIDTH} y2={PLOT_HEIGHT / 2} stroke="#46584c" strokeWidth="1" />
       {inRange(startMs) && inRange(endMs) && <rect x={Math.min(startX, endX)} y="0" width={Math.abs(endX - startX)} height={PLOT_HEIGHT} fill="#b7d69d" opacity="0.08" />}
-      {points && <path d={points} stroke="#a8c9b0" strokeWidth="1.5" fill="none" />}
+      {points && <path d={points} transform={waveformTransform} vectorEffect="non-scaling-stroke"
+        stroke="#a8c9b0" strokeWidth="1.5" fill="none" />}
       {originalStartMs !== null && inRange(originalStartMs) && <g>
         <title>Original SRT start</title>
         <line x1={markerX(originalStartMs)} y1="0" x2={markerX(originalStartMs)} y2={PLOT_HEIGHT}
@@ -578,9 +671,18 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
     input.blur();
   }
 
+  const maxOverviewSpan = Math.min(MAX_WINDOW_MS, durationMs);
+  const maxFineSpan = Math.min(MAX_FINE_SPAN_MS, durationMs);
+  const viewportSetter = (setRange: (range: TimeRange) => void) =>
+    (start: number, span: number) => {
+      const next = boundedRange(start, span, durationMs);
+      setRange(next);
+      return next;
+    };
+
   function zoom(factor: number) {
     const span = overviewRange.end - overviewRange.start;
-    const nextSpan = clamp(Math.round(span * factor), 500, Math.min(MAX_WINDOW_MS, durationMs));
+    const nextSpan = clamp(Math.round(span * factor), MIN_OVERVIEW_SPAN_MS, maxOverviewSpan);
     const center = clamp(playheadMs, overviewRange.start, overviewRange.end);
     setOverviewRange(boundedRange(center - nextSpan / 2, nextSpan, durationMs));
   }
@@ -625,9 +727,10 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
           : <WaveformPlot label="Overview waveform; drag a boundary nub to fine-tune it, or drag the waveform background to select a new range"
             range={overviewRange} waveform={overview.window} startMs={startMs} endMs={endMs}
             playheadMs={playheadMs} originalStartMs={showOriginalStart ? clip.original_start_ms : null}
-            disabled={controlsDisabled} onPreviewRange={previewRange} onCommitRange={commitRange}
+            disabled={controlsDisabled} minSpan={MIN_OVERVIEW_SPAN_MS} maxSpan={maxOverviewSpan}
+            onViewportChange={viewportSetter(setOverviewRange)} onPreviewRange={previewRange} onCommitRange={commitRange}
             onPreviewEdge={previewEdge} onCommitEdge={commitEdge} onCancel={cancelPreview} />}
-      <p className="subtle mt-1 text-xs">Drag the amber or pink nub to adjust one boundary. Drag the waveform background from the new start to the new end; the vertical marker lines are not draggable.</p>
+      <p className="subtle mt-1 text-xs">Drag the amber or pink nub to adjust one boundary. Drag the waveform background from the new start to the new end; the vertical marker lines are not draggable. Swipe sideways with two fingers to pan, and pinch to zoom.</p>
     </div>
 
     <div className="rounded-xl border border-[#405748] bg-[#1b2b23] p-3">
@@ -651,7 +754,8 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
                   range={range} waveform={detail.window} startMs={startMs} endMs={endMs}
                   playheadMs={playheadMs} editableEdge={which}
                   originalStartMs={showOriginalStart ? clip.original_start_ms : null}
-                  disabled={controlsDisabled}
+                  disabled={controlsDisabled} minSpan={MIN_FINE_SPAN_MS} maxSpan={maxFineSpan}
+                  onViewportChange={viewportSetter(which === "start" ? setStartDetailRange : setEndDetailRange)}
                   onPreviewRange={previewRange} onCommitRange={commitRange}
                   onPreviewEdge={previewEdge} onCommitEdge={commitEdge} onCancel={cancelPreview} />}
             <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label={`Nudge ${which} boundary`}>
