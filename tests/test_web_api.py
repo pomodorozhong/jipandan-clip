@@ -181,6 +181,62 @@ class WebApiTests(unittest.TestCase):
             self.assertEqual(self.client.post(path, headers=self.headers).json()["state"], "completed")
             detect.assert_not_called()
 
+    def test_clip_transcription_suggests_titles_without_bumping_revision(self):
+        state = self.open()
+        calls = []
+
+        def fake_transcribe(audio, settings, clips, log, register):
+            calls.append((audio, settings, clips))
+            yield "1", "Better first"
+            yield "2", "Second"
+
+        path = "/api/session/clip-transcription"
+        with patch("jipandan.web.service.transcribe_clips", side_effect=fake_transcribe):
+            response = self.client.post(path, json={"clip_ids": ["1", "2"]}, headers=self.headers)
+            self.assertEqual(response.status_code, 200, response.text)
+            job = self.wait_for_job(path, "completed")
+        self.assertEqual(job["progress"], 2)
+        clips = calls[0][2]
+        self.assertEqual([clip["clip_id"] for clip in clips], ["1", "2"])
+        self.assertEqual((clips[0]["start_ms"], clips[0]["end_ms"], clips[0]["prompt"]), (1000, 2000, None))
+        self.assertEqual(clips[1]["prompt"], "First")
+        self.assertEqual(calls[0][1]["model_name"], "large-v3")
+
+        session = self.client.get("/api/session").json()
+        self.assertEqual(session["revision"], state["revision"])
+        # A result identical to the current title is not a suggestion.
+        self.assertEqual([clip["suggested_title"] for clip in session["candidates"]], ["Better first", None])
+
+        # Suggestions survive reopening the audio.
+        self.assertEqual(self.open()["candidates"][0]["suggested_title"], "Better first")
+
+        accepted = self.client.patch(
+            "/api/clips/1", json={"expected_revision": session["revision"], "title": "Better first"},
+            headers=self.headers,
+        ).json()
+        self.assertEqual(accepted["candidates"][0]["title"], "Better first")
+        self.assertIsNone(accepted["candidates"][0]["suggested_title"])
+
+    def test_clip_transcription_suggestion_can_be_dismissed(self):
+        self.open()
+        path = "/api/session/clip-transcription"
+        with patch("jipandan.web.service.transcribe_clips", return_value=iter([("2", "Other")])):
+            self.client.post(path, json={"clip_ids": ["2"]}, headers=self.headers)
+            self.wait_for_job(path, "completed")
+        dismissed = self.client.delete("/api/clips/2/suggested-title", headers=self.headers).json()
+        self.assertIsNone(dismissed["candidates"][1]["suggested_title"])
+        self.assertEqual(dismissed["candidates"][1]["title"], "Second")
+        missing = self.client.post(path, json={"clip_ids": ["99"]}, headers=self.headers)
+        self.assertEqual(missing.status_code, 422)
+
+    def test_clip_transcription_failure_is_reported(self):
+        self.open()
+        path = "/api/session/clip-transcription"
+        with patch("jipandan.web.service.transcribe_clips", side_effect=RuntimeError("no model")):
+            self.client.post(path, json={"clip_ids": ["1"]}, headers=self.headers)
+            job = self.wait_for_job(path, "failed")
+        self.assertEqual(job["error"], "no model")
+
     def test_clip_features_score_clips_and_persist_without_undo(self):
         self.open()
         path = "/api/session/clip-features"

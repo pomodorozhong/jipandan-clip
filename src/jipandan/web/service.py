@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import logging
 import math
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import tempfile
 import uuid
 import threading
 from dataclasses import asdict
@@ -33,6 +36,7 @@ from jipandan.core.srt import seconds_to_ffmpeg_timestamp, srt_time_to_seconds
 from jipandan.web.waveform import MAX_BUCKETS, MAX_WINDOW_MS, MIN_BUCKETS, WaveformCache
 from jipandan.web.preview import PreviewJobs
 from jipandan.web.transcription import TranscriptionJob, TranscriptionJobs
+from jipandan.web.clip_transcription import transcribe_clips
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +62,10 @@ def _time_ms(value: str) -> int:
 
 
 LEADING_SILENCE_BATCH_SIZE = 25
+# Used when this audio was never transcribed in the GUI, so no job settings exist.
+DEFAULT_CLIP_TRANSCRIPTION_SETTINGS = {
+    "model_name": "large-v3", "language": None, "temperature": 0.0, "max_context": 0, "entropy_thold": 3.0,
+}
 
 
 def clip_payload(candidate: ClipCandidate, likely_keep: float | None = None) -> dict:
@@ -88,6 +96,14 @@ class SessionService:
         self._waveforms = WaveformCache()
         self._leading_silence_job: dict[str, object] | None = None
         self._clip_features_job: dict[str, object] | None = None
+        self._clip_transcription_job: dict[str, object] | None = None
+        self._clip_transcription_process: subprocess.Popen | None = None
+        # Re-transcribed titles awaiting review, keyed by clip ID. They live
+        # outside the session so a long run never bumps its revision.
+        self._title_suggestions: dict[str, str] = {}
+        self._suggestion_dir = (
+            (transcription_dir or self.paths.transcription_dir).expanduser().resolve() / "clip-suggestions"
+        )
         self._previews = PreviewJobs((preview_dir or self.paths.preview_dir).expanduser().resolve())
         self._transcriptions = TranscriptionJobs(
             (transcription_dir or self.paths.transcription_dir).expanduser().resolve(),
@@ -244,6 +260,7 @@ class SessionService:
 
     def close(self) -> None:
         self._transcriptions.close()
+        self.cancel_clip_transcription()
 
     def start_preview(
         self, clip_id: str, expected_revision: int, *, mode: str,
@@ -609,6 +626,150 @@ class SessionService:
                     job["state"] = "failed"
                     job["error"] = str(exc)
 
+    def _suggestion_path(self, audio: Path) -> Path:
+        key = hashlib.sha256(str(audio).encode("utf-8")).hexdigest()[:16]
+        return self._suggestion_dir / f"{key}.json"
+
+    def _load_title_suggestions(self, audio: Path) -> dict[str, str]:
+        try:
+            data = json.loads(self._suggestion_path(audio).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(data, dict) or data.get("audio") != str(audio):
+            return {}
+        suggestions = data.get("suggestions")
+        return {str(key): value for key, value in suggestions.items() if isinstance(value, str)} \
+            if isinstance(suggestions, dict) else {}
+
+    def _save_title_suggestions(self) -> None:
+        if self.audio is None:
+            return
+        destination = self._suggestion_path(self.audio)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=destination.parent, prefix=f".{destination.name}.",
+            suffix=".tmp", delete=False,
+        ) as handle:
+            json.dump({"audio": str(self.audio), "suggestions": self._title_suggestions}, handle, ensure_ascii=False)
+        os.replace(handle.name, destination)
+
+    def _drop_title_suggestion(self, clip_id: str) -> None:
+        if self._title_suggestions.pop(clip_id, None) is not None:
+            self._save_title_suggestions()
+
+    def dismiss_title_suggestion(self, clip_id: str) -> dict:
+        with self._lock:
+            self._ready()
+            self._drop_title_suggestion(clip_id)
+            return self.snapshot()
+
+    def clip_transcription_status(self) -> dict | None:
+        with self._lock:
+            job = self._clip_transcription_job
+            if job is None or job["audio"] != str(self.audio):
+                return None
+            return {key: value for key, value in job.items() if key != "audio"}
+
+    def start_clip_transcription(self, clip_ids: list[str]) -> dict:
+        """Re-run Whisper on each clip's own audio to suggest a better title."""
+        with self._lock:
+            session = self._ready()
+            existing = self._clip_transcription_job
+            if existing is not None and existing["state"] in {"queued", "running"}:
+                raise SessionNotReady("Clips are already being re-transcribed")
+            if not clip_ids:
+                raise InvalidEdit("Choose at least one clip to re-transcribe")
+            positions = {candidate.clip_id: position for position, candidate in enumerate(session.candidates)}
+            missing = [clip_id for clip_id in clip_ids if clip_id not in positions]
+            if missing:
+                raise InvalidEdit(f"Clip not found: {missing[0]}")
+            clips = []
+            for clip_id in dict.fromkeys(clip_ids):
+                position = positions[clip_id]
+                candidate = session.candidates[position]
+                # The neighbouring title primes Whisper's script and vocabulary
+                # without anchoring it to this clip's possibly wrong text.
+                previous = session.candidates[position - 1].title if position > 0 else None
+                clips.append({
+                    "clip_id": clip_id, "start_ms": _time_ms(candidate.start),
+                    "end_ms": _time_ms(candidate.end), "prompt": previous,
+                })
+            latest = self._transcriptions.latest(session.audio)
+            settings = {**DEFAULT_CLIP_TRANSCRIPTION_SETTINGS, **(latest["settings"] if latest else {})}
+            job: dict[str, object] = {
+                "id": uuid.uuid4().hex, "audio": str(session.audio), "state": "queued",
+                "progress": 0, "total": len(clips), "clip_ids": [clip["clip_id"] for clip in clips],
+                "error": None,
+            }
+            self._clip_transcription_job = job
+            threading.Thread(
+                target=self._run_clip_transcription,
+                args=(str(job["id"]), session.audio, settings, clips),
+                name="jipandan-clip-transcription", daemon=True,
+            ).start()
+            return {key: value for key, value in job.items() if key != "audio"}
+
+    def cancel_clip_transcription(self) -> dict | None:
+        with self._lock:
+            job = self._clip_transcription_job
+            if job is not None and job["state"] in {"queued", "running"}:
+                job["state"] = "cancelled"
+                process = self._clip_transcription_process
+                if process is not None and process.poll() is None:
+                    try:
+                        os.killpg(process.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+        return self.clip_transcription_status()
+
+    def _run_clip_transcription(self, job_id: str, audio: Path, settings: dict, clips: list[dict]) -> None:
+        def current_job() -> dict[str, object] | None:
+            job = self._clip_transcription_job
+            return job if job is not None and job["id"] == job_id else None
+
+        def register(process: subprocess.Popen) -> None:
+            with self._lock:
+                self._clip_transcription_process = process
+                job = current_job()
+                if job is None or job["state"] == "cancelled":
+                    try:
+                        os.killpg(process.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+
+        try:
+            with self._lock:
+                job = current_job()
+                if job is None or job["state"] == "cancelled":
+                    return
+                job["state"] = "running"
+            log = self.paths.transcription_log_dir / f"clips-{job_id}.log"
+            for clip_id, text in transcribe_clips(audio, settings, clips, log, register):
+                with self._lock:
+                    job = current_job()
+                    if job is None or job["state"] != "running":
+                        return
+                    if self.audio == audio and text and self.session is not None:
+                        candidate = self.session.get_candidate(clip_id)
+                        if candidate is not None and candidate.title != text:
+                            self._title_suggestions[clip_id] = text
+                            self._save_title_suggestions()
+                    job["progress"] = int(job["progress"]) + 1
+            with self._lock:
+                job = current_job()
+                if job is not None and job["state"] == "running":
+                    job["state"] = "completed"
+        except Exception as exc:
+            logger.exception("Clip re-transcription failed")
+            with self._lock:
+                job = current_job()
+                if job is not None and job["state"] != "cancelled":
+                    job["state"] = "failed"
+                    job["error"] = str(exc)
+        finally:
+            with self._lock:
+                self._clip_transcription_process = None
+
     def import_audio(self, filename: str, source: BinaryIO) -> dict:
         name = Path(filename).name
         if not name or name in {".", ".."} or Path(name).suffix.lower() not in {
@@ -657,6 +818,7 @@ class SessionService:
             self.session = session
             self.duration_ms = round(duration * 1000)
             self._undo.clear()
+            self._title_suggestions = self._load_title_suggestions(resolved)
             return self.snapshot()
 
     def snapshot(self) -> dict:
@@ -683,7 +845,8 @@ class SessionService:
                 "transcription": self._transcriptions.latest(self.audio),
                 "revision": session.revision if session else None,
                 "candidates": [
-                    clip_payload(candidate, score)
+                    {**clip_payload(candidate, score),
+                     "suggested_title": self._title_suggestions.get(candidate.clip_id)}
                     for candidate, score in zip(session.candidates, likely_keep_scores(session.candidates))
                 ] if session else [],
                 "counts": counts,
@@ -773,6 +936,11 @@ class SessionService:
             return clip_id
 
         snapshot, _ = self._mutate(expected_revision, change, undo_ids=[clip_id])
+        if title is not None:
+            with self._lock:
+                if self._title_suggestions.get(clip_id) == title.strip():
+                    self._drop_title_suggestion(clip_id)
+                    snapshot = self.snapshot()
         self._prewarm_grouped_clip(clip_id)
         return snapshot
 

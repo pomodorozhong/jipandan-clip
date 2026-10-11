@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, audioUrl, bootstrap, uploadAudio, type Clip, type ClipFeaturesJob, type LeadingSilenceJob, type Session, type Status } from "./api";
+import { api, audioUrl, bootstrap, uploadAudio, type Clip, type ClipFeaturesJob, type ClipTranscriptionJob, type LeadingSilenceJob, type Session, type Status } from "./api";
 import WaveformEditor from "./WaveformEditor";
 import ExportPreview from "./ExportPreview";
 import TranscriptionScreen from "./TranscriptionScreen";
@@ -247,6 +247,8 @@ export default function App() {
   const [leadingSilenceJob, setLeadingSilenceJob] = useState<LeadingSilenceJob | null>(null);
   const [clipFeaturesJob, setClipFeaturesJob] = useState<ClipFeaturesJob | null>(null);
   const [clipFeaturesAttempt, setClipFeaturesAttempt] = useState(0);
+  const [clipTranscriptionJob, setClipTranscriptionJob] = useState<ClipTranscriptionJob | null>(null);
+  const [dismissedClipTranscriptionId, setDismissedClipTranscriptionId] = useState<string | null>(null);
   const [dismissedDetectionJobId, setDismissedDetectionJobId] = useState<string | null>(null);
   const autoDetectionRequest = useRef<string | null>(null);
   const loadedDetectionJob = useRef<string | null>(null);
@@ -447,6 +449,57 @@ export default function App() {
     };
   }, [session?.audio, session?.needs_transcription, session?.clip_features_complete, clipFeaturesAttempt]);
 
+  useEffect(() => {
+    if (!session?.audio || session.needs_transcription) {
+      setClipTranscriptionJob(null);
+      return;
+    }
+    let active = true;
+    let timer: number | null = null;
+    let loadedProgress: number | null = null;
+    async function poll() {
+      try {
+        const job = await api<ClipTranscriptionJob | null>("/session/clip-transcription");
+        if (!active) return;
+        setClipTranscriptionJob(job);
+        // Suggestions arrive outside the session revision, so reload when results land.
+        if (job && loadedProgress !== null && job.progress !== loadedProgress) {
+          const latest = await api<Session>("/session");
+          if (active) setSession(latest);
+        }
+        loadedProgress = job?.progress ?? null;
+        if (job?.state === "queued" || job?.state === "running") {
+          timer = window.setTimeout(() => { void poll(); }, 1000);
+        }
+      } catch {
+        if (active) timer = window.setTimeout(() => { void poll(); }, 2000);
+      }
+    }
+    void poll();
+    return () => {
+      active = false;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [session?.audio, session?.needs_transcription, clipTranscriptionJob?.id]);
+
+  const startClipTranscription = useCallback(async (clipIds: string[]) => {
+    if (!clipIds.length) return;
+    setError("");
+    try {
+      setClipTranscriptionJob(await api<ClipTranscriptionJob>("/session/clip-transcription", "POST", { clip_ids: clipIds }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, []);
+
+  const cancelClipTranscription = useCallback(async () => {
+    try {
+      setClipTranscriptionJob(await api<ClipTranscriptionJob | null>("/session/clip-transcription/cancel", "POST"));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, []);
+
   const visible = useMemo(() => {
     const clips = visibleClips(session?.candidates ?? [], filter, query, allStatusFilter);
     const compareClipId = (a: Clip, b: Clip) => a.index - b.index || a.suffix - b.suffix;
@@ -476,6 +529,10 @@ export default function App() {
 
   useEffect(() => { setShowExportModal(false); }, [session?.audio]);
 
+  const clipTranscriptionRunning = clipTranscriptionJob?.state === "queued" || clipTranscriptionJob?.state === "running";
+  const group1SuggestionCount = useMemo(() => session?.candidates
+    .filter((clip) => clip.status === "group1" && clip.suggested_title).length ?? 0, [session?.candidates]);
+
   const mutate = useCallback(async (work: () => Promise<Session>) => {
     setBusy(true);
     setSaveState("saving");
@@ -495,6 +552,10 @@ export default function App() {
       setBusy(false);
     }
   }, []);
+
+  const dismissTitleSuggestion = useCallback((clipId: string) => {
+    void mutate(() => api<Session>(`/clips/${encodeURIComponent(clipId)}/suggested-title`, "DELETE"));
+  }, [mutate]);
 
   const patchSelected = useCallback((change: Record<string, unknown>) => {
     if (!session || session.revision === null || !effectiveSelectedId) return;
@@ -943,6 +1004,38 @@ export default function App() {
                 </select>
               </label>
             </div>
+            {filter === "group1" && session.counts.group1 > 0 && <div className="mt-3 flex flex-wrap items-center gap-2">
+              <ActionButton onClick={() => void startClipTranscription(
+                session.candidates.filter((clip) => clip.status === "group1").map((clip) => clip.clip_id))}
+                disabled={clipTranscriptionRunning}
+                title="Run Whisper again on each Group 1 clip's own audio and suggest a new title">
+                Re-transcribe Group 1 titles
+              </ActionButton>
+              {group1SuggestionCount > 0 && <span className="subtle text-xs">{group1SuggestionCount} {group1SuggestionCount === 1 ? "suggestion" : "suggestions"} to review</span>}
+            </div>}
+            {clipTranscriptionJob && clipTranscriptionJob.id !== dismissedClipTranscriptionId && <div role="status" aria-live="polite"
+              className={`mt-2 text-xs ${clipTranscriptionJob.state === "failed" ? "text-[#ffcfc4]" : "subtle"}`}>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span>
+                  {clipTranscriptionRunning
+                    ? <>Re-transcribing titles · {clipTranscriptionJob.progress} of {clipTranscriptionJob.total}{clipTranscriptionJob.progress === 0 && " · loading Whisper"}</>
+                    : clipTranscriptionJob.state === "completed"
+                      ? <>Re-transcribed {clipTranscriptionJob.total} {clipTranscriptionJob.total === 1 ? "clip" : "clips"}</>
+                      : clipTranscriptionJob.state === "failed"
+                        ? <>Could not re-transcribe: {clipTranscriptionJob.error}</>
+                        : <>Re-transcription stopped after {clipTranscriptionJob.progress} of {clipTranscriptionJob.total}</>}
+                </span>
+                {clipTranscriptionRunning
+                  ? <button type="button" className="underline" onClick={() => void cancelClipTranscription()}>Cancel</button>
+                  : <button type="button" aria-label="Dismiss re-transcription status" className="text-base leading-none"
+                    onClick={() => setDismissedClipTranscriptionId(clipTranscriptionJob.id)}>×</button>}
+              </div>
+              {clipTranscriptionRunning && <div role="progressbar" aria-label="Re-transcription progress"
+                aria-valuemin={0} aria-valuemax={clipTranscriptionJob.total} aria-valuenow={clipTranscriptionJob.progress}
+                className="mt-1.5 h-1 overflow-hidden rounded-full bg-[#17241c]">
+                <div className="h-full bg-[#b7d69d] transition-[width]" style={{ width: `${clipTranscriptionJob.total ? clipTranscriptionJob.progress / clipTranscriptionJob.total * 100 : 0}%` }} />
+              </div>}
+            </div>}
             {(clipFeaturesJob?.state === "queued" || clipFeaturesJob?.state === "running") &&
               <p className="subtle mt-2 text-xs" role="status">
                 Measuring clips for likely keep · {clipFeaturesJob.progress.toLocaleString()} of {clipFeaturesJob.total.toLocaleString()}
@@ -965,8 +1058,10 @@ export default function App() {
                   {filter === "all" && <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
                     <span className={`clip-tag clip-tag-${clip.status}`}>{labels[clip.status]}</span>
                     {changed && <span className="clip-tag clip-tag-trimmed">Trimmed</span>}
+                    {clip.suggested_title && <span className="clip-tag clip-tag-suggestion">New title</span>}
                   </span>}
                 </span>
+                {filter !== "all" && clip.suggested_title && <span className="clip-tag clip-tag-suggestion shrink-0" title="A re-transcribed title is waiting for review">New title</span>}
                 {filter !== "all" && changed && <span className="clip-tag clip-tag-trimmed shrink-0">Trimmed</span>}
                 {clip.likely_keep !== null && <span className="clip-score mono shrink-0"
                   title="Likely keep score (0–100): louder, voice-like, and confidently transcribed clips score higher">
@@ -1031,10 +1126,30 @@ export default function App() {
                       }} className="flex w-full items-center justify-between gap-4 rounded-md px-3 py-2 text-left text-sm hover:bg-[#304439]">
                         Duplicate <ShortcutBadge keyboard="D" bindingId="duplicate" />
                       </button>
+                      <button type="button" role="menuitem" disabled={clipTranscriptionRunning} onClick={() => {
+                        setShowClipMenu(false);
+                        void startClipTranscription([selected.clip_id]);
+                      }} className="flex w-full items-center justify-between gap-4 rounded-md px-3 py-2 text-left text-sm hover:bg-[#304439] disabled:opacity-50">
+                        Re-transcribe title
+                      </button>
                     </div>}
                   </div>
                 </div>
               </div>}
+              {selected.suggested_title && !editingTitle && <div role="region" aria-label="Suggested title"
+                className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-[#4f8396] bg-[#203640] px-3 py-2">
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[11px] font-semibold uppercase tracking-wider text-[#9fd2e2]">Re-transcribed</span>
+                  <span className="break-words text-base">{selected.suggested_title}</span>
+                </span>
+                <span className="flex shrink-0 gap-1.5">
+                  <ActionButton tone="accent" disabled={busy} onClick={() => patchSelected({ title: selected.suggested_title })}>Use this</ActionButton>
+                  <ActionButton disabled={busy} onClick={() => { setTitleDraft(selected.suggested_title ?? ""); setEditingTitle(true); }}>Edit</ActionButton>
+                  <ActionButton disabled={busy} onClick={() => dismissTitleSuggestion(selected.clip_id)}>Dismiss</ActionButton>
+                </span>
+              </div>}
+              {clipTranscriptionRunning && clipTranscriptionJob?.clip_ids.includes(selected.clip_id) && !selected.suggested_title &&
+                <p className="subtle mt-2 text-xs" role="status">Re-transcribing this clip…</p>}
             </div>
             <div ref={detailScrollRef} className="panel-scroll min-h-0 flex-1 overflow-auto px-4 py-5 md:px-7">
               <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
