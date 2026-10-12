@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   bindingsForGamepadConfig,
+  publishGamepadBindings,
   createGamepadAdapter,
   defaultGamepadBindingConfig,
   findGamepadBindingConflict,
@@ -56,6 +57,25 @@ function createHarness(
 }
 
 describe("gamepad adapter", () => {
+  it("dispatches export, candidate playback, navigation and nudges in Publish", () => {
+    const config = { ...defaultGamepadBindingConfig(), export: 2, "export-mode-trim-all": 1, "nudge-end-fine-forward": 5 };
+    const { adapter, gamepads, actions } = createHarness(() => publishGamepadBindings(config));
+    const gamepad = fakeGamepad();
+    gamepads.push(gamepad);
+    adapter.setContext("publish");
+    adapter.poll(0);
+    for (const [step, index] of [0, 2, 1, 13, 5].entries()) {
+      press(gamepad, index, true);
+      adapter.poll(step * 10 + 1);
+      press(gamepad, index, false);
+      adapter.poll(step * 10 + 2);
+    }
+    expect(actions).toEqual([
+      { type: "playback", target: "candidate", mode: "replay" },
+      { type: "export", advance: false }, { type: "export-mode", mode: "trim_all" },
+      { type: "navigate", direction: "next" }, { type: "nudge", edge: "end", amount: 10, source: "gamepad" },
+    ]);
+  });
   it("starts with an explicit empty status", () => {
     expect(initialGamepadStatus()).toEqual({
       apiSupported: false,
