@@ -1,6 +1,6 @@
 # Plan
 
-Background: [app rebuild plan](../doc/app-rebuild-plan.md), step 2 "Remaining before step 3", and the [step 2 review guide](../doc/app-rebuild-step-2-review.md).
+Background: [app rebuild plan](../doc/app-rebuild-plan.md), step 2 "Remaining before step 3", the [step 2 review guide](../doc/app-rebuild-step-2-review.md), and the [architecture](../doc/architecture.md). Steps 1–2 are on `main`; start new work on a fresh branch from `main`.
 
 1. **Rebuild the shortcuts cheatsheet** (`App.tsx` help dialog, `SHORTCUT_DEFINITIONS` in `frontend/src/inputActions.ts`).
    - Group rows by Triage, Polish, Publish, and dialogs, using the labels each screen shows (Triage: Pass/Back, not Next/Previous).
