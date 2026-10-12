@@ -26,7 +26,7 @@ uv run jipandan-web raw.mp3
 
 You can also run `uv run jipandan-web` first and choose an audio file in the browser. The server listens on loopback only. Each launch builds the frontend before starting the server. Node.js and npm dependencies are required; install the locked dependencies once with `cd frontend && npm ci`.
 
-The GUI can transcribe audio, review and trim clips, compare rendered export previews, and save collision-safe MP3s. Session state is saved beside the audio.
+The GUI can transcribe audio, review and trim clips, compare rendered export previews, and save collision-safe MP3s. Each recording's review is saved beside the audio in `<recording>.jipandan.db`, an SQLite file holding the current clip state and the full history of decisions, edits, and views. Undo history survives restarts.
 When a session opens, the GUI measures each clip's loudness and tone in the background (about 30 seconds for a 7-hour recording). Choose **Order by → Likely keep ↓** to review louder, voice-like clips first; each row shows its 0–100 score. Transcriptions also save Whisper's per-segment confidence as `<audio>.segments.json` beside the SRT, which new sessions add to the score.
 Each transcription keeps its full worker output and traceback in the application log directory under `transcriptions/<job-id>/run.log`; the Transcription screen shows the log path and offers a download link. Zero-duration segments are omitted from the SRT and listed in that log.
 
@@ -55,7 +55,7 @@ Run the full Python suite:
 uv run python -m unittest discover -s tests -v
 ```
 
-The Python suite uses temporary recordings, SRT files, and sessions, so it does not require private recordings. The optional `scripts/prepare_web_review.py` helper still requires the private `raw/0526.mp3`, `raw/0526.srt`, and `raw/0526.jipandan.json` review fixtures; it writes disposable copies under the system temporary directory.
+The Python suite uses temporary recordings, SRT files, and sessions, so it does not require private recordings. The optional `scripts/prepare_web_review.py` helper still requires the private `raw/0526.mp3` and `raw/0526.srt` review fixtures; it writes disposable copies under the system temporary directory, and the GUI starts a fresh session for them.
 
 For a faster focused run, execute the core, web API, and leading-silence tests separately:
 
@@ -77,7 +77,7 @@ The frontend interaction-policy tests run with Vitest. To check the browser inte
 
 ## Storage locations
 
-The selected recording stays where it was opened. Its `.srt` transcript and `.jipandan.json` session remain beside it. New sessions export to an `exports/` directory beside the recording; `--clip-dir` overrides that choice for new sessions. Existing sessions keep the export directory recorded in their session file. In the browser GUI, open **Settings → Storage** to change the export directory for the active session without creating a new session. **Choose folder…** opens the native macOS folder picker, **Reset to default** restores the platform-aware default in the draft, and **Apply export directory** asks for confirmation before saving. Existing exported files remain in their previous directories; future exports use the new directory.
+The selected recording stays where it was opened. Its `.srt` transcript and `.jipandan.db` session remain beside it. New sessions export to an `exports/` directory beside the recording; `--clip-dir` overrides that choice for new sessions. Existing sessions keep the export directory recorded in their session database. In the browser GUI, open **Settings → Storage** to change the export directory for the active session without creating a new session. **Choose folder…** opens the native macOS folder picker, **Reset to default** restores the platform-aware default in the draft, and **Apply export directory** asks for confirmation before saving. Existing exported files remain in their previous directories; future exports use the new directory.
 
 Browser uploads, transcription job records, and their settings use the platform's application data directory. Regenerable browser previews use the application cache directory. Transcription logs use the application log directory. These locations are selected with `platformdirs` (for example, macOS uses `~/Library/Application Support/Jipandan`, `~/Library/Caches/Jipandan`, and `~/Library/Logs/Jipandan`).
 
@@ -100,4 +100,4 @@ Cache files and failed preview work can be removed at any time and will be rebui
 
 ## Retired interfaces
 
-The TUI (`jipandan`), browser terminal (`jipandan-serve`), and notebook generator (`generate-commands`) have been retired. Use `uv run jipandan-web` for interactive review and export; `uv run transcribe` remains available for standalone transcription. Existing `.srt` and `.jipandan.json` sidecars can be opened in the browser GUI, and saved sessions retain their export destinations. mpv and Jupyter are no longer required.
+The TUI (`jipandan`), browser terminal (`jipandan-serve`), and notebook generator (`generate-commands`) have been retired. Use `uv run jipandan-web` for interactive review and export; `uv run transcribe` remains available for standalone transcription. Existing `.srt` files open in the browser GUI as fresh sessions. Older `.jipandan.json` session files are not converted; move or delete them to start a fresh session from the SRT. mpv and Jupyter are no longer required.

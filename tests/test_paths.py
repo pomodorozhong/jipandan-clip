@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from jipandan.core.models import Session
+from jipandan.core.store import RecordingStore, store_path
 from jipandan.core.paths import AppPaths, default_export_dir
 from jipandan.web.service import SessionService
 
@@ -62,7 +63,9 @@ class StoragePathTests(unittest.TestCase):
 
     def test_existing_session_keeps_saved_export_directory(self):
         saved_dir = self.root / "saved-exports"
-        Session.from_srt(self.audio, self.srt, saved_dir).save()
+        store = RecordingStore(store_path(self.audio))
+        store.create(Session.from_srt(self.audio, self.srt, saved_dir))
+        store.close()
 
         with patch("jipandan.web.service.probe_duration_seconds", return_value=10.0):
             service = SessionService(self.root / "new-exports", app_paths=self.paths)

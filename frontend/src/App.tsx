@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isExploreClip, orderByLikelyKeep } from "./reviewOrder";
-import { api, audioUrl, bootstrap, sendReviewEvents, uploadAudio, type Clip, type ClipFeaturesJob, type ClipTranscriptionJob, type LeadingSilenceJob, type Session, type Status } from "./api";
+import { api, applySessionDelta, audioUrl, bootstrap, sendReviewEvents, uploadAudio, type Clip, type ClipFeaturesJob, type ClipTranscriptionJob, type LeadingSilenceJob, type Session, type SessionDelta, type Status } from "./api";
 import WaveformEditor from "./WaveformEditor";
 import ExportPreview from "./ExportPreview";
 import TranscriptionScreen from "./TranscriptionScreen";
@@ -633,13 +633,15 @@ export default function App() {
   const group1SuggestionCount = useMemo(() => session?.candidates
     .filter((clip) => clip.status === "group1" && clip.suggested_title).length ?? 0, [session?.candidates]);
 
-  const mutate = useCallback(async (work: () => Promise<Session>) => {
+  const mutate = useCallback(async <T extends Session | SessionDelta>(work: () => Promise<T>) => {
     setBusy(true);
     setSaveState("saving");
     setError("");
     try {
       const next = await work();
-      setSession(next);
+      // Edits return a delta of the changed clips; other requests return the full session.
+      if ("delta" in next) setSession((current) => current ? applySessionDelta(current, next) : current);
+      else setSession(next);
       setSaveState("saved");
       return next;
     } catch (cause) {
@@ -667,7 +669,7 @@ export default function App() {
           visible[selectedPosition - 1]?.clip_id ?? effectiveSelectedId;
       }
     }
-    void mutate(() => api<Session>(`/clips/${encodeURIComponent(effectiveSelectedId)}`, "PATCH", {
+    void mutate(() => api<SessionDelta>(`/clips/${encodeURIComponent(effectiveSelectedId)}?delta=true`, "PATCH", {
       expected_revision: session.revision, ...change, context: selected ? rankingContext(selected) : undefined,
     })).then((next) => { if (next) setSelectedId(nextSelection); });
   }, [session, effectiveSelectedId, selected, filter, query, allStatusFilter,
@@ -685,14 +687,14 @@ export default function App() {
 
   const undo = useCallback(() => {
     if (!session || session.revision === null) return;
-    void mutate(() => api<Session>("/session/undo", "POST", {
+    void mutate(() => api<SessionDelta>("/session/undo?delta=true", "POST", {
       expected_revision: session.revision, context: { source: lastInputSourceRef.current },
     }));
   }, [session, mutate]);
 
   const duplicateSelected = useCallback(() => {
     if (!session || session.revision === null || !effectiveSelectedId) return;
-    void mutate(() => api<Session>(`/clips/${encodeURIComponent(effectiveSelectedId)}/duplicate`,
+    void mutate(() => api<SessionDelta>(`/clips/${encodeURIComponent(effectiveSelectedId)}/duplicate?delta=true`,
       "POST", { expected_revision: session.revision, context: selected ? rankingContext(selected) : undefined },
     )).then((next) => {
       if (next?.created_clip_id) setSelectedId(next.created_clip_id);
@@ -864,7 +866,7 @@ export default function App() {
   async function saveTitle() {
     if (!selected || !titleDraft.trim()) return;
     if (titleDraft.trim() !== selected.title && session?.revision !== null) {
-      const next = await mutate(() => api<Session>(`/clips/${encodeURIComponent(selected.clip_id)}`, "PATCH", {
+      const next = await mutate(() => api<SessionDelta>(`/clips/${encodeURIComponent(selected.clip_id)}?delta=true`, "PATCH", {
         expected_revision: session!.revision, title: titleDraft.trim(), context: rankingContext(selected),
       }));
       if (!next) return;
@@ -1300,7 +1302,7 @@ export default function App() {
                 autoplay={settings.autoplayClips}
                 onSave={async (startMs, endMs) => {
                   if (session.revision === null) return false;
-                  const next = await mutate(() => api<Session>(`/clips/${encodeURIComponent(selected.clip_id)}`, "PATCH", {
+                  const next = await mutate(() => api<SessionDelta>(`/clips/${encodeURIComponent(selected.clip_id)}?delta=true`, "PATCH", {
                     expected_revision: session.revision, start_ms: startMs, end_ms: endMs,
                     context: rankingContext(selected),
                   }));

@@ -55,6 +55,39 @@ export interface Session {
   output_path?: string;
 }
 
+/** The part of a session one edit changed, returned by edits made with `?delta=true`. */
+export interface SessionDelta {
+  delta: true;
+  revision: number;
+  counts: Record<Status, number>;
+  can_undo: boolean;
+  clips: Clip[];
+  removed: string[];
+  created_clip_id?: string;
+  changed_clip_ids?: string[];
+}
+
+/** Merge an edit's delta into the loaded session without refetching every clip. */
+export function applySessionDelta(session: Session, delta: SessionDelta): Session {
+  const removed = new Set(delta.removed);
+  const updates = new Map(delta.clips.map((clip) => [clip.clip_id, clip]));
+  const candidates = session.candidates
+    .filter((clip) => !removed.has(clip.clip_id))
+    .map((clip) => {
+      const updated = updates.get(clip.clip_id);
+      if (updated) updates.delete(clip.clip_id);
+      return updated ?? clip;
+    });
+  if (updates.size) {
+    candidates.push(...updates.values());
+    candidates.sort((a, b) => a.index - b.index || a.suffix - b.suffix);
+  }
+  return {
+    ...session, candidates, revision: delta.revision, counts: delta.counts, can_undo: delta.can_undo,
+    created_clip_id: delta.created_clip_id, changed_clip_ids: delta.changed_clip_ids,
+  };
+}
+
 export interface LeadingSilenceJob {
   id: string;
   state: "queued" | "running" | "completed" | "failed" | "cancelled";

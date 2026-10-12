@@ -16,6 +16,7 @@ from jipandan.core.clip_features import ClipFeatures
 from jipandan.core.waveform_envelope import WaveformEnvelopeCache
 from jipandan.core.whisper import write_segment_scores
 from jipandan.web.api import create_app
+from jipandan.core.store import RecordingStore, store_path
 from jipandan.web.service import SessionService
 
 
@@ -54,6 +55,21 @@ class WebApiTests(unittest.TestCase):
             time.sleep(0.01)
         self.fail(f"Job did not reach {expected}: {state}")
 
+    def stored(self):
+        """The recording as saved on disk, read through a separate connection."""
+        store = RecordingStore(store_path(self.audio))
+        try:
+            return store.load()
+        finally:
+            store.close()
+
+    def events(self, *kinds):
+        store = RecordingStore(store_path(self.audio))
+        try:
+            return store.events(kinds=kinds or None)
+        finally:
+            store.close()
+
     def open(self):
         result = self.client.post(
             "/api/session/open", json={"path": str(self.audio)}, headers=self.headers
@@ -70,36 +86,41 @@ class WebApiTests(unittest.TestCase):
         )
         self.assertEqual(marked.status_code, 200)
         self.assertEqual(marked.json()["candidates"][0]["status"], "group1")
-        stale = self.client.patch(
+        # Decisions apply to the current state even when the client's revision is behind.
+        behind = self.client.patch(
             "/api/clips/2", json={"expected_revision": 1, "status": "group2"},
             headers=self.headers,
         )
-        self.assertEqual(stale.status_code, 409)
-        self.assertEqual(stale.json()["session"]["revision"], 2)
+        self.assertEqual(behind.status_code, 200)
+        self.assertEqual(behind.json()["revision"], 3)
         trim = self.client.patch(
-            "/api/clips/1", json={"expected_revision": 2, "start_ms": 1100, "end_ms": 1900},
+            "/api/clips/1", json={"expected_revision": 3, "start_ms": 1100, "end_ms": 1900},
             headers=self.headers,
         )
         self.assertEqual(trim.status_code, 200)
         self.assertEqual(trim.json()["candidates"][0]["start_ms"], 1100)
         undone = self.client.post(
-            "/api/session/undo", json={"expected_revision": 3}, headers=self.headers
+            "/api/session/undo", json={"expected_revision": 4}, headers=self.headers
         )
         self.assertEqual(undone.status_code, 200)
         self.assertEqual(undone.json()["candidates"][0]["start_ms"], 1000)
         self.assertEqual(undone.json()["candidates"][0]["status"], "group1")
+        # Undo history survives a restart of the server.
         reopened = SessionService(self.root / "clips")
-        reopened.open_audio(self.audio)
-        self.assertEqual(reopened.snapshot()["candidates"][0]["status"], "group1")
+        try:
+            state = reopened.open_audio(self.audio)
+            self.assertEqual([c["status"] for c in state["candidates"]], ["group1", "group2"])
+            self.assertTrue(state["can_undo"])
+            self.assertEqual(reopened.undo(0)["candidates"][1]["status"], "pending")
+        finally:
+            reopened.close()
 
     def test_storage_setting_changes_future_exports_without_moving_existing_files(self):
         self.open()
         old_output = self.root / "clips" / "existing.mp3"
         old_output.parent.mkdir(parents=True, exist_ok=True)
         old_output.write_bytes(b"existing export")
-        candidate = self.service.session.get_candidate("1")
-        candidate.last_export_path = str(old_output)
-        self.service.session.save()
+        self.service._mutate(lambda draft: setattr(draft.get_candidate("1"), "last_export_path", str(old_output)))
 
         new_dir = self.root / "new exports"
         changed = self.client.patch(
@@ -115,10 +136,10 @@ class WebApiTests(unittest.TestCase):
         self.assertTrue(old_output.is_file())
         self.assertTrue(new_dir.is_dir())
 
-        persisted = json.loads(self.audio.with_suffix(".jipandan.json").read_text())
-        self.assertEqual(persisted["clip_dir"], str(new_dir.resolve()))
-        self.assertIn(str((self.root / "clips").resolve()), persisted["export_dirs"])
-        self.assertIn(str(new_dir.resolve()), persisted["export_dirs"])
+        persisted = self.stored()
+        self.assertEqual(persisted.clip_dir, new_dir.resolve())
+        self.assertIn((self.root / "clips").resolve(), persisted.export_dirs)
+        self.assertIn(new_dir.resolve(), persisted.export_dirs)
 
         with patch("jipandan.web.service.sys.platform", "linux"), \
              patch("jipandan.web.service.subprocess.Popen") as launch:
@@ -170,8 +191,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(job["adjusted"], 2)
         state = self.service.snapshot()
         self.assertEqual([clip["start_ms"] for clip in state["candidates"]], [1400, 3400])
-        persisted = json.loads(self.audio.with_suffix(".jipandan.json").read_text())
-        self.assertTrue(persisted["leading_silence_detection_complete"])
+        self.assertTrue(self.stored().leading_silence_detection_complete)
         undone = self.client.post("/api/session/undo", json={
             "expected_revision": state["revision"],
         }, headers=self.headers)
@@ -237,25 +257,36 @@ class WebApiTests(unittest.TestCase):
             job = self.wait_for_job(path, "failed")
         self.assertEqual(job["error"], "no model")
 
-    def test_older_session_files_are_refused_with_a_fresh_start_hint(self):
+    def test_delta_responses_carry_only_changed_clips(self):
         self.open()
-        path = self.audio.with_suffix(".jipandan.json")
-        data = json.loads(path.read_text(encoding="utf-8"))
-        data["version"] = 2
-        data["candidates"][1]["status"] = "skipped"
-        path.write_text(json.dumps(data), encoding="utf-8")
+        marked = self.client.patch("/api/clips/1?delta=true", json={"expected_revision": 1, "status": "group1"},
+                                   headers=self.headers).json()
+        self.assertTrue(marked["delta"])
+        self.assertEqual([(c["clip_id"], c["status"]) for c in marked["clips"]], [("1", "group1")])
+        self.assertEqual((marked["removed"], marked["counts"]["group1"], marked["can_undo"]), ([], 1, True))
+        duplicated = self.client.post("/api/clips/2/duplicate?delta=true", json={"expected_revision": 2},
+                                      headers=self.headers).json()
+        self.assertEqual((duplicated["created_clip_id"], [c["clip_id"] for c in duplicated["clips"]]), ("2-2", ["2-2"]))
+        undone = self.client.post("/api/session/undo?delta=true", json={"expected_revision": 3},
+                                  headers=self.headers).json()
+        self.assertEqual((undone["clips"], undone["removed"]), ([], ["2-2"]))
+        self.assertNotIn("candidates", undone)
+
+    def test_older_session_files_are_refused_with_a_fresh_start_hint(self):
+        legacy = self.audio.with_suffix(".jipandan.json")
+        legacy.write_text(json.dumps({"version": 2, "candidates": []}), encoding="utf-8")
         refused = self.client.post("/api/session/open", json={"path": str(self.audio)}, headers=self.headers)
         self.assertEqual(refused.status_code, 422)
         self.assertIn("start a fresh session", refused.json()["detail"])
-        path.unlink()
+        self.assertFalse(store_path(self.audio).exists())
+        legacy.unlink()
         self.assertEqual(self.open()["counts"]["pending"], 2)
         old_name = self.client.patch("/api/clips/1", json={"expected_revision": 1, "status": "skipped"},
                                      headers=self.headers)
         self.assertEqual(old_name.status_code, 422)
 
     def review_log(self):
-        path = self.audio.with_suffix(".review-log.jsonl")
-        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
+        return [e for e in self.events() if e["type"] != "import"]
 
     def test_review_log_records_decisions_with_ranking_context(self):
         state = self.open()
@@ -279,7 +310,7 @@ class WebApiTests(unittest.TestCase):
 
         events = self.review_log()
         self.assertEqual([e["type"] for e in events], ["status", "title", "trim", "bulk-reject", "undo"])
-        self.assertTrue(all(e["v"] == 1 and e["t"].endswith("Z") for e in events))
+        self.assertTrue(all(e["t"].endswith("Z") for e in events))
         status = events[0]
         self.assertEqual((status["clip"], status["from"], status["to"]), ("1", "pending", "group1"))
         self.assertEqual({k: status[k] for k in ("source", "order", "filter", "rank", "score", "explore", "score_version")},
@@ -328,9 +359,11 @@ class WebApiTests(unittest.TestCase):
         self.assertTrue(state["clip_features_complete"])
         self.assertFalse(state["can_undo"])
         self.assertEqual([clip["likely_keep"] for clip in state["candidates"]], [100.0, 0.0])
-        persisted = json.loads(self.audio.with_suffix(".jipandan.json").read_text())
-        self.assertEqual(persisted["candidates"][1]["peak_db"], -35.0)
-        self.assertEqual(persisted["clip_features_version"], 1)
+        persisted = self.stored()
+        self.assertEqual(persisted.candidates[1].peak_db, -35.0)
+        self.assertEqual(persisted.clip_features_version, 1)
+        # Measurements are not review decisions, so they leave no event behind.
+        self.assertEqual([e["type"] for e in self.events()], ["import"])
         with patch("jipandan.web.service.compute_clip_features") as compute:
             self.assertEqual(self.client.post(path, headers=self.headers).json()["state"], "completed")
             compute.assert_not_called()
@@ -360,7 +393,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(job["adjusted"], 1)
         self.assertEqual(self.service.snapshot()["candidates"][0]["start_ms"], 1200)
 
-    def test_decisions_apply_over_background_saves_but_not_over_their_clips(self):
+    def test_decisions_apply_while_background_jobs_save(self):
         self.open()
         entered, release = threading.Event(), threading.Event()
 
@@ -383,18 +416,16 @@ class WebApiTests(unittest.TestCase):
                 status = self.client.patch("/api/clips/2", json={"expected_revision": 1, "status": "rejected"},
                                            headers=self.headers)
                 self.assertEqual(status.status_code, 200, status.text)
-                trim = self.client.patch("/api/clips/1", json={"expected_revision": 1, "end_ms": 1900},
+                # The user's trim of a clip the background job just changed still wins.
+                trim = self.client.patch("/api/clips/1", json={"expected_revision": 1, "start_ms": 1200},
                                          headers=self.headers)
-                self.assertEqual(trim.status_code, 409)
+                self.assertEqual(trim.status_code, 200, trim.text)
             finally:
                 release.set()
             self.wait_for_job(path, "completed")
         state = self.service.snapshot()
         self.assertEqual([c["status"] for c in state["candidates"]], ["pending", "rejected"])
-        # A user's own earlier save is still a real conflict.
-        stale = self.client.patch("/api/clips/2", json={"expected_revision": 3, "status": "group1"},
-                                  headers=self.headers)
-        self.assertEqual(stale.status_code, 409)
+        self.assertEqual(state["candidates"][0]["start_ms"], 1200)
 
     def test_preview_title_change_reuses_render_and_waveform(self):
         self.open()
@@ -456,6 +487,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(trimmed.json()["candidates"][0]["end_ms"], 1907)
         reopened = SessionService(self.root / "clips")
         self.assertEqual(reopened.open_audio(self.audio)["candidates"][0]["end_ms"], 1907)
+        reopened.close()
         invalid = self.client.patch(
             "/api/clips/1", json={"expected_revision": 2, "start_ms": 1900, "end_ms": 1909},
             headers=self.headers,
@@ -514,24 +546,9 @@ class WebApiTests(unittest.TestCase):
         )
         self.assertEqual(removed.status_code, 200)
         self.assertEqual(len(removed.json()["candidates"]), 1)
-        self.assertEqual(len(list(self.root.glob("*.bak"))), 1)
-
-    def test_older_session_warns_on_possible_text_only_change(self):
-        self.open()
-        session_path = self.audio.with_suffix(".jipandan.json")
-        data = json.loads(session_path.read_text(encoding="utf-8"))
-        data.pop("srt_fingerprint", None)
-        for candidate in data["candidates"]:
-            candidate.pop("source_text", None)
-        session_path.write_text(json.dumps(data), encoding="utf-8")
-        self.srt.write_text(SRT.replace("First", "Reworded"), encoding="utf-8")
-        newer = session_path.stat().st_mtime + 10
-        os.utime(self.srt, (newer, newer))
-        reopened = SessionService(self.root / "clips")
-        state = reopened.open_audio(self.audio)
-        self.assertTrue(state["merge_preview"]["text_change_unverified"])
-        self.assertEqual(state["merge_preview"]["text_changed"], [])
-        self.assertEqual(state["candidates"][0]["title"], "First")
+        # Removing entries is undoable instead of relying on a backup copy.
+        restored = self.client.post("/api/session/undo", json={"expected_revision": 0}, headers=self.headers)
+        self.assertEqual(len(restored.json()["candidates"]), 2)
 
     def test_local_security_and_audio_range(self):
         self.assertEqual(self.client.post("/api/session/open", json={"path": str(self.audio)}).status_code, 403)
@@ -589,6 +606,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(stale.status_code, 409)
         self.assertEqual(stale.json()["session"]["candidates"][0]["status"], "group1")
         second_client.close()
+        second_service.close()
 
     def test_preview_jobs_are_isolated_and_stale_after_trim(self):
         self.open()
@@ -807,7 +825,7 @@ class WebApiTests(unittest.TestCase):
             }, headers=self.headers)
             job_id = response.json()["id"]
             self.wait_for_job(f"/api/previews/{job_id}", "completed")
-            with patch("jipandan.web.service.Session.save", side_effect=OSError("disk full")):
+            with patch("jipandan.web.service.RecordingStore.commit", side_effect=OSError("disk full")):
                 with self.assertRaises(OSError):
                     self.service.publish_export(job_id, 1)
             self.assertFalse((self.root / "clips" / "new.mp3").exists())

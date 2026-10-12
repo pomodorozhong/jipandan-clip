@@ -14,6 +14,7 @@ from jipandan.core.clip_features import (
     likely_keep_scores,
 )
 from jipandan.core.models import Session
+from jipandan.core.store import RecordingStore, store_path
 from jipandan.core.srt import segment_scores_path
 from jipandan.core.whisper import write_segment_scores
 
@@ -92,9 +93,12 @@ class SegmentScoreTests(unittest.TestCase):
             [(c.avg_logprob, c.no_speech_prob) for c in session.candidates],
             [(-0.2, 0.05), (None, 0.7)],
         )
-        session.save()
-        reloaded = Session.load(session.session_path)
-        self.assertEqual(reloaded.candidates[1].no_speech_prob, 0.7)
+        store = RecordingStore(store_path(self.audio))
+        try:
+            store.create(session)
+            self.assertEqual(store.load().candidates[1].no_speech_prob, 0.7)
+        finally:
+            store.close()
 
         self.srt.write_text(SRT.replace("Second", "Edited"), encoding="utf-8")
         edited = Session.from_srt(self.audio, self.srt, self.root / "clips")

@@ -1,4 +1,3 @@
-import json
 import sys
 import tempfile
 import types
@@ -7,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from jipandan.core import ffmpeg, whisper
-from jipandan.core.models import ConcurrentSessionChange, Session
+from jipandan.core.models import Session
 
 
 SRT = "1\n00:00:01,000 --> 00:00:02,000\nFirst\n\n2\n00:00:03,000 --> 00:00:04,000\nSecond\n"
@@ -32,19 +31,14 @@ class SessionSafetyTests(unittest.TestCase):
         session = self.session()
         session.candidates[1].status = "group1"
         session.duplicate_candidate("2")
-        session.save()
         self.srt.write_text(SRT.split("\n\n")[0] + "\n", encoding="utf-8")
-        before = session.session_path.read_bytes()
         self.assertEqual(session.srt_merge_preview()["removed"], [2])
-        self.assertEqual(before, session.session_path.read_bytes())
+        self.assertEqual([c.clip_id for c in session.candidates], ["1", "2", "2-2"])
         session.merge_with_srt()
         self.assertEqual([c.clip_id for c in session.candidates], ["1", "2", "2-2"])
         self.assertEqual(session.get_candidate("2").status, "group1")
         session.merge_with_srt(remove_missing=True)
         self.assertEqual([c.clip_id for c in session.candidates], ["1"])
-        backups = list(self.root.glob("*.bak"))
-        self.assertEqual(len(backups), 1)
-        self.assertEqual(backups[0].read_bytes(), before)
 
     def test_merge_refreshes_unedited_bounds_and_text(self):
         session = self.session()
@@ -65,19 +59,6 @@ class SessionSafetyTests(unittest.TestCase):
         self.assertEqual(session.get_candidate("1").title, "Updated")
         self.assertEqual(session.get_candidate("1-2").start, original_edited_start)
         self.assertEqual(session.get_candidate("1-2").title, "My custom title")
-
-    def test_atomic_save_rejects_stale_writer(self):
-        session = self.session()
-        session.save()
-        other = Session.load(session.session_path)
-        session.candidates[0].status = "group2"
-        session.save()
-        other.candidates[0].status = "rejected"
-        with self.assertRaises(ConcurrentSessionChange):
-            other.save()
-        stored = json.loads(session.session_path.read_text(encoding="utf-8"))
-        self.assertEqual(stored["candidates"][0]["status"], "group2")
-        self.assertEqual(stored["revision"], 2)
 
     def test_existing_export_gets_new_name(self):
         first = self.root / "clip.mp3"

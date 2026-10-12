@@ -97,7 +97,7 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
     </section>
     <section className="mt-6 border-t line pt-5">
       <h3 className="mb-4 text-base font-semibold">Review data</h3>
-      <p className="subtle mb-4 text-sm">Your decisions, which clips you viewed and played, and where each clip ranked are recorded in a <code>.review-log.jsonl</code> file beside the session, to improve the Likely keep score.</p>
+      <p className="subtle mb-4 text-sm">Your decisions, which clips you viewed and played, and where each clip ranked are recorded in the session's <code>.jipandan.db</code> file beside the recording, to improve the Likely keep score.</p>
       <label className="flex cursor-pointer items-start gap-3">
         <input type="checkbox" checked={exploreRanking}
           onChange={(event) => onExploreRankingChange(event.target.checked)} className="mt-1" />

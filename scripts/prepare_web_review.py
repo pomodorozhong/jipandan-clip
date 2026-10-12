@@ -1,7 +1,6 @@
-"""Make a disposable 0526 review session without changing the original files."""
+"""Make a disposable copy of the 0526 recording for a fresh review session."""
 
 import argparse
-import json
 import re
 import shutil
 import subprocess
@@ -34,21 +33,15 @@ def main() -> None:
     source = root / "raw"
     target = Path(tempfile.gettempdir()) / "jipandan" / args.name
     target.mkdir(parents=True, exist_ok=True)
-    paths = [source / f"0526{suffix}" for suffix in (".mp3", ".srt", ".jipandan.json")]
-    if not args.reset and any((target / path.name).exists() for path in paths):
+    paths = [source / f"0526{suffix}" for suffix in (".mp3", ".srt")]
+    database = target / "0526.jipandan.db"
+    if not args.reset and (database.exists() or any((target / path.name).exists() for path in paths)):
         parser.error(f"{target} already contains a review copy; use --reset to replace it")
+    # The GUI creates a fresh session database from the SRT when the copy is opened.
+    for leftover in target.glob("0526.jipandan.db*"):
+        leftover.unlink()
     for path in paths:
         copy_file(path, target / path.name)
-    session_path = target / "0526.jipandan.json"
-    data = json.loads(session_path.read_text(encoding="utf-8"))
-    data["audio"] = str((target / "0526.mp3").resolve())
-    data["srt"] = str((target / "0526.srt").resolve())
-    data["clip_dir"] = str((target / "exports").resolve())
-    data["revision"] = 0
-    for candidate in data["candidates"]:
-        if candidate["index"] <= 20:
-            candidate["status"] = "pending"
-    session_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(target / "0526.mp3")
 
 

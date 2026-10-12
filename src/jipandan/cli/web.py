@@ -46,11 +46,15 @@ def main() -> None:
 
     # Load the app only after its ignored, generated static files are ready.
     from jipandan.web.api import create_app
-    from jipandan.web.service import SessionService
+    from jipandan.web.service import InvalidEdit, SessionService
 
     service = SessionService(clip_dir=args.clip_dir)
     if args.audio is not None:
-        service.open_audio(args.audio)
+        try:
+            service.open_audio(args.audio)
+        except (InvalidEdit, FileNotFoundError) as error:
+            service.close()
+            raise SystemExit(f"Cannot open {args.audio}: {error}") from None
     app = create_app(service)
     url = f"http://127.0.0.1:{args.port}/"
     if not args.no_browser:

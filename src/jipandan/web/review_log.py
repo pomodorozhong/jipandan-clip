@@ -1,30 +1,19 @@
-"""Append-only record of review activity, kept beside each session.
+"""Validation for review-activity fields stored with each recording's events.
 
-The session file holds the current state of every clip. This log keeps the
-history that training the keep score needs: which clips were actually looked
-at, how each decision was made, and where the clip sat in the ranking at the
-time. Writing to it must never break editing, so failures are only logged.
+Clients report clip views and the ranking context of their decisions; these
+helpers keep only known fields with sane types and sizes before the store
+records them for training the keep score.
 """
 
 from __future__ import annotations
 
-import json
-import logging
 import math
-import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
-
-LOG_VERSION = 1
 SOURCES = {"keyboard", "gamepad", "pointer"}
 MAX_CLIENT_EVENTS = 200
 MAX_DWELL_MS = 6 * 60 * 60 * 1000
-
-
-def log_path(audio: Path) -> Path:
-    return audio.with_suffix(".review-log.jsonl")
 
 
 def _short(value: object, limit: int = 40) -> str | None:
@@ -79,21 +68,3 @@ def clean_client_event(raw: object, audio: Path) -> dict | None:
 
 def _iso(seconds: float) -> str:
     return datetime.fromtimestamp(seconds, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-
-
-class ReviewLog:
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-
-    def append(self, audio: Path | None, events: list[dict]) -> None:
-        if audio is None or not events:
-            return
-        stamp = _iso(datetime.now(timezone.utc).timestamp())
-        lines = "".join(
-            json.dumps({"v": LOG_VERSION, "t": stamp, **event}, ensure_ascii=False) + "\n" for event in events
-        )
-        try:
-            with self._lock, log_path(audio).open("a", encoding="utf-8") as handle:
-                handle.write(lines)
-        except OSError:
-            logger.exception("Could not write review log for %s", audio)
