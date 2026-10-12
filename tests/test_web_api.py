@@ -237,6 +237,83 @@ class WebApiTests(unittest.TestCase):
             job = self.wait_for_job(path, "failed")
         self.assertEqual(job["error"], "no model")
 
+    def test_older_session_files_are_refused_with_a_fresh_start_hint(self):
+        self.open()
+        path = self.audio.with_suffix(".jipandan.json")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["version"] = 2
+        data["candidates"][1]["status"] = "skipped"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        refused = self.client.post("/api/session/open", json={"path": str(self.audio)}, headers=self.headers)
+        self.assertEqual(refused.status_code, 422)
+        self.assertIn("start a fresh session", refused.json()["detail"])
+        path.unlink()
+        self.assertEqual(self.open()["counts"]["pending"], 2)
+        old_name = self.client.patch("/api/clips/1", json={"expected_revision": 1, "status": "skipped"},
+                                     headers=self.headers)
+        self.assertEqual(old_name.status_code, 422)
+
+    def review_log(self):
+        path = self.audio.with_suffix(".review-log.jsonl")
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
+
+    def test_review_log_records_decisions_with_ranking_context(self):
+        state = self.open()
+        context = {"source": "keyboard", "order": "likely-desc", "filter": "unsorted", "rank": 3,
+                   "score": 87.25, "explore": True, "score_version": "builtin-v1", "junk": "x" * 500}
+        revision = state["revision"]
+        for change in ({"status": "group1"}, {"title": "Better"}, {"start_ms": 1100}):
+            response = self.client.patch("/api/clips/1", json={
+                "expected_revision": revision, **change, "context": context,
+            }, headers=self.headers)
+            self.assertEqual(response.status_code, 200, response.text)
+            revision = response.json()["revision"]
+        # An unchanged status is not a decision, so it is not logged.
+        revision = self.client.patch("/api/clips/1", json={"expected_revision": revision, "status": "group1"},
+                                     headers=self.headers).json()["revision"]
+        revision = self.client.post("/api/clips/bulk-reject", json={
+            "expected_revision": revision, "clip_ids": ["2"], "context": {"source": "pointer"},
+        }, headers=self.headers).json()["revision"]
+        self.client.post("/api/session/undo", json={"expected_revision": revision, "context": {"source": "gamepad"}},
+                         headers=self.headers)
+
+        events = self.review_log()
+        self.assertEqual([e["type"] for e in events], ["status", "title", "trim", "bulk-reject", "undo"])
+        self.assertTrue(all(e["v"] == 1 and e["t"].endswith("Z") for e in events))
+        status = events[0]
+        self.assertEqual((status["clip"], status["from"], status["to"]), ("1", "pending", "group1"))
+        self.assertEqual({k: status[k] for k in ("source", "order", "filter", "rank", "score", "explore", "score_version")},
+                         {"source": "keyboard", "order": "likely-desc", "filter": "unsorted", "rank": 3,
+                          "score": 87.2, "explore": True, "score_version": "builtin-v1"})
+        self.assertNotIn("junk", status)
+        self.assertEqual((events[1]["from"], events[1]["to"]), ("First", "Better"))
+        self.assertEqual((events[2]["from_ms"], events[2]["to_ms"]), ([1000, 2000], [1100, 2000]))
+        self.assertEqual((events[3]["clips"], events[3]["source"]), (["2"], "pointer"))
+        self.assertEqual((events[4]["restored"], events[4]["source"]), ({"2": "pending"}, "gamepad"))
+
+    def test_review_log_accepts_only_valid_client_views(self):
+        self.open()
+        audio = str(self.audio.resolve())
+        response = self.client.post("/api/review-log", json={"events": [
+            {"type": "view", "audio": audio, "clip": "1", "dwell_ms": 2400, "plays": 2, "autoplay": True,
+             "started_at": int(time.time() * 1000) - 5000,
+             "context": {"source": "gamepad", "rank": 1, "score": 50}},
+            {"type": "view", "audio": audio, "clip": "2", "dwell_ms": -5},
+            {"type": "status", "audio": audio, "clip": "2", "dwell_ms": 100},
+            {"type": "view", "audio": audio, "dwell_ms": 100},
+            # A view of a previously open recording must not land in this one's log.
+            {"type": "view", "audio": "/elsewhere/other.mp3", "clip": "1", "dwell_ms": 100},
+        ]}, headers=self.headers)
+        self.assertEqual(response.json(), {"accepted": 2})
+        events = self.review_log()
+        self.assertEqual([(e["clip"], e["dwell_ms"], e["plays"]) for e in events], [("1", 2400, 2), ("2", 0, 0)])
+        self.assertEqual((events[0]["source"], events[0]["rank"], events[0]["score"]), ("gamepad", 1, 50.0))
+        self.assertLess(events[0]["start"], events[0]["t"])
+        self.assertTrue(events[0]["autoplay"])
+        self.assertNotIn("start", events[1])
+        too_many = self.client.post("/api/review-log", json={"events": [{}] * 201}, headers=self.headers)
+        self.assertEqual(too_many.status_code, 422)
+
     def test_clip_features_score_clips_and_persist_without_undo(self):
         self.open()
         path = "/api/session/clip-features"
@@ -253,6 +330,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual([clip["likely_keep"] for clip in state["candidates"]], [100.0, 0.0])
         persisted = json.loads(self.audio.with_suffix(".jipandan.json").read_text())
         self.assertEqual(persisted["candidates"][1]["peak_db"], -35.0)
+        self.assertEqual(persisted["clip_features_version"], 1)
         with patch("jipandan.web.service.compute_clip_features") as compute:
             self.assertEqual(self.client.post(path, headers=self.headers).json()["state"], "completed")
             compute.assert_not_called()
@@ -282,6 +360,42 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(job["adjusted"], 1)
         self.assertEqual(self.service.snapshot()["candidates"][0]["start_ms"], 1200)
 
+    def test_decisions_apply_over_background_saves_but_not_over_their_clips(self):
+        self.open()
+        entered, release = threading.Event(), threading.Event()
+
+        def detect(_audio, start, _end):
+            if start == 3000:
+                entered.set()
+                if not release.wait(5):
+                    raise TimeoutError("Test did not release detector")
+            return start + 400
+
+        path = "/api/session/leading-silence-detection"
+        with patch("jipandan.web.service.LEADING_SILENCE_BATCH_SIZE", 1), patch(
+            "jipandan.web.service.detect_leading_silence_start", side_effect=detect,
+        ):
+            self.client.post(path, headers=self.headers)
+            try:
+                self.assertTrue(entered.wait(5))
+                # Clip 1 was re-trimmed by a background save after revision 1 was read.
+                self.assertEqual(self.service.snapshot()["revision"], 2)
+                status = self.client.patch("/api/clips/2", json={"expected_revision": 1, "status": "rejected"},
+                                           headers=self.headers)
+                self.assertEqual(status.status_code, 200, status.text)
+                trim = self.client.patch("/api/clips/1", json={"expected_revision": 1, "end_ms": 1900},
+                                         headers=self.headers)
+                self.assertEqual(trim.status_code, 409)
+            finally:
+                release.set()
+            self.wait_for_job(path, "completed")
+        state = self.service.snapshot()
+        self.assertEqual([c["status"] for c in state["candidates"]], ["pending", "rejected"])
+        # A user's own earlier save is still a real conflict.
+        stale = self.client.patch("/api/clips/2", json={"expected_revision": 3, "status": "group1"},
+                                  headers=self.headers)
+        self.assertEqual(stale.status_code, 409)
+
     def test_preview_title_change_reuses_render_and_waveform(self):
         self.open()
         envelope = WaveformEnvelopeCache(
@@ -306,7 +420,7 @@ class WebApiTests(unittest.TestCase):
             self.assertEqual(renamed.json()["waveform"], completed["waveform"])
             renderer.assert_called_once()
 
-    def test_bulk_skip_and_invalid_bounds(self):
+    def test_bulk_reject_and_invalid_bounds(self):
         self.open()
         bad = self.client.patch(
             "/api/clips/1", json={"expected_revision": 1, "start_ms": 2000, "end_ms": 2000},
@@ -314,14 +428,20 @@ class WebApiTests(unittest.TestCase):
         )
         self.assertEqual(bad.status_code, 422)
         self.assertEqual(self.service.snapshot()["revision"], 1)
-        skipped = self.client.post(
-            "/api/clips/bulk-skip",
+        rejected = self.client.post(
+            "/api/clips/bulk-reject",
             json={"expected_revision": 1, "clip_ids": ["1", "2"]}, headers=self.headers,
         )
-        self.assertEqual(skipped.status_code, 200)
-        self.assertEqual(skipped.json()["changed_clip_ids"], ["1", "2"])
+        self.assertEqual(rejected.status_code, 200)
+        self.assertEqual(rejected.json()["changed_clip_ids"], ["1", "2"])
+        self.assertEqual(rejected.json()["counts"]["rejected"], 2)
+        unsure = self.client.patch("/api/clips/1", json={"expected_revision": 2, "status": "unsure"},
+                                   headers=self.headers)
+        self.assertEqual(unsure.status_code, 200, unsure.text)
+        self.assertEqual((unsure.json()["counts"]["unsure"], unsure.json()["counts"]["rejected"]), (1, 1))
+        self.client.post("/api/session/undo", json={"expected_revision": 3}, headers=self.headers)
         undone = self.client.post(
-            "/api/session/undo", json={"expected_revision": 2}, headers=self.headers,
+            "/api/session/undo", json={"expected_revision": 4}, headers=self.headers,
         )
         self.assertEqual(undone.json()["counts"]["pending"], 2)
 
@@ -463,7 +583,7 @@ class WebApiTests(unittest.TestCase):
         )
         self.assertEqual(first.status_code, 200)
         stale = second_client.patch(
-            "/api/clips/1", json={"expected_revision": 1, "status": "skipped"},
+            "/api/clips/1", json={"expected_revision": 1, "status": "rejected"},
             headers={"x-jipandan-token": second_token},
         )
         self.assertEqual(stale.status_code, 409)

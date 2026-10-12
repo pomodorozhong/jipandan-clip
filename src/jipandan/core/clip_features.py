@@ -16,6 +16,10 @@ from pathlib import Path
 
 import numpy as np
 
+# Bump when the measurements change, so stored values from older versions are not mixed in.
+CLIP_FEATURES_VERSION = 1
+# Identifies the ranking formula in the review log; bump when likely_keep_scores changes.
+LIKELY_KEEP_VERSION = "builtin-v1"
 SAMPLE_RATE = 8_000
 _HOP = SAMPLE_RATE // 100  # 10 ms
 _FFT = 256

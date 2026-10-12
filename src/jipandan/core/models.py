@@ -18,8 +18,11 @@ from jipandan.core.srt import (
 )
 from jipandan.core.paths import default_export_dir
 
-ClipStatus = Literal["pending", "group1", "group2", "exported", "skipped"]
-SESSION_VERSION = 2
+# "unsure" records a deliberate "can't decide", distinct from a clip nobody reviewed yet.
+ClipStatus = Literal["pending", "group1", "group2", "exported", "rejected", "unsure"]
+# Version 3 starts the review-log era ("rejected" status, measurement versions);
+# older files are refused rather than migrated.
+SESSION_VERSION = 3
 
 # When an operation collapses a clip to zero duration (start == end), the end is
 # pushed out by this many seconds so the clip remains usable.
@@ -98,8 +101,12 @@ def _carried_scores(prior: ClipCandidate, fresh: ClipCandidate) -> dict[str, flo
     }
 
 
+class OutdatedSession(ValueError):
+    """The session file was written by an older, unsupported session format."""
+
+
 def _clip_candidate_from_dict(item: dict) -> ClipCandidate:
-    """Build a candidate from session JSON, ignoring unknown legacy keys."""
+    """Build a candidate from session JSON, ignoring unknown keys."""
     return ClipCandidate(
         **{key: value for key, value in item.items() if key in _CLIP_CANDIDATE_FIELD_NAMES}
     )
@@ -117,6 +124,7 @@ class Session:
     srt_fingerprint: str | None = None
     leading_silence_detection_complete: bool = False
     clip_features_complete: bool = False
+    clip_features_version: int | None = None
 
     @property
     def session_path(self) -> Path:
@@ -166,6 +174,11 @@ class Session:
     @classmethod
     def load(cls, path: Path) -> "Session":
         data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("version") != SESSION_VERSION:
+            raise OutdatedSession(
+                f"{path.name} was saved by an older version of Jipandan. "
+                "Move or delete it to start a fresh session from the SRT."
+            )
         candidates = [_clip_candidate_from_dict(item) for item in data["candidates"]]
         for candidate in candidates:
             if candidate.last_export_title:
@@ -179,11 +192,12 @@ class Session:
                 for directory in data.get("export_dirs", [data["clip_dir"]])
             ],
             candidates=candidates,
-            version=data.get("version", SESSION_VERSION),
+            version=SESSION_VERSION,
             revision=data.get("revision", 0),
             srt_fingerprint=data.get("srt_fingerprint"),
             leading_silence_detection_complete=data.get("leading_silence_detection_complete", False),
             clip_features_complete=data.get("clip_features_complete", False),
+            clip_features_version=data.get("clip_features_version"),
         )
 
     def save(self) -> None:
@@ -206,6 +220,7 @@ class Session:
                 "srt_fingerprint": self.srt_fingerprint,
                 "leading_silence_detection_complete": self.leading_silence_detection_complete,
                 "clip_features_complete": self.clip_features_complete,
+                "clip_features_version": self.clip_features_version,
                 "audio": str(self.audio),
                 "srt": str(self.srt),
                 "clip_dir": str(self.clip_dir),
@@ -352,6 +367,7 @@ class Session:
         self.srt_fingerprint = fresh.srt_fingerprint
         self.leading_silence_detection_complete = False
         self.clip_features_complete = False
+        self.clip_features_version = None
         return warnings
 
     def get_candidate(self, clip_id: str) -> ClipCandidate | None:
@@ -459,8 +475,8 @@ class Session:
         candidate.duration = f"{duration:.3f}"
         self._ensure_nonzero_duration(candidate)
 
-    def bulk_skip(self, clip_ids: list[str]) -> int:
-        """Mark pending candidates in clip_ids as skipped. Returns count changed."""
+    def bulk_reject(self, clip_ids: list[str]) -> int:
+        """Mark pending candidates in clip_ids as rejected. Returns count changed."""
         clip_id_set = set(clip_ids)
         count = 0
         for candidate in self.candidates:
@@ -468,6 +484,6 @@ class Session:
                 continue
             if candidate.status != "pending":
                 continue
-            candidate.status = "skipped"
+            candidate.status = "rejected"
             count += 1
         return count

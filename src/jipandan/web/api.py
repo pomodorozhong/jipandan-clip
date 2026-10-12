@@ -28,6 +28,12 @@ class ClipPatch(BaseModel):
     title: str | None = None
     start_ms: int | None = None
     end_ms: int | None = None
+    # Ranking context for the review log; unknown or malformed fields are dropped.
+    context: dict | None = None
+
+
+class ReviewEvents(BaseModel):
+    events: list[dict] = Field(max_length=200)
 
 
 class ClipTranscriptionRequest(BaseModel):
@@ -36,6 +42,7 @@ class ClipTranscriptionRequest(BaseModel):
 
 class RevisionRequest(BaseModel):
     expected_revision: int = Field(ge=0)
+    context: dict | None = None
 
 
 class StorageRequest(BaseModel):
@@ -43,7 +50,7 @@ class StorageRequest(BaseModel):
     clip_dir: str = Field(min_length=1, max_length=4096)
 
 
-class BulkSkip(RevisionRequest):
+class BulkReject(RevisionRequest):
     clip_ids: list[str]
 
 
@@ -207,19 +214,24 @@ def create_app(
         return app.state.service.patch_clip(
             clip_id, request.expected_revision, status=request.status,
             title=request.title, start_ms=request.start_ms, end_ms=request.end_ms,
+            context=request.context,
         )
 
     @app.post("/api/clips/{clip_id}/duplicate")
     def duplicate(clip_id: str, request: RevisionRequest):
-        return app.state.service.duplicate(clip_id, request.expected_revision)
+        return app.state.service.duplicate(clip_id, request.expected_revision, request.context)
 
-    @app.post("/api/clips/bulk-skip")
-    def bulk_skip(request: BulkSkip):
-        return app.state.service.bulk_skip(request.clip_ids, request.expected_revision)
+    @app.post("/api/clips/bulk-reject")
+    def bulk_reject(request: BulkReject):
+        return app.state.service.bulk_reject(request.clip_ids, request.expected_revision, request.context)
 
     @app.post("/api/session/undo")
     def undo(request: RevisionRequest):
-        return app.state.service.undo(request.expected_revision)
+        return app.state.service.undo(request.expected_revision, request.context)
+
+    @app.post("/api/review-log")
+    def record_review_events(request: ReviewEvents):
+        return {"accepted": app.state.service.record_review_events(request.events)}
 
     @app.post("/api/transcriptions")
     def start_transcription(request: TranscriptionRequest):
@@ -310,7 +322,7 @@ def create_app(
 
     @app.post("/api/exports")
     def publish_export(request: ExportRequest):
-        return app.state.service.publish_export(request.preview_id, request.expected_revision)
+        return app.state.service.publish_export(request.preview_id, request.expected_revision, request.context)
 
     @app.post("/api/clips/{clip_id}/reveal-export")
     def reveal_export(clip_id: str):

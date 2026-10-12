@@ -95,7 +95,7 @@ describe("gamepad adapter", () => {
       { type: "playback", target: "clip", mode: "replay" },
       { type: "classify", status: "group1" },
       { type: "classify", status: "group2" },
-      { type: "classify", status: "skipped" },
+      { type: "classify", status: "rejected" },
     ]);
   });
 

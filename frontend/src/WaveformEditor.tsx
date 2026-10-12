@@ -337,7 +337,7 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
 }
 
 export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamepadAction, onGamepadActionHandled,
-  shortcutsPaused, active = true, detectLeadingSilence, showOriginalStart, onSave }: {
+  shortcutsPaused, active = true, detectLeadingSilence, showOriginalStart, onSave, onPlayback, autoplay = false }: {
   clip: Clip;
   durationMs: number;
   audioSrc: string;
@@ -349,6 +349,10 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
   detectLeadingSilence: boolean;
   showOriginalStart: boolean;
   onSave: (startMs: number, endMs: number) => Promise<boolean>;
+  /** Called for every clip playback (replay, play/pause, boundary audition). */
+  onPlayback?: () => void;
+  /** Play the clip once from its start when it is first shown. */
+  autoplay?: boolean;
 }) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const savingRef = useRef(false);
@@ -613,6 +617,7 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
       canMutate: !controlsDisabled,
     })) return;
     if (action.type === "playback" && action.target === "clip") {
+      onPlayback?.();
       if (action.mode === "replay") void replay();
       else if (action.mode === "toggle") void play();
       else if (action.mode === "audition-start") void audition("start");
@@ -695,7 +700,13 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
 
   return <div className="mb-6">
     <audio ref={audioRef} src={audioSrc} preload="metadata" playsInline
-      onLoadedMetadata={() => seek(clip.start_ms)} onPlay={() => setPlaying(true)}
+      onLoadedMetadata={() => {
+        seek(clip.start_ms);
+        // Autoplay is best effort: before the first interaction the browser may block it.
+        if (autoplay && active && !shortcutsPaused) {
+          audioRef.current?.play().then(() => onPlayback?.(), () => {});
+        }
+      }} onPlay={() => setPlaying(true)}
       onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} />
     <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
       <div className="flex flex-wrap gap-2">

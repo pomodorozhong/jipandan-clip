@@ -1,4 +1,4 @@
-export type Status = "pending" | "group1" | "group2" | "exported" | "skipped";
+export type Status = "pending" | "group1" | "group2" | "exported" | "rejected" | "unsure";
 
 export interface Clip {
   clip_id: string;
@@ -40,6 +40,8 @@ export interface Session {
   srt_fingerprint: string | null;
   leading_silence_detection_complete: boolean;
   clip_features_complete: boolean;
+  /** Identifies the likely-keep formula, recorded with each logged decision. */
+  likely_keep_version: string;
   clip_dir: string;
   needs_transcription: boolean;
   transcription: TranscriptionJob | null;
@@ -164,6 +166,15 @@ export async function api<T>(path: string, method = "GET", body?: unknown, signa
     throw Object.assign(new Error(message), { status: response.status, session: result.session });
   }
   return result as T;
+}
+
+/** Best-effort delivery of review-log events; failures are ignored so reviewing never stalls. */
+export function sendReviewEvents(events: unknown[], keepalive = false): Promise<void> {
+  return fetch("/api/review-log", {
+    method: "POST", keepalive,
+    headers: { "content-type": "application/json", "x-jipandan-token": token },
+    body: JSON.stringify({ events }),
+  }).then(() => undefined, () => undefined);
 }
 
 export async function uploadAudio(file: File): Promise<Session> {

@@ -72,7 +72,7 @@ class SessionSafetyTests(unittest.TestCase):
         other = Session.load(session.session_path)
         session.candidates[0].status = "group2"
         session.save()
-        other.candidates[0].status = "skipped"
+        other.candidates[0].status = "rejected"
         with self.assertRaises(ConcurrentSessionChange):
             other.save()
         stored = json.loads(session.session_path.read_text(encoding="utf-8"))

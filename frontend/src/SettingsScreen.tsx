@@ -10,7 +10,8 @@ import type { BadgeMode, UnboundBadgeBehavior } from "./ShortcutBadge";
 
 export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, storageMessage, onClipDirChange,
   onChooseClipDir, onResetClipDir, onApplyClipDir,
-  detectLeadingSilence, showOriginalStart,
+  detectLeadingSilence, showOriginalStart, exploreRanking, onExploreRankingChange,
+  autoplayClips, onAutoplayClipsChange,
   gamepadStatus, gamepadMappingButtonRef, onOpenGamepadMapping,
   onDetectLeadingSilenceChange, onShowOriginalStartChange, badgeMode, unboundBadgeBehavior,
   onBadgeModeChange, onUnboundBadgeBehaviorChange, gamepadRepeatDelayMs,
@@ -25,6 +26,10 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
   onApplyClipDir: () => void;
   detectLeadingSilence: boolean;
   showOriginalStart: boolean;
+  exploreRanking: boolean;
+  onExploreRankingChange: (enabled: boolean) => void;
+  autoplayClips: boolean;
+  onAutoplayClipsChange: (enabled: boolean) => void;
   gamepadStatus: GamepadStatus;
   gamepadMappingButtonRef?: Ref<HTMLButtonElement>;
   onOpenGamepadMapping: () => void;
@@ -87,6 +92,26 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
         <span>
           <strong className="block text-sm">Show original start time on waveform</strong>
           <span className="subtle mt-1 block text-sm">Draw the SRT start as a separate marker in the waveform views.</span>
+        </span>
+      </label>
+    </section>
+    <section className="mt-6 border-t line pt-5">
+      <h3 className="mb-4 text-base font-semibold">Review data</h3>
+      <p className="subtle mb-4 text-sm">Your decisions, which clips you viewed and played, and where each clip ranked are recorded in a <code>.review-log.jsonl</code> file beside the session, to improve the Likely keep score.</p>
+      <label className="flex cursor-pointer items-start gap-3">
+        <input type="checkbox" checked={exploreRanking}
+          onChange={(event) => onExploreRankingChange(event.target.checked)} className="mt-1" />
+        <span>
+          <strong className="block text-sm">Mix in random clips when ordering by Likely keep</strong>
+          <span className="subtle mt-1 block text-sm">About 1 in 20 clips is placed at a random position instead of by score. These reveal good clips the score ranks too low; they are not marked, so judge them like any other clip.</span>
+        </span>
+      </label>
+      <label className="mt-4 flex cursor-pointer items-start gap-3 border-t line pt-4">
+        <input type="checkbox" checked={autoplayClips}
+          onChange={(event) => onAutoplayClipsChange(event.target.checked)} className="mt-1" />
+        <span>
+          <strong className="block text-sm">Play each clip when it is selected</strong>
+          <span className="subtle mt-1 block text-sm">Hear every clip you land on without pressing Space, so each decision is based on listening.</span>
         </span>
       </label>
     </section>
