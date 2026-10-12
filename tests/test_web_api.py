@@ -359,6 +359,42 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(job["adjusted"], 1)
         self.assertEqual(self.service.snapshot()["candidates"][0]["start_ms"], 1200)
 
+    def test_decisions_apply_over_background_saves_but_not_over_their_clips(self):
+        self.open()
+        entered, release = threading.Event(), threading.Event()
+
+        def detect(_audio, start, _end):
+            if start == 3000:
+                entered.set()
+                if not release.wait(5):
+                    raise TimeoutError("Test did not release detector")
+            return start + 400
+
+        path = "/api/session/leading-silence-detection"
+        with patch("jipandan.web.service.LEADING_SILENCE_BATCH_SIZE", 1), patch(
+            "jipandan.web.service.detect_leading_silence_start", side_effect=detect,
+        ):
+            self.client.post(path, headers=self.headers)
+            try:
+                self.assertTrue(entered.wait(5))
+                # Clip 1 was re-trimmed by a background save after revision 1 was read.
+                self.assertEqual(self.service.snapshot()["revision"], 2)
+                status = self.client.patch("/api/clips/2", json={"expected_revision": 1, "status": "rejected"},
+                                           headers=self.headers)
+                self.assertEqual(status.status_code, 200, status.text)
+                trim = self.client.patch("/api/clips/1", json={"expected_revision": 1, "end_ms": 1900},
+                                         headers=self.headers)
+                self.assertEqual(trim.status_code, 409)
+            finally:
+                release.set()
+            self.wait_for_job(path, "completed")
+        state = self.service.snapshot()
+        self.assertEqual([c["status"] for c in state["candidates"]], ["pending", "rejected"])
+        # A user's own earlier save is still a real conflict.
+        stale = self.client.patch("/api/clips/2", json={"expected_revision": 3, "status": "group1"},
+                                  headers=self.headers)
+        self.assertEqual(stale.status_code, 409)
+
     def test_preview_title_change_reuses_render_and_waveform(self):
         self.open()
         envelope = WaveformEnvelopeCache(
