@@ -5,6 +5,7 @@ See the [project README](../README.md) for installation, commands, and testing.
 ## Active plans
 
 - [App rebuild plan](app-rebuild-plan.md): the staged rebuild (event store, Triage, Publish), with progress and remaining work.
+- [Step 2 owner review](app-rebuild-step-2-review.md): the Publish and Polish checkpoint before candidate generation.
 
 ## Completed work
 
