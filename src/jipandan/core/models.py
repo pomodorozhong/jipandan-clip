@@ -1,10 +1,6 @@
-import json
-import fcntl
+import copy
 import hashlib
-import os
-import shutil
-import tempfile
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Literal
 
@@ -20,18 +16,11 @@ from jipandan.core.paths import default_export_dir
 
 # "unsure" records a deliberate "can't decide", distinct from a clip nobody reviewed yet.
 ClipStatus = Literal["pending", "group1", "group2", "exported", "rejected", "unsure"]
-# Version 3 starts the review-log era ("rejected" status, measurement versions);
-# older files are refused rather than migrated.
-SESSION_VERSION = 3
 
 # When an operation collapses a clip to zero duration (start == end), the end is
 # pushed out by this many seconds so the clip remains usable.
 ZERO_DURATION_BUMP_SECONDS = 1.0
 MIN_CLIP_DURATION_SECONDS = 0.01
-
-
-class ConcurrentSessionChange(RuntimeError):
-    """The on-disk session changed since this copy was opened."""
 
 
 @dataclass
@@ -101,12 +90,8 @@ def _carried_scores(prior: ClipCandidate, fresh: ClipCandidate) -> dict[str, flo
     }
 
 
-class OutdatedSession(ValueError):
-    """The session file was written by an older, unsupported session format."""
-
-
-def _clip_candidate_from_dict(item: dict) -> ClipCandidate:
-    """Build a candidate from session JSON, ignoring unknown keys."""
+def clip_candidate_from_dict(item: dict) -> ClipCandidate:
+    """Build a candidate from stored JSON, ignoring unknown keys."""
     return ClipCandidate(
         **{key: value for key, value in item.items() if key in _CLIP_CANDIDATE_FIELD_NAMES}
     )
@@ -114,21 +99,21 @@ def _clip_candidate_from_dict(item: dict) -> ClipCandidate:
 
 @dataclass
 class Session:
+    """The current state of one recording's review, held in memory.
+
+    Persistence lives in jipandan.core.store; ``revision`` mirrors the store's.
+    """
+
     audio: Path
     srt: Path
     clip_dir: Path
     export_dirs: list[Path] = field(default_factory=list)
     candidates: list[ClipCandidate] = field(default_factory=list)
-    version: int = SESSION_VERSION
     revision: int = 0
     srt_fingerprint: str | None = None
     leading_silence_detection_complete: bool = False
     clip_features_complete: bool = False
     clip_features_version: int | None = None
-
-    @property
-    def session_path(self) -> Path:
-        return self.audio.with_suffix(".jipandan.json")
 
     @classmethod
     def from_srt(
@@ -171,82 +156,6 @@ class Session:
             srt_fingerprint=fingerprint,
         )
 
-    @classmethod
-    def load(cls, path: Path) -> "Session":
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if data.get("version") != SESSION_VERSION:
-            raise OutdatedSession(
-                f"{path.name} was saved by an older version of Jipandan. "
-                "Move or delete it to start a fresh session from the SRT."
-            )
-        candidates = [_clip_candidate_from_dict(item) for item in data["candidates"]]
-        for candidate in candidates:
-            if candidate.last_export_title:
-                candidate.title = candidate.last_export_title
-        return cls(
-            audio=Path(data["audio"]),
-            srt=Path(data["srt"]),
-            clip_dir=Path(data["clip_dir"]),
-            export_dirs=[
-                Path(directory)
-                for directory in data.get("export_dirs", [data["clip_dir"]])
-            ],
-            candidates=candidates,
-            version=SESSION_VERSION,
-            revision=data.get("revision", 0),
-            srt_fingerprint=data.get("srt_fingerprint"),
-            leading_silence_detection_complete=data.get("leading_silence_detection_complete", False),
-            clip_features_complete=data.get("clip_features_complete", False),
-            clip_features_version=data.get("clip_features_version"),
-        )
-
-    def save(self) -> None:
-        self.session_path.parent.mkdir(parents=True, exist_ok=True)
-        lock_path = self.session_path.with_name(f".{self.session_path.name}.lock")
-        with lock_path.open("a+") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            if self.session_path.exists():
-                disk_revision = json.loads(
-                    self.session_path.read_text(encoding="utf-8")
-                ).get("revision", 0)
-                if disk_revision != self.revision:
-                    raise ConcurrentSessionChange(
-                        f"Session is at revision {disk_revision}; opened revision {self.revision}"
-                    )
-            next_revision = self.revision + 1
-            payload = {
-                "version": self.version,
-                "revision": next_revision,
-                "srt_fingerprint": self.srt_fingerprint,
-                "leading_silence_detection_complete": self.leading_silence_detection_complete,
-                "clip_features_complete": self.clip_features_complete,
-                "clip_features_version": self.clip_features_version,
-                "audio": str(self.audio),
-                "srt": str(self.srt),
-                "clip_dir": str(self.clip_dir),
-                "export_dirs": [
-                    str(directory.resolve())
-                    for directory in dict.fromkeys([*self.export_dirs, self.clip_dir])
-                ],
-                "candidates": [asdict(candidate) for candidate in self.candidates],
-            }
-            temporary_path: Path | None = None
-            try:
-                with tempfile.NamedTemporaryFile(
-                    mode="w", encoding="utf-8", dir=self.session_path.parent,
-                    prefix=f".{self.session_path.name}.", suffix=".tmp", delete=False,
-                ) as handle:
-                    temporary_path = Path(handle.name)
-                    json.dump(payload, handle, indent=2, ensure_ascii=False)
-                    handle.write("\n")
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                os.replace(temporary_path, self.session_path)
-                self.revision = next_revision
-            finally:
-                if temporary_path is not None:
-                    temporary_path.unlink(missing_ok=True)
-
     def srt_merge_preview(self) -> dict[str, list[int]]:
         """Describe SRT changes without changing the saved session."""
         fresh = Session.from_srt(self.audio, self.srt, self.clip_dir)
@@ -270,7 +179,10 @@ class Session:
     def merge_with_srt(
         self, *, remove_missing: bool = False, remove_missing_indexes: set[int] | None = None
     ) -> list[str]:
-        """Refresh candidates from SRT, preserving status, finetuned times, and duplicates."""
+        """Refresh candidates from SRT, preserving status, finetuned times, and duplicates.
+
+        Removed entries stay recoverable through the store's undo history.
+        """
         warnings: list[str] = []
         fresh = Session.from_srt(self.audio, self.srt, self.clip_dir)
         existing_by_index: dict[int, list[ClipCandidate]] = {}
@@ -341,12 +253,7 @@ class Session:
         if removed_indices:
             removed = set(removed_indices) if remove_missing else (remove_missing_indexes or set())
             if removed:
-                if self.session_path.exists():
-                    backup = self.session_path.with_name(
-                        f"{self.session_path.name}.revision-{self.revision}.bak"
-                    )
-                    shutil.copy2(self.session_path, backup)
-                warnings.append(f"Removed {len(removed & set(removed_indices))} SRT entries after backup.")
+                warnings.append(f"Removed {len(removed & set(removed_indices))} SRT entries.")
             for index, group in existing_by_index.items():
                 if index not in removed:
                     merged.extend(group)
@@ -369,6 +276,25 @@ class Session:
         self.clip_features_complete = False
         self.clip_features_version = None
         return warnings
+
+    def copy_for_edit(self) -> "Session":
+        """A copy that shares unchanged clips; edit clips through ``editable``.
+
+        Copying only what a change touches keeps edits fast on recordings with
+        thousands of clips, and lets callers spot changed clips by identity.
+        """
+        draft = copy.copy(self)
+        draft.candidates = list(self.candidates)
+        draft.export_dirs = list(self.export_dirs)
+        return draft
+
+    def editable(self, clip_id: str) -> ClipCandidate | None:
+        """Replace the clip with a private copy and return it for editing."""
+        position = self._find_position(clip_id)
+        if position is None:
+            return None
+        self.candidates[position] = copy.copy(self.candidates[position])
+        return self.candidates[position]
 
     def get_candidate(self, clip_id: str) -> ClipCandidate | None:
         for candidate in self.candidates:
@@ -477,13 +403,11 @@ class Session:
 
     def bulk_reject(self, clip_ids: list[str]) -> int:
         """Mark pending candidates in clip_ids as rejected. Returns count changed."""
-        clip_id_set = set(clip_ids)
         count = 0
-        for candidate in self.candidates:
-            if candidate.clip_id not in clip_id_set:
+        for clip_id in dict.fromkeys(clip_ids):
+            candidate = self.get_candidate(clip_id)
+            if candidate is None or candidate.status != "pending":
                 continue
-            if candidate.status != "pending":
-                continue
-            candidate.status = "rejected"
+            self.editable(clip_id).status = "rejected"
             count += 1
         return count

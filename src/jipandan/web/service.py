@@ -1,4 +1,8 @@
-"""Framework-independent, revisioned session operations for the local GUI."""
+"""Framework-independent session operations for the local GUI.
+
+The open recording is held in memory as a Session and persisted to its
+RecordingStore: every change is one transaction of new clip state plus events.
+"""
 
 from __future__ import annotations
 
@@ -31,19 +35,14 @@ from jipandan.core.leading_silence import detect_leading_silence_start
 from jipandan.core.paths import AppPaths, default_export_dir, get_app_paths, resolve_export_dir
 from jipandan.core.srt import parse_srt, segment_scores_path
 from jipandan.core.whisper import describe_transcribe_call
-from jipandan.core.models import (
-    ClipCandidate,
-    ConcurrentSessionChange,
-    MIN_CLIP_DURATION_SECONDS,
-    OutdatedSession,
-    Session,
-)
+from jipandan.core.models import ClipCandidate, MIN_CLIP_DURATION_SECONDS, Session
+from jipandan.core.store import RecordingStore, StoreConflict, store_path
 from jipandan.core.srt import seconds_to_ffmpeg_timestamp, srt_time_to_seconds
 from jipandan.web.waveform import MAX_BUCKETS, MAX_WINDOW_MS, MIN_BUCKETS, WaveformCache
 from jipandan.web.preview import PreviewJobs
 from jipandan.web.transcription import TranscriptionJob, TranscriptionJobs
 from jipandan.web.clip_transcription import transcribe_clips
-from jipandan.web.review_log import MAX_CLIENT_EVENTS, ReviewLog, clean_client_event, clean_context
+from jipandan.web.review_log import MAX_CLIENT_EVENTS, clean_client_event, clean_context
 
 logger = logging.getLogger(__name__)
 
@@ -96,26 +95,23 @@ class SessionService:
         self.audio: Path | None = None
         self.srt: Path | None = None
         self.session: Session | None = None
+        self.store: RecordingStore | None = None
         self.duration_ms: int | None = None
         self._clip_dir_override = clip_dir.expanduser().resolve() if clip_dir else None
         self.upload_dir = (upload_dir or self.paths.uploads_dir).expanduser().resolve()
-        self._undo: list[tuple[str, dict[str, ClipCandidate], str | None]] = []
         self._waveforms = WaveformCache()
         self._leading_silence_job: dict[str, object] | None = None
         self._clip_features_job: dict[str, object] | None = None
         self._clip_transcription_job: dict[str, object] | None = None
         self._clip_transcription_process: subprocess.Popen | None = None
-        # Re-transcribed titles awaiting review, keyed by clip ID. They live
-        # outside the session so a long run never bumps its revision.
+        # Snapshot parts reused while their inputs are unchanged; a full snapshot of a
+        # 5,000-clip recording is otherwise rebuilt on every key press.
+        self._payload_cache: dict[str, tuple[ClipCandidate, dict]] = {}
+        self._score_cache: tuple[tuple, list[float | None]] | None = None
+        self._merge_preview_cache: tuple[tuple, dict] | None = None
+        # Re-transcribed titles awaiting review, keyed by clip ID; mirrored in the store.
+        # They are not clip state, so a long run never bumps the revision.
         self._title_suggestions: dict[str, str] = {}
-        self._review_log = ReviewLog()
-        # Clips changed by each revision a background job saved. Edits made against an
-        # older revision still apply when only background saves came in between and
-        # none of them touched the edited clips, so reviewing is not interrupted.
-        self._background_changes: dict[int, set[str]] = {}
-        self._suggestion_dir = (
-            (transcription_dir or self.paths.transcription_dir).expanduser().resolve() / "clip-suggestions"
-        )
         self._previews = PreviewJobs((preview_dir or self.paths.preview_dir).expanduser().resolve())
         self._transcriptions = TranscriptionJobs(
             (transcription_dir or self.paths.transcription_dir).expanduser().resolve(),
@@ -154,13 +150,14 @@ class SessionService:
                 self._clip_dir_override = selected
                 return self.snapshot()
 
-            def change(session: Session) -> str:
+            self._check_revision(expected_revision)
+
+            def change(session: Session) -> None:
                 session.clip_dir = selected
                 if not any(directory.resolve() == selected for directory in session.export_dirs):
                     session.export_dirs.append(selected)
-                return "Change export directory"
 
-            snapshot, _ = self._mutate(expected_revision, change)
+            snapshot, _ = self._mutate(change, [{"type": "export-dir", "to": str(selected)}])
             self._clip_dir_override = selected
             return snapshot
 
@@ -250,7 +247,7 @@ class SessionService:
         staged = destination.with_name(f".{destination.name}.{job.id}.tmp")
         scores = segment_scores_path(job.output)
         with self._lock:
-            if destination.exists() or job.audio.with_suffix(".jipandan.json").exists():
+            if destination.exists() or store_path(job.audio).exists():
                 raise SessionConflict("An SRT or session was created while transcription ran")
             try:
                 with job.output.open("rb") as source, staged.open("wb") as target:
@@ -261,19 +258,23 @@ class SessionService:
                 if scores.is_file():
                     shutil.copyfile(scores, segment_scores_path(destination))
                 session = Session.from_srt(job.audio, destination, self._new_session_clip_dir(job.audio))
-                session.save()
+                store = RecordingStore(store_path(job.audio))
+                store.create(session)
             finally:
                 staged.unlink(missing_ok=True)
             if self.audio == job.audio:
-                self.srt = destination
-                self.session = session
-                self._undo.clear()
-                self._background_changes.clear()
+                self._replace_recording(session, store, destination)
+            else:
+                store.close()
             return len(entries)
 
     def close(self) -> None:
         self._transcriptions.close()
         self.cancel_clip_transcription()
+        with self._lock:
+            if self.store is not None:
+                self.store.close()
+                self.store = None
 
     def start_preview(
         self, clip_id: str, expected_revision: int, *, mode: str,
@@ -287,7 +288,7 @@ class SessionService:
             if not math.isfinite(value) or not -90 <= value <= -5:
                 raise InvalidEdit("Thresholds must be between -90 and -5 dB")
         with self._lock:
-            session = self._check_revision(expected_revision)
+            session = self._ready()
             candidate = session.get_candidate(clip_id)
             if candidate is None:
                 raise InvalidEdit("Clip not found")
@@ -334,9 +335,8 @@ class SessionService:
         with self._lock:
             job = self._previews.get(job_id)
             if job is None:
-                self._check_revision(expected_revision)
                 raise InvalidEdit("Preview not found")
-            current = self._check_revision(expected_revision, [job.candidate.clip_id])
+            current = self._ready()
             candidate = current.get_candidate(job.candidate.clip_id)
             if self._previews.is_stale(job, self.audio, candidate):
                 raise SessionConflict("Preview is stale; wait for the updated render")
@@ -349,31 +349,26 @@ class SessionService:
                 )
             except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
                 raise SessionNotReady(f"Could not export clip: {exc}") from exc
-            draft = copy.deepcopy(current)
-            exported = draft.get_candidate(job.candidate.clip_id)
-            exported.status = "exported"
-            exported.title = job.title
-            exported.last_export_title = job.title
-            exported.last_export_mode = job.options.mode
-            exported.last_export_start_threshold_db = job.options.start_threshold_db
-            exported.last_export_stop_threshold_db = job.options.stop_threshold_db
-            exported.last_export_path = str(output)
+            def mark_exported(draft: Session) -> None:
+                exported = draft.editable(job.candidate.clip_id)
+                exported.status = "exported"
+                exported.title = job.title
+                exported.last_export_title = job.title
+                exported.last_export_mode = job.options.mode
+                exported.last_export_start_threshold_db = job.options.start_threshold_db
+                exported.last_export_stop_threshold_db = job.options.stop_threshold_db
+                exported.last_export_path = str(output)
+
             try:
-                draft.save()
-            except Exception as exc:
+                result, _ = self._mutate(mark_exported, [{
+                    "type": "export", "clip": job.candidate.clip_id, "mode": job.options.mode,
+                    "start_threshold_db": job.options.start_threshold_db,
+                    "stop_threshold_db": job.options.stop_threshold_db,
+                    "title": job.title, "path": str(output), **clean_context(context),
+                }], undoable=False)
+            except Exception:
                 output.unlink(missing_ok=True)
-                if isinstance(exc, ConcurrentSessionChange):
-                    self.session = Session.load(current.session_path)
-                    self._undo.clear()
-                    self._background_changes.clear()
-                    raise SessionConflict(str(exc)) from exc
                 raise
-            self.session = draft
-            self._review_log.append(self.audio, [{
-                "type": "export", "clip": exported.clip_id, "mode": job.options.mode,
-                "title": job.title, **clean_context(context),
-            }])
-            result = self.snapshot()
             result["output_path"] = str(output)
             return result
 
@@ -515,7 +510,7 @@ class SessionService:
                     ]
                     changed: list[str] = []
 
-                    def apply_proposals(draft: Session) -> str:
+                    def apply_proposals(draft: Session) -> None:
                         for candidate_id, (candidate_original, proposed_start) in proposals.items():
                             candidate = draft.get_candidate(candidate_id)
                             if (
@@ -526,19 +521,19 @@ class SessionService:
                             end = _time_ms(candidate.end)
                             if proposed_start <= _time_ms(candidate.original_start) or end - proposed_start < 10:
                                 continue
+                            candidate = draft.editable(candidate_id)
                             candidate.start = seconds_to_ffmpeg_timestamp(proposed_start / 1000)
                             candidate.duration = f"{(end - proposed_start) / 1000:.3f}"
                             changed.append(candidate_id)
                         if position == len(clips):
                             draft.leading_silence_detection_complete = True
-                        return "Detect leading silence"
 
                     if eligible_ids or position == len(clips):
-                        snapshot, _ = self._mutate(
-                            session.revision, apply_proposals, undo_ids=eligible_ids,
-                            undo_group=f"leading-silence:{job_id}", background_changes=changed,
+                        # All batches of one run undo together.
+                        self._mutate(
+                            apply_proposals, [{"type": "detect-silence", "job": job_id, "clips": changed}],
+                            label="Detect leading silence", undo_group=f"leading-silence:{job_id}",
                         )
-                        del snapshot
                     job["adjusted"] = int(job["adjusted"]) + len(changed)
                     proposals.clear()
                     if position == len(clips):
@@ -624,18 +619,19 @@ class SessionService:
                     job["state"] = "cancelled"
                     return
 
-                def apply_features(draft: Session) -> str:
-                    for candidate in draft.candidates:
+                def apply_features(draft: Session) -> None:
+                    for position, candidate in enumerate(draft.candidates):
                         features = measured.get((candidate.original_start, candidate.original_end))
                         if candidate.peak_db is None and features is not None:
+                            candidate = draft.candidates[position] = copy.copy(candidate)
                             candidate.peak_db = features.peak_db
                             candidate.mid_share_db = features.mid_share_db
                             candidate.bass_share_db = features.bass_share_db
                     draft.clip_features_complete = True
                     draft.clip_features_version = CLIP_FEATURES_VERSION
-                    return "Measure clip audio"
 
-                self._mutate(session.revision, apply_features, background_changes=[])
+                # Measurements are not review decisions: saved without an event or undo step.
+                self._save_measurements(apply_features)
                 job["progress"] = job["total"]
                 job["state"] = "completed"
         except Exception as exc:
@@ -646,41 +642,19 @@ class SessionService:
                     job["state"] = "failed"
                     job["error"] = str(exc)
 
-    def _suggestion_path(self, audio: Path) -> Path:
-        key = hashlib.sha256(str(audio).encode("utf-8")).hexdigest()[:16]
-        return self._suggestion_dir / f"{key}.json"
-
-    def _load_title_suggestions(self, audio: Path) -> dict[str, str]:
-        try:
-            data = json.loads(self._suggestion_path(audio).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return {}
-        if not isinstance(data, dict) or data.get("audio") != str(audio):
-            return {}
-        suggestions = data.get("suggestions")
-        return {str(key): value for key, value in suggestions.items() if isinstance(value, str)} \
-            if isinstance(suggestions, dict) else {}
-
-    def _save_title_suggestions(self) -> None:
-        if self.audio is None:
-            return
-        destination = self._suggestion_path(self.audio)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            "w", encoding="utf-8", dir=destination.parent, prefix=f".{destination.name}.",
-            suffix=".tmp", delete=False,
-        ) as handle:
-            json.dump({"audio": str(self.audio), "suggestions": self._title_suggestions}, handle, ensure_ascii=False)
-        os.replace(handle.name, destination)
-
-    def _drop_title_suggestion(self, clip_id: str) -> None:
-        if self._title_suggestions.pop(clip_id, None) is not None:
-            self._save_title_suggestions()
+    def _set_title_suggestion(self, clip_id: str, title: str | None) -> None:
+        if title is None:
+            if self._title_suggestions.pop(clip_id, None) is None:
+                return
+        else:
+            self._title_suggestions[clip_id] = title
+        if self.store is not None:
+            self.store.set_suggestion(clip_id, title)
 
     def dismiss_title_suggestion(self, clip_id: str) -> dict:
         with self._lock:
             self._ready()
-            self._drop_title_suggestion(clip_id)
+            self._set_title_suggestion(clip_id, None)
             return self.snapshot()
 
     def clip_transcription_status(self) -> dict | None:
@@ -772,8 +746,7 @@ class SessionService:
                     if self.audio == audio and text and self.session is not None:
                         candidate = self.session.get_candidate(clip_id)
                         if candidate is not None and candidate.title != text:
-                            self._title_suggestions[clip_id] = text
-                            self._save_title_suggestions()
+                            self._set_title_suggestion(clip_id, text)
                     job["progress"] = int(job["progress"]) + 1
             with self._lock:
                 job = current_job()
@@ -822,28 +795,67 @@ class SessionService:
         if not math.isfinite(duration) or duration <= 0:
             raise InvalidEdit("Audio has no valid duration")
         srt = resolved.with_suffix(".srt")
-        session_path = resolved.with_suffix(".jipandan.json")
-        if session_path.exists():
-            try:
-                session = Session.load(session_path)
-            except OutdatedSession as exc:
-                raise InvalidEdit(str(exc)) from exc
-            session.audio = resolved
-            session.srt = srt
-        elif srt.exists():
-            session = Session.from_srt(resolved, srt, self._new_session_clip_dir(resolved))
-            session.save()
-        else:
-            session = None
+        database = store_path(resolved)
+        legacy = resolved.with_suffix(".jipandan.json")
+        if not database.exists() and legacy.exists():
+            raise InvalidEdit(
+                f"{legacy.name} was saved by an older version of Jipandan. "
+                "Move or delete it to start a fresh session from the SRT."
+            )
+        store: RecordingStore | None = None
+        session: Session | None = None
+        try:
+            if database.exists():
+                store = RecordingStore(database)
+                session = store.load()
+                session.audio, session.srt = resolved, srt
+            elif srt.exists():
+                session = Session.from_srt(resolved, srt, self._new_session_clip_dir(resolved))
+                store = RecordingStore(database)
+                store.create(session)
+        except StoreConflict as exc:
+            if store is not None:
+                store.close()
+            raise InvalidEdit(str(exc)) from exc
         with self._lock:
             self.audio = resolved
-            self.srt = srt
-            self.session = session
             self.duration_ms = round(duration * 1000)
-            self._undo.clear()
-            self._background_changes.clear()
-            self._title_suggestions = self._load_title_suggestions(resolved)
+            self._replace_recording(session, store, srt)
             return self.snapshot()
+
+    def _replace_recording(self, session: Session | None, store: RecordingStore | None, srt: Path) -> None:
+        if self.store is not None and self.store is not store:
+            self.store.close()
+        self.srt = srt
+        self.session = session
+        self.store = store
+        self._title_suggestions = store.suggestions() if store is not None else {}
+        self._payload_cache.clear()
+        self._score_cache = None
+        self._merge_preview_cache = None
+
+    def _clip_payloads(self, session: Session) -> list[dict]:
+        signals = tuple(
+            (c.clip_id, c.peak_db, c.mid_share_db, c.bass_share_db, c.no_speech_prob) for c in session.candidates
+        )
+        if self._score_cache is None or self._score_cache[0] != signals:
+            self._score_cache = (signals, likely_keep_scores(session.candidates))
+        scores = self._score_cache[1]
+        cache = self._payload_cache
+        payloads = []
+        for candidate, score in zip(session.candidates, scores):
+            cached = cache.get(candidate.clip_id)
+            if cached is None or cached[0] is not candidate:
+                cached = cache[candidate.clip_id] = (candidate, clip_payload(candidate))
+            payloads.append({
+                **cached[1], "likely_keep": score,
+                "suggested_title": self._title_suggestions.get(candidate.clip_id),
+            })
+        if len(cache) > len(payloads) + 100:
+            current = {c.clip_id for c in session.candidates}
+            for clip_id in [key for key in cache if key not in current]:
+                del cache[clip_id]
+        return payloads
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -858,7 +870,7 @@ class SessionService:
                 "duration_ms": self.duration_ms,
                 "srt": str(self.srt) if self.srt else None,
                 "srt_exists": bool(self.srt and self.srt.exists()),
-                "session_path": str(session.session_path) if session else None,
+                "session_path": str(self.store.path) if session and self.store else None,
                 "clip_dir": str(session.clip_dir) if session else str(self.default_clip_dir),
                 "srt_fingerprint": session.srt_fingerprint if session else None,
                 "leading_silence_detection_complete": (
@@ -869,13 +881,9 @@ class SessionService:
                 "needs_transcription": bool(self.audio and session is None),
                 "transcription": self._transcriptions.latest(self.audio),
                 "revision": session.revision if session else None,
-                "candidates": [
-                    {**clip_payload(candidate, score),
-                     "suggested_title": self._title_suggestions.get(candidate.clip_id)}
-                    for candidate, score in zip(session.candidates, likely_keep_scores(session.candidates))
-                ] if session else [],
+                "candidates": self._clip_payloads(session) if session else [],
                 "counts": counts,
-                "can_undo": bool(self._undo),
+                "can_undo": bool(self.store and self.store.can_undo()),
                 "merge_preview": self.merge_preview() if session and self.srt and self.srt.exists() else None,
             }
 
@@ -891,61 +899,69 @@ class SessionService:
             raise SessionNotReady("Open audio with an SRT or transcribe it first")
         return self.session
 
-    def _check_revision(self, expected_revision: int, touching: Iterable[str] | None = None) -> Session:
+    def _check_revision(self, expected_revision: int) -> Session:
+        """Guard changes that depend on what the client saw, such as an SRT merge."""
         session = self._ready()
-        if expected_revision == session.revision:
-            return session
-        between = range(expected_revision + 1, session.revision + 1)
-        if (
-            touching is not None and expected_revision < session.revision
-            and all(revision in self._background_changes for revision in between)
-            and not set(touching).intersection(*(self._background_changes[r] for r in between))
-        ):
-            return session
-        raise SessionConflict("Session changed; reload before editing")
+        if expected_revision != session.revision:
+            raise SessionConflict("Session changed; reload before editing")
+        return session
+
+    def _commit(self, save: Callable[[RecordingStore, Session], object], draft: Session) -> object:
+        store = self.store
+        if store is None:
+            raise SessionNotReady("Open audio with an SRT or transcribe it first")
+        try:
+            result = save(store, draft)
+        except StoreConflict as exc:
+            # Another process wrote to this recording: adopt its state.
+            self.session = store.load()
+            raise SessionConflict(str(exc)) from exc
+        self.session = draft
+        return result
+
+    @staticmethod
+    def _changed_clips(current: Session, draft: Session) -> dict[str, ClipCandidate | None]:
+        """Each clip the change added, removed, or modified, mapped to its prior state."""
+        before = {c.clip_id: c for c in current.candidates}
+        after = {c.clip_id: c for c in draft.candidates}
+        changed = {}
+        for clip_id in before.keys() | after.keys():
+            old, new = before.get(clip_id), after.get(clip_id)
+            # Drafts share untouched clips, so identity rules most out cheaply.
+            if old is not new and old != new:
+                changed[clip_id] = old
+        return changed
 
     def _mutate(
-        self, expected_revision: int, operation: Callable[[Session], object],
-        *, undo_ids: list[str] | None = None, undo_group: str | None = None,
-        touching: Iterable[str] | None = None, background_changes: list[str] | None = None,
+        self, operation: Callable[[Session], object], events: list[dict] | None = None, *,
+        label: str | None = None, undo_group: str | None = None, undoable: bool | None = None,
+        undoes: list[int] | None = None,
     ) -> tuple[dict, object]:
-        """Apply ``operation`` to a copy of the session and save it.
+        """Apply ``operation`` to a copy of the session and save it with ``events``.
 
-        ``touching`` lists the clips a user edit affects, allowing it over
-        background-only revisions; background jobs pass ``background_changes``,
-        the clips they changed (filled in by ``operation``).
+        ``events`` may be filled in by ``operation``. The change is undoable when it
+        has a label (by default) and actually changed a clip.
         """
         with self._lock:
-            current = self._check_revision(expected_revision, touching)
-            draft = copy.deepcopy(current)
-            before = {
-                clip_id: copy.deepcopy(candidate)
-                for clip_id in (undo_ids or [])
-                if (candidate := current.get_candidate(clip_id)) is not None
-            }
+            current = self._ready()
+            draft = current.copy_for_edit()
             result = operation(draft)
-            try:
-                draft.save()
-            except ConcurrentSessionChange as exc:
-                self.session = Session.load(current.session_path)
-                self._undo.clear()
-                self._background_changes.clear()
-                raise SessionConflict(str(exc)) from exc
-            self.session = draft
-            if background_changes is not None:
-                self._background_changes[draft.revision] = set(background_changes)
-                for old in [r for r in self._background_changes if r < draft.revision - 500]:
-                    del self._background_changes[old]
-            if before:
-                if undo_group is not None and self._undo and self._undo[-1][2] == undo_group:
-                    label, grouped_before, group_id = self._undo[-1]
-                    for clip_id, candidate in before.items():
-                        grouped_before.setdefault(clip_id, candidate)
-                    self._undo[-1] = (label, grouped_before, group_id)
-                else:
-                    self._undo.append((str(result), before, undo_group))
-                    self._undo = self._undo[-50:]
+            before = self._changed_clips(current, draft)
+            if not before and not events:
+                return self.snapshot(), result
+            undo = bool(before) and (undoable if undoable is not None else label is not None)
+            self._commit(lambda store, d: store.commit(
+                d, before, list(events or []), label=label, undo_group=undo_group, undoable=undo, undoes=undoes,
+            ), draft)
             return self.snapshot(), result
+
+    def _save_measurements(self, operation: Callable[[Session], None]) -> None:
+        with self._lock:
+            current = self._ready()
+            draft = current.copy_for_edit()
+            operation(draft)
+            changed = set(self._changed_clips(current, draft))
+            self._commit(lambda store, d: store.update_clips(d, changed), draft)
 
     def record_review_events(self, events: list[object]) -> int:
         """Store clip views reported by the browser; returns how many were accepted."""
@@ -954,7 +970,8 @@ class SessionService:
         with self._lock:
             self._ready()
             cleaned = [event for raw in events if (event := clean_client_event(raw, self.audio)) is not None]
-            self._review_log.append(self.audio, cleaned)
+            if self.store is not None:
+                self.store.append_events(cleaned)
         return len(cleaned)
 
     def patch_clip(
@@ -973,9 +990,9 @@ class SessionService:
         events: list[dict] = []
         logged = clean_context(context)
 
-        def change(session: Session) -> str:
+        def change(session: Session) -> None:
             events.clear()
-            candidate = session.get_candidate(clip_id)
+            candidate = session.editable(clip_id)
             if candidate is None:
                 raise InvalidEdit("Clip not found")
             if status is not None and status != candidate.status:
@@ -1004,14 +1021,12 @@ class SessionService:
                     raise InvalidEdit("Clip end exceeds audio duration")
                 candidate.start = seconds_to_ffmpeg_timestamp(start / 1000)
                 candidate.duration = f"{(end - start) / 1000:.3f}"
-            return clip_id
 
-        snapshot, _ = self._mutate(expected_revision, change, undo_ids=[clip_id], touching=[clip_id])
-        self._review_log.append(self.audio, events)
+        snapshot, _ = self._mutate(change, events, label=clip_id)
         if title is not None:
             with self._lock:
                 if self._title_suggestions.get(clip_id) == title.strip():
-                    self._drop_title_suggestion(clip_id)
+                    self._set_title_suggestion(clip_id, None)
                     snapshot = self.snapshot()
         self._prewarm_grouped_clip(clip_id)
         return snapshot
@@ -1044,10 +1059,14 @@ class SessionService:
                 raise InvalidEdit("Clip not found")
             return duplicate.clip_id
 
-        snapshot, result = self._mutate(expected_revision, change, touching=[clip_id])
-        self._review_log.append(self.audio, [
-            {"type": "duplicate", "clip": clip_id, "created": result, **clean_context(context)},
-        ])
+        events: list[dict] = []
+
+        def change_and_log(session: Session) -> str:
+            created = change(session)
+            events.append({"type": "duplicate", "clip": clip_id, "created": created, **clean_context(context)})
+            return created
+
+        snapshot, result = self._mutate(change_and_log, events, label=clip_id)
         snapshot["created_clip_id"] = result
         return snapshot
 
@@ -1067,53 +1086,57 @@ class SessionService:
             session.bulk_reject(changed)
             return changed
 
-        snapshot, changed = self._mutate(expected_revision, change, undo_ids=clip_ids, touching=clip_ids)
-        if changed:
-            self._review_log.append(self.audio, [
-                {"type": "bulk-reject", "clips": changed, **clean_context(context)},
-            ])
+        events: list[dict] = []
+
+        def change_and_log(session: Session) -> list[str]:
+            changed = change(session)
+            if changed:
+                events.append({"type": "bulk-reject", "clips": changed, **clean_context(context)})
+            return changed
+
+        snapshot, changed = self._mutate(change_and_log, events, label="Reject clips")
         snapshot["changed_clip_ids"] = changed
         return snapshot
 
     def undo(self, expected_revision: int, context: object = None) -> dict:
+        """Revert the latest undoable change (a whole background run counts as one)."""
         with self._lock:
-            if not self._undo:
-                self._check_revision(expected_revision)
+            self._ready()
+            target = self.store.undo_target() if self.store is not None else None
+            if target is None:
                 raise InvalidEdit("Nothing to undo")
-            label, before, _ = self._undo[-1]
-            self._check_revision(expected_revision, before)
+            seqs, label, restored = target
 
-            def restore(session: Session) -> str:
-                for clip_id, old in before.items():
-                    position = session._find_position(clip_id)
-                    if position is not None:
-                        session.candidates[position] = copy.deepcopy(old)
-                return label
+            def restore(session: Session) -> None:
+                by_id = {c.clip_id: c for c in session.candidates}
+                for clip_id, old in restored.items():
+                    if old is None:
+                        by_id.pop(clip_id, None)
+                    else:
+                        by_id[clip_id] = copy.deepcopy(old)
+                session.candidates = sorted(by_id.values(), key=lambda c: (c.index, c.suffix))
 
-            snapshot, _ = self._mutate(expected_revision, restore, touching=before)
             # Record what each clip went back to, so training sees the corrected decision.
-            self._review_log.append(self.audio, [{
-                "type": "undo", "label": label,
-                "restored": {clip_id: old.status for clip_id, old in before.items()},
+            return self._mutate(restore, [{
+                "type": "undo", "label": label, "targets": seqs,
+                "restored": {clip_id: old.status if old else None for clip_id, old in restored.items()},
                 **clean_context(context),
-            }])
-            self._undo.pop()
-            snapshot["can_undo"] = bool(self._undo)
-            return snapshot
+            }], undoable=False, undoes=seqs)[0]
 
     def merge_preview(self) -> dict | None:
         with self._lock:
             if self.session is None or self.srt is None or not self.srt.exists():
                 return None
             session = self.session
+            stat = self.srt.stat()
+            # Depends only on the SRT file and the session's source entries, which change rarely.
+            key = (str(self.srt), stat.st_mtime_ns, stat.st_size, session.srt_fingerprint,
+                   tuple((c.clip_id, c.original_start, c.original_end, c.source_text) for c in session.candidates))
+            if self._merge_preview_cache is not None and self._merge_preview_cache[0] == key:
+                return self._merge_preview_cache[1]
             changes = session.srt_merge_preview()
             fingerprint = hashlib.sha256(self.srt.read_bytes()).hexdigest()
-            unknown_text_change = (
-                session.srt_fingerprint is None
-                and session.session_path.exists()
-                and self.srt.stat().st_mtime_ns > session.session_path.stat().st_mtime_ns
-            )
-            return {
+            preview = {
                 **changes,
                 "affected_clip_ids": [
                     c.clip_id for c in session.candidates
@@ -1123,12 +1146,12 @@ class SessionService:
                     c.clip_id for c in session.candidates if c.suffix == 0 and c.source_text is None
                 ],
                 "srt_fingerprint": fingerprint,
-                "file_changed": (
-                    session.srt_fingerprint is not None
-                    and session.srt_fingerprint != fingerprint
-                ) or unknown_text_change,
-                "text_change_unverified": unknown_text_change,
+                "file_changed": session.srt_fingerprint != fingerprint,
+                # Every stored recording keeps its SRT fingerprint and source text.
+                "text_change_unverified": False,
             }
+            self._merge_preview_cache = (key, preview)
+            return preview
 
     def apply_merge(
         self, expected_revision: int, srt_fingerprint: str,
@@ -1145,6 +1168,9 @@ class SessionService:
             def change(session: Session) -> list[str]:
                 return session.merge_with_srt(remove_missing_indexes=set(remove_indexes))
 
-            snapshot, warnings = self._mutate(expected_revision, change)
+            # Undoable as a whole, which replaces the old backup copy of the session file.
+            snapshot, warnings = self._mutate(change, [{
+                "type": "merge-srt", "srt_fingerprint": srt_fingerprint, "removed": sorted(remove_indexes),
+            }], label="Merge SRT changes")
             snapshot["merge_warnings"] = warnings
             return snapshot
