@@ -21,11 +21,14 @@ PADDING_MS = 200
 def decode_span(audio: Path, start_ms: int, end_ms: int):
     import numpy as np
 
+    from jipandan.core.ffmpeg import seek_arguments
+
     start = max(0, start_ms - PADDING_MS)
     duration = end_ms + PADDING_MS - start
+    before, after = seek_arguments(audio, start / 1000)
     raw = subprocess.run(
-        ["ffmpeg", "-loglevel", "error", "-ss", f"{start / 1000:.3f}", "-t", f"{duration / 1000:.3f}",
-         "-i", str(audio), "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "f32le", "pipe:1"],
+        ["ffmpeg", "-loglevel", "error", *before, "-i", str(audio), *after, "-t", f"{duration / 1000:.3f}",
+         "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "f32le", "pipe:1"],
         check=True, stdout=subprocess.PIPE,
     ).stdout
     return np.frombuffer(raw[: len(raw) // 4 * 4], np.float32)

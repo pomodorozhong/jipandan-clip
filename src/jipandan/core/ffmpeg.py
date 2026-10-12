@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Literal
 
 from jipandan.core.models import ClipCandidate
+from jipandan.core.srt import srt_time_to_seconds
 
 ExportMode = Literal["as_is", "trim_edges", "trim_all"]
 
@@ -49,6 +50,64 @@ def _run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True)
 
 
+# Seeking: placing -ss after -i decodes from the start of the file, which is exact
+# but takes ~17 s for a clip 6 hours into a stream. Placing it before -i jumps
+# straight there; with a short pre-roll that is then trimmed, the result is
+# sample-identical on files whose demuxer seeks exactly (such as CBR MP3). Each
+# file is checked once, and files that fail fall back to the slow exact seek.
+_SEEK_PREROLL_SECONDS = 0.5
+_SEEK_CHECK_AT_SECONDS = 600.0
+_fast_seek_checks: dict[tuple[str, int, int], bool] = {}
+
+
+def _decode_probe(audio: Path, before: list[str], after: list[str]) -> bytes:
+    return subprocess.run(
+        ["ffmpeg", "-v", "error", *before, "-i", str(audio), *after, "-t", "1", "-ac", "1",
+         "-ar", "16000", "-f", "f32le", "pipe:1"],
+        check=True, capture_output=True,
+    ).stdout
+
+
+def fast_seek_is_exact(audio: Path, duration_seconds: float | None = None) -> bool:
+    """Whether jumping into ``audio`` lands on exactly the same samples as decoding up to it."""
+    stat = audio.stat()
+    key = (str(audio.resolve()), stat.st_mtime_ns, stat.st_size)
+    if key not in _fast_seek_checks:
+        duration = duration_seconds if duration_seconds is not None else probe_duration_seconds(audio)
+        at = min(_SEEK_CHECK_AT_SECONDS, max(0.0, duration / 2 - 1))
+        if at <= _SEEK_PREROLL_SECONDS:
+            _fast_seek_checks[key] = True
+        else:
+            try:
+                exact = _decode_probe(audio, [], ["-ss", f"{at:.6f}"])
+                fast = _decode_probe(
+                    audio, ["-ss", f"{at - _SEEK_PREROLL_SECONDS:.6f}"], ["-ss", f"{_SEEK_PREROLL_SECONDS:.6f}"],
+                )
+            except subprocess.CalledProcessError:
+                _fast_seek_checks[key] = False
+            else:
+                _fast_seek_checks[key] = len(exact) == len(fast) and _max_abs_difference(exact, fast) < 1e-4
+    return _fast_seek_checks[key]
+
+
+def _max_abs_difference(first: bytes, second: bytes) -> float:
+    import numpy as np
+
+    a = np.frombuffer(first[: len(first) // 4 * 4], np.float32)
+    b = np.frombuffer(second[: len(second) // 4 * 4], np.float32)
+    return float(np.max(np.abs(a - b))) if a.size else 0.0
+
+
+def seek_arguments(audio: Path, start_seconds: float) -> tuple[list[str], list[str]]:
+    """FFmpeg arguments placed before and after ``-i`` to start exactly at ``start_seconds``."""
+    if start_seconds <= 0:
+        return [], []
+    if fast_seek_is_exact(audio):
+        preroll = min(start_seconds, _SEEK_PREROLL_SECONDS)
+        return ["-ss", f"{start_seconds - preroll:.6f}"], ["-ss", f"{preroll:.6f}"]
+    return [], ["-ss", f"{start_seconds:.6f}"]
+
+
 def probe_duration_seconds(audio: Path) -> float:
     """Return the duration of ``audio`` in seconds as reported by ffprobe."""
     result = subprocess.run(
@@ -79,15 +138,16 @@ def _extract_audio_slice(
 ) -> None:
     """Extract an MP3 slice with sample-accurate seek (re-encoded)."""
     out_mp3.parent.mkdir(parents=True, exist_ok=True)
+    before, after = seek_arguments(input_audio, srt_time_to_seconds(start.replace(".", ",")))
     cmd = [
         "ffmpeg",
         "-y",
         "-loglevel",
         "quiet",
+        *before,
         "-i",
         str(input_audio),
-        "-ss",
-        start,
+        *after,
         "-t",
         duration,
         "-q:a",
