@@ -45,6 +45,7 @@ type AppSettings = {
   unboundBadgeBehavior: UnboundBadgeBehavior;
   gamepadRepeatDelayMs: number;
   exploreRanking: boolean;
+  autoplayClips: boolean;
 };
 
 // A clip counts as viewed for the review log after this long on screen.
@@ -65,6 +66,7 @@ function loadSettings(): AppSettings {
         unboundBadgeBehavior: parsed.unboundBadgeBehavior === "keyboard" ? "keyboard" : "hide",
         gamepadRepeatDelayMs: normalizeGamepadRepeatDelay(parsed.gamepadRepeatDelayMs),
         exploreRanking: typeof parsed.exploreRanking === "boolean" ? parsed.exploreRanking : true,
+        autoplayClips: typeof parsed.autoplayClips === "boolean" ? parsed.autoplayClips : true,
       };
     }
   } catch { /* Use defaults when browser storage is unavailable or invalid. */ }
@@ -75,6 +77,7 @@ function loadSettings(): AppSettings {
     unboundBadgeBehavior: "hide",
     gamepadRepeatDelayMs: GAMEPAD_REPEAT_DELAY_MS,
     exploreRanking: true,
+    autoplayClips: true,
   };
 }
 
@@ -566,7 +569,7 @@ export default function App() {
     if (dwell >= VIEW_MIN_MS) {
       pendingViewsRef.current.push({
         type: "view", audio: view.audio, clip: view.clipId, started_at: view.started, dwell_ms: dwell,
-        plays: view.plays, context: view.context,
+        plays: view.plays, autoplay: settings.autoplayClips, context: view.context,
       });
     }
   }, []);
@@ -1272,6 +1275,7 @@ export default function App() {
                 showOriginalStart={settings.showOriginalStart}
                 active={!showExportModal && !showSettings}
                 onPlayback={() => { if (viewRef.current) viewRef.current.plays += 1; }}
+                autoplay={settings.autoplayClips}
                 onSave={async (startMs, endMs) => {
                   if (session.revision === null) return false;
                   const next = await mutate(() => api<Session>(`/clips/${encodeURIComponent(selected.clip_id)}`, "PATCH", {
@@ -1322,6 +1326,8 @@ export default function App() {
             detectLeadingSilence={settings.detectLeadingSilence}
             showOriginalStart={settings.showOriginalStart}
             exploreRanking={settings.exploreRanking}
+            autoplayClips={settings.autoplayClips}
+            onAutoplayClipsChange={(enabled) => setSettings((current) => ({ ...current, autoplayClips: enabled }))}
             onExploreRankingChange={(enabled) => setSettings((current) => ({ ...current, exploreRanking: enabled }))}
             gamepadStatus={gamepadStatus}
             gamepadRepeatDelayMs={settings.gamepadRepeatDelayMs}

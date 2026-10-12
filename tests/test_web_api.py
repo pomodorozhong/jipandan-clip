@@ -295,7 +295,7 @@ class WebApiTests(unittest.TestCase):
         self.open()
         audio = str(self.audio.resolve())
         response = self.client.post("/api/review-log", json={"events": [
-            {"type": "view", "audio": audio, "clip": "1", "dwell_ms": 2400, "plays": 2,
+            {"type": "view", "audio": audio, "clip": "1", "dwell_ms": 2400, "plays": 2, "autoplay": True,
              "started_at": int(time.time() * 1000) - 5000,
              "context": {"source": "gamepad", "rank": 1, "score": 50}},
             {"type": "view", "audio": audio, "clip": "2", "dwell_ms": -5},
@@ -309,6 +309,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual([(e["clip"], e["dwell_ms"], e["plays"]) for e in events], [("1", 2400, 2), ("2", 0, 0)])
         self.assertEqual((events[0]["source"], events[0]["rank"], events[0]["score"]), ("gamepad", 1, 50.0))
         self.assertLess(events[0]["start"], events[0]["t"])
+        self.assertTrue(events[0]["autoplay"])
         self.assertNotIn("start", events[1])
         too_many = self.client.post("/api/review-log", json={"events": [{}] * 201}, headers=self.headers)
         self.assertEqual(too_many.status_code, 422)

@@ -72,6 +72,7 @@ def clean_client_event(raw: object, audio: Path) -> dict | None:
         "type": "view", "clip": clip, "dwell_ms": dwell,
         **({"start": _iso(started / 1000)} if started is not None else {}),
         "plays": _int(raw.get("plays"), 0, 10_000) or 0,
+        **({"autoplay": raw["autoplay"]} if isinstance(raw.get("autoplay"), bool) else {}),
         **clean_context(raw.get("context")),
     }
 
