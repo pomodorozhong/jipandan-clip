@@ -2,16 +2,18 @@
 
 Reviewed 2026-09-23. Scope: launch and resume, transcription, clip review and navigation, trimming, filtering, preview, and export. Findings are ranked by user impact. This is a review record, not a list of completed fixes.
 
+The TUI was retired on 2026-10-04 (#24), so its files appear here as plain names. The web GUI migration planned to fix these findings in shared code before building on it; see "Persistence and job safety" in the [porting plan](web-gui-porting-plan.md). Session storage has since moved from `.jipandan.json` to the SQLite store described in the [app rebuild plan](../../app-rebuild-plan.md).
+
 ## Findings
 
 | Rank | Severity | Issue | User impact | Evidence |
 | --- | --- | --- | --- | --- |
-| 1 | High | Relaunch silently removes saved candidates absent from the current SRT | Reviewed clips, statuses, trims, and duplicates can disappear from the session file | [app.py](../src/jipandan/tui/app.py), [models.py](../src/jipandan/core/models.py) |
-| 2 | High | Concurrent export preview renders use the same temporary filenames | Changing export mode can race with the default preload and may preview or publish the wrong audio | [review.py](../src/jipandan/tui/screens/review.py), [export_preview.py](../src/jipandan/tui/screens/export_preview.py), [ffmpeg.py](../src/jipandan/core/ffmpeg.py) |
-| 3 | High | A quick quit discards recent trim nudges | The displayed boundary can differ from the saved boundary | [review.py](../src/jipandan/tui/screens/review.py) |
-| 4 | Medium | “Skip above” raises `NameError` | The advertised bulk action cannot complete | [review.py](../src/jipandan/tui/screens/review.py) |
-| 5 | Medium | Transcription failure leaves the wizard unable to retry | The user must quit and relaunch, and may encounter a partially written SRT | [transcribe.py](../src/jipandan/tui/screens/transcribe.py), [whisper.py](../src/jipandan/core/whisper.py) |
-| 6 | Medium | Search bypasses the active status filter | A query can show clips outside the selected group, changing the apparent scope of actions | [clip_list.py](../src/jipandan/tui/clip_list.py) |
+| 1 | High | Relaunch silently removes saved candidates absent from the current SRT | Reviewed clips, statuses, trims, and duplicates can disappear from the session file | `app.py`, [models.py](../../../src/jipandan/core/models.py) |
+| 2 | High | Concurrent export preview renders use the same temporary filenames | Changing export mode can race with the default preload and may preview or publish the wrong audio | `review.py`, `export_preview.py`, [ffmpeg.py](../../../src/jipandan/core/ffmpeg.py) |
+| 3 | High | A quick quit discards recent trim nudges | The displayed boundary can differ from the saved boundary | `review.py` |
+| 4 | Medium | “Skip above” raises `NameError` | The advertised bulk action cannot complete | `review.py` |
+| 5 | Medium | Transcription failure leaves the wizard unable to retry | The user must quit and relaunch, and may encounter a partially written SRT | `transcribe.py`, [whisper.py](../../../src/jipandan/core/whisper.py) |
+| 6 | Medium | Search bypasses the active status filter | A query can show clips outside the selected group, changing the apparent scope of actions | `clip_list.py` |
 
 ### 1. Session data is removed during resume
 
