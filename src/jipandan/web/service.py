@@ -20,7 +20,12 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import BinaryIO, Callable
 
-from jipandan.core.clip_features import compute_clip_features, likely_keep_scores
+from jipandan.core.clip_features import (
+    CLIP_FEATURES_VERSION,
+    LIKELY_KEEP_VERSION,
+    compute_clip_features,
+    likely_keep_scores,
+)
 from jipandan.core.ffmpeg import ExportOptions, probe_duration_seconds, publish_prebuilt_clip
 from jipandan.core.leading_silence import detect_leading_silence_start
 from jipandan.core.paths import AppPaths, default_export_dir, get_app_paths, resolve_export_dir
@@ -37,6 +42,7 @@ from jipandan.web.waveform import MAX_BUCKETS, MAX_WINDOW_MS, MIN_BUCKETS, Wavef
 from jipandan.web.preview import PreviewJobs
 from jipandan.web.transcription import TranscriptionJob, TranscriptionJobs
 from jipandan.web.clip_transcription import transcribe_clips
+from jipandan.web.review_log import MAX_CLIENT_EVENTS, ReviewLog, clean_client_event, clean_context
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +107,7 @@ class SessionService:
         # Re-transcribed titles awaiting review, keyed by clip ID. They live
         # outside the session so a long run never bumps its revision.
         self._title_suggestions: dict[str, str] = {}
+        self._review_log = ReviewLog()
         self._suggestion_dir = (
             (transcription_dir or self.paths.transcription_dir).expanduser().resolve() / "clip-suggestions"
         )
@@ -316,7 +323,7 @@ class SessionService:
                     raise SessionNotReady("Preview is not ready")
             return job.output
 
-    def publish_export(self, job_id: str, expected_revision: int) -> dict:
+    def publish_export(self, job_id: str, expected_revision: int, context: object = None) -> dict:
         """Publish exactly the reviewed preview and persist its resulting clip state."""
         with self._lock:
             current = self._check_revision(expected_revision)
@@ -354,6 +361,10 @@ class SessionService:
                     raise SessionConflict(str(exc)) from exc
                 raise
             self.session = draft
+            self._review_log.append(self.audio, [{
+                "type": "export", "clip": exported.clip_id, "mode": job.options.mode,
+                "title": job.title, **clean_context(context),
+            }])
             result = self.snapshot()
             result["output_path"] = str(output)
             return result
@@ -613,6 +624,7 @@ class SessionService:
                             candidate.mid_share_db = features.mid_share_db
                             candidate.bass_share_db = features.bass_share_db
                     draft.clip_features_complete = True
+                    draft.clip_features_version = CLIP_FEATURES_VERSION
                     return "Measure clip audio"
 
                 self._mutate(session.revision, apply_features)
@@ -841,6 +853,7 @@ class SessionService:
                     session.leading_silence_detection_complete if session else False
                 ),
                 "clip_features_complete": session.clip_features_complete if session else False,
+                "likely_keep_version": LIKELY_KEEP_VERSION,
                 "needs_transcription": bool(self.audio and session is None),
                 "transcription": self._transcriptions.latest(self.audio),
                 "revision": session.revision if session else None,
@@ -903,10 +916,21 @@ class SessionService:
                     self._undo = self._undo[-50:]
             return self.snapshot(), result
 
+    def record_review_events(self, events: list[object]) -> int:
+        """Store clip views reported by the browser; returns how many were accepted."""
+        if len(events) > MAX_CLIENT_EVENTS:
+            raise InvalidEdit(f"Send at most {MAX_CLIENT_EVENTS} events at a time")
+        with self._lock:
+            self._ready()
+            cleaned = [event for raw in events if (event := clean_client_event(raw, self.audio)) is not None]
+            self._review_log.append(self.audio, cleaned)
+        return len(cleaned)
+
     def patch_clip(
         self, clip_id: str, expected_revision: int, *,
         status: str | None = None, title: str | None = None,
         start_ms: int | None = None, end_ms: int | None = None,
+        context: object = None,
     ) -> dict:
         if all(value is None for value in (status, title, start_ms, end_ms)):
             raise InvalidEdit("No clip change provided")
@@ -915,10 +939,26 @@ class SessionService:
         if title is not None and not title.strip():
             raise InvalidEdit("Title cannot be empty")
 
+        events: list[dict] = []
+        logged = clean_context(context)
+
         def change(session: Session) -> str:
+            events.clear()
             candidate = session.get_candidate(clip_id)
             if candidate is None:
                 raise InvalidEdit("Clip not found")
+            if status is not None and status != candidate.status:
+                events.append({"type": "status", "clip": clip_id, "from": candidate.status, "to": status, **logged})
+            if title is not None and title.strip() != candidate.title:
+                events.append({"type": "title", "clip": clip_id, "from": candidate.title, "to": title.strip(), **logged})
+            if start_ms is not None or end_ms is not None:
+                events.append({
+                    "type": "trim", "clip": clip_id,
+                    "from_ms": [_time_ms(candidate.start), _time_ms(candidate.end)],
+                    "to_ms": [start_ms if start_ms is not None else _time_ms(candidate.start),
+                              end_ms if end_ms is not None else _time_ms(candidate.end)],
+                    **logged,
+                })
             if status is not None:
                 candidate.status = status
             if title is not None:
@@ -936,6 +976,7 @@ class SessionService:
             return clip_id
 
         snapshot, _ = self._mutate(expected_revision, change, undo_ids=[clip_id])
+        self._review_log.append(self.audio, events)
         if title is not None:
             with self._lock:
                 if self._title_suggestions.get(clip_id) == title.strip():
@@ -965,7 +1006,7 @@ class SessionService:
         except Exception:
             logger.exception("Could not prewarm export preview for clip %s", clip_id)
 
-    def duplicate(self, clip_id: str, expected_revision: int) -> dict:
+    def duplicate(self, clip_id: str, expected_revision: int, context: object = None) -> dict:
         def change(session: Session) -> str:
             duplicate = session.duplicate_candidate(clip_id)
             if duplicate is None:
@@ -973,10 +1014,13 @@ class SessionService:
             return duplicate.clip_id
 
         snapshot, result = self._mutate(expected_revision, change)
+        self._review_log.append(self.audio, [
+            {"type": "duplicate", "clip": clip_id, "created": result, **clean_context(context)},
+        ])
         snapshot["created_clip_id"] = result
         return snapshot
 
-    def bulk_skip(self, clip_ids: list[str], expected_revision: int) -> dict:
+    def bulk_skip(self, clip_ids: list[str], expected_revision: int, context: object = None) -> dict:
         if not clip_ids:
             raise InvalidEdit("Select at least one clip")
         if len(set(clip_ids)) != len(clip_ids):
@@ -993,10 +1037,14 @@ class SessionService:
             return changed
 
         snapshot, changed = self._mutate(expected_revision, change, undo_ids=clip_ids)
+        if changed:
+            self._review_log.append(self.audio, [
+                {"type": "bulk-skip", "clips": changed, **clean_context(context)},
+            ])
         snapshot["changed_clip_ids"] = changed
         return snapshot
 
-    def undo(self, expected_revision: int) -> dict:
+    def undo(self, expected_revision: int, context: object = None) -> dict:
         with self._lock:
             self._check_revision(expected_revision)
             if not self._undo:
@@ -1011,6 +1059,12 @@ class SessionService:
                 return label
 
             snapshot, _ = self._mutate(expected_revision, restore)
+            # Record what each clip went back to, so training sees the corrected decision.
+            self._review_log.append(self.audio, [{
+                "type": "undo", "label": label,
+                "restored": {clip_id: old.status for clip_id, old in before.items()},
+                **clean_context(context),
+            }])
             self._undo.pop()
             snapshot["can_undo"] = bool(self._undo)
             return snapshot

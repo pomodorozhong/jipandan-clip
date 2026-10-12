@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, audioUrl, bootstrap, uploadAudio, type Clip, type ClipFeaturesJob, type ClipTranscriptionJob, type LeadingSilenceJob, type Session, type Status } from "./api";
+import { isExploreClip, orderByLikelyKeep } from "./reviewOrder";
+import { api, audioUrl, bootstrap, sendReviewEvents, uploadAudio, type Clip, type ClipFeaturesJob, type ClipTranscriptionJob, type LeadingSilenceJob, type Session, type Status } from "./api";
 import WaveformEditor from "./WaveformEditor";
 import ExportPreview from "./ExportPreview";
 import TranscriptionScreen from "./TranscriptionScreen";
@@ -43,7 +44,12 @@ type AppSettings = {
   badgeMode: BadgeMode;
   unboundBadgeBehavior: UnboundBadgeBehavior;
   gamepadRepeatDelayMs: number;
+  exploreRanking: boolean;
 };
+
+// A clip counts as viewed for the review log after this long on screen.
+const VIEW_MIN_MS = 1000;
+const VIEW_FLUSH_MS = 10_000;
 
 const SETTINGS_STORAGE_KEY = "jipandan-settings";
 
@@ -58,6 +64,7 @@ function loadSettings(): AppSettings {
         badgeMode: parsed.badgeMode === "keyboard" || parsed.badgeMode === "xbox" ? parsed.badgeMode : "auto",
         unboundBadgeBehavior: parsed.unboundBadgeBehavior === "keyboard" ? "keyboard" : "hide",
         gamepadRepeatDelayMs: normalizeGamepadRepeatDelay(parsed.gamepadRepeatDelayMs),
+        exploreRanking: typeof parsed.exploreRanking === "boolean" ? parsed.exploreRanking : true,
       };
     }
   } catch { /* Use defaults when browser storage is unavailable or invalid. */ }
@@ -67,6 +74,7 @@ function loadSettings(): AppSettings {
     badgeMode: "auto",
     unboundBadgeBehavior: "hide",
     gamepadRepeatDelayMs: GAMEPAD_REPEAT_DELAY_MS,
+    exploreRanking: true,
   };
 }
 
@@ -239,6 +247,8 @@ export default function App() {
   const [storagePickerBusy, setStoragePickerBusy] = useState(false);
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
   const [inputType, setInputType] = useState<DisplayInputType>("keyboard");
+  // Which input made the last decision, for the review log; gamepad actions also arrive as dispatches.
+  const lastInputSourceRef = useRef<"keyboard" | "gamepad" | "pointer">("keyboard");
   const [gamepadBindingConfig, setGamepadBindingConfig] = useState<GamepadBindingConfig>(loadGamepadBindingConfig);
   const [gamepadActionRequest, setGamepadActionRequest] = useState<GamepadActionRequest | null>(null);
   const [gamepadStatus, setGamepadStatus] = useState<GamepadStatus>(() => initialGamepadStatus(
@@ -282,14 +292,18 @@ export default function App() {
     function onKeyDown(event: KeyboardEvent) {
       if (!["Shift", "Control", "Alt", "Meta", "CapsLock", "NumLock", "ScrollLock"].includes(event.key)) {
         setInputType("keyboard");
+        lastInputSourceRef.current = "keyboard";
       }
     }
     function onInput() { setInputType("keyboard"); }
+    function onPointerDown() { lastInputSourceRef.current = "pointer"; }
     window.addEventListener("keydown", onKeyDown, true);
     window.addEventListener("input", onInput, true);
+    window.addEventListener("pointerdown", onPointerDown, true);
     return () => {
       window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("input", onInput, true);
+      window.removeEventListener("pointerdown", onPointerDown, true);
     };
   }, []);
 
@@ -500,22 +514,85 @@ export default function App() {
     }
   }, []);
 
+  const exploreSeed = session?.srt_fingerprint ?? null;
   const visible = useMemo(() => {
     const clips = visibleClips(session?.candidates ?? [], filter, query, allStatusFilter);
     const compareClipId = (a: Clip, b: Clip) => a.index - b.index || a.suffix - b.suffix;
+    if (allOrder === "likely-desc") return orderByLikelyKeep(clips, exploreSeed, settings.exploreRanking, compareClipId);
     return clips.sort((a, b) => {
       if (allOrder === "clip-desc") return compareClipId(b, a);
       if (allOrder === "start-asc") return a.start_ms - b.start_ms || compareClipId(a, b);
       if (allOrder === "start-desc") return b.start_ms - a.start_ms || compareClipId(a, b);
       if (allOrder === "title-asc") return a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: "base" }) || compareClipId(a, b);
-      if (allOrder === "likely-desc") return (b.likely_keep ?? -1) - (a.likely_keep ?? -1) || compareClipId(a, b);
       return compareClipId(a, b);
     });
-  }, [session?.candidates, filter, query, allStatusFilter, allOrder]);
+  }, [session?.candidates, filter, query, allStatusFilter, allOrder, exploreSeed, settings.exploreRanking]);
   const effectiveSelectedId = visible.some((clip) => clip.clip_id === selectedId)
     ? selectedId : (visible[0]?.clip_id ?? null);
   const selected = session?.candidates.find((clip) => clip.clip_id === effectiveSelectedId) ?? null;
   const selectedPosition = visible.findIndex((clip) => clip.clip_id === effectiveSelectedId);
+
+  // Where a clip sits in the current ranking, recorded with each decision in the review log.
+  const rankingContext = useCallback((clip: Clip) => {
+    const rank = visible.findIndex((item) => item.clip_id === clip.clip_id) + 1;
+    return {
+      source: lastInputSourceRef.current, order: allOrder, filter,
+      rank: rank || undefined, score: clip.likely_keep ?? undefined,
+      explore: allOrder === "likely-desc" && settings.exploreRanking && exploreSeed !== null
+        && isExploreClip(exploreSeed, clip.clip_id),
+      score_version: session?.likely_keep_version,
+    };
+  }, [visible, allOrder, filter, settings.exploreRanking, exploreSeed, session?.likely_keep_version]);
+
+  // A "view" is logged once a clip has been on screen for VIEW_MIN_MS, with how often it was played.
+  const viewRef = useRef<{ audio: string; clipId: string; started: number; plays: number; context: object } | null>(null);
+  const pendingViewsRef = useRef<object[]>([]);
+  const flushViews = useCallback((keepalive = false) => {
+    const events = pendingViewsRef.current.splice(0);
+    if (events.length) void sendReviewEvents(events, keepalive);
+  }, []);
+  const closeView = useCallback(() => {
+    const view = viewRef.current;
+    viewRef.current = null;
+    if (!view) return;
+    const dwell = Date.now() - view.started;
+    if (dwell >= VIEW_MIN_MS) {
+      pendingViewsRef.current.push({
+        type: "view", audio: view.audio, clip: view.clipId, dwell_ms: dwell, plays: view.plays, context: view.context,
+      });
+    }
+  }, []);
+  const reviewingClip = session?.audio && !session.needs_transcription ? selected : null;
+  const startViewRef = useRef<() => void>(() => {});
+  startViewRef.current = () => {
+    viewRef.current = reviewingClip && session?.audio
+      ? { audio: session.audio, clipId: reviewingClip.clip_id, started: Date.now(), plays: 0,
+          context: rankingContext(reviewingClip) }
+      : null;
+  };
+  useEffect(() => {
+    closeView();
+    startViewRef.current();
+  }, [reviewingClip?.clip_id, session?.audio, closeView]);
+  useEffect(() => {
+    const timer = window.setInterval(() => flushViews(), VIEW_FLUSH_MS);
+    function onVisibility() {
+      if (document.visibilityState === "hidden") {
+        closeView();
+        flushViews(true);
+      } else if (!viewRef.current) startViewRef.current();
+    }
+    function onPageHide() { closeView(); flushViews(true); }
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", onPageHide);
+      closeView();
+      flushViews(true);
+    };
+  }, [closeView, flushViews]);
   const nextVisibleClipId = visible[selectedPosition + 1]?.clip_id ?? null;
   const hasMergeChanges = Boolean(session?.merge_preview && (
     session.merge_preview.added.length || session.merge_preview.removed.length ||
@@ -568,10 +645,10 @@ export default function App() {
       }
     }
     void mutate(() => api<Session>(`/clips/${encodeURIComponent(effectiveSelectedId)}`, "PATCH", {
-      expected_revision: session.revision, ...change,
+      expected_revision: session.revision, ...change, context: selected ? rankingContext(selected) : undefined,
     })).then((next) => { if (next) setSelectedId(nextSelection); });
   }, [session, effectiveSelectedId, selected, filter, query, allStatusFilter,
-    visible, selectedPosition, mutate]);
+    visible, selectedPosition, mutate, rankingContext]);
 
   const moveSelection = useCallback((delta: number) => {
     if (!visible.length) return;
@@ -585,16 +662,19 @@ export default function App() {
 
   const undo = useCallback(() => {
     if (!session || session.revision === null) return;
-    void mutate(() => api<Session>("/session/undo", "POST", { expected_revision: session.revision }));
+    void mutate(() => api<Session>("/session/undo", "POST", {
+      expected_revision: session.revision, context: { source: lastInputSourceRef.current },
+    }));
   }, [session, mutate]);
 
   const duplicateSelected = useCallback(() => {
     if (!session || session.revision === null || !effectiveSelectedId) return;
     void mutate(() => api<Session>(`/clips/${encodeURIComponent(effectiveSelectedId)}/duplicate`,
-      "POST", { expected_revision: session.revision })).then((next) => {
+      "POST", { expected_revision: session.revision, context: selected ? rankingContext(selected) : undefined },
+    )).then((next) => {
       if (next?.created_clip_id) setSelectedId(next.created_clip_id);
     });
-  }, [session, effectiveSelectedId, mutate]);
+  }, [session, effectiveSelectedId, selected, mutate, rankingContext]);
 
   const dispatchReviewAction = useCallback((action: InputAction) => {
     if (!isActionAvailable(action, {
@@ -679,7 +759,10 @@ export default function App() {
         current.dispatch(action);
       },
       onStatusChange: setGamepadStatus,
-      onInputTypeChange: setInputType,
+      onInputTypeChange: (type) => {
+        setInputType(type);
+        if (type === "xbox") lastInputSourceRef.current = "gamepad";
+      },
     });
     adapter.start();
     return () => {
@@ -759,7 +842,7 @@ export default function App() {
     if (!selected || !titleDraft.trim()) return;
     if (titleDraft.trim() !== selected.title && session?.revision !== null) {
       const next = await mutate(() => api<Session>(`/clips/${encodeURIComponent(selected.clip_id)}`, "PATCH", {
-        expected_revision: session!.revision, title: titleDraft.trim(),
+        expected_revision: session!.revision, title: titleDraft.trim(), context: rankingContext(selected),
       }));
       if (!next) return;
     }
@@ -1179,10 +1262,12 @@ export default function App() {
                 detectLeadingSilence={settings.detectLeadingSilence}
                 showOriginalStart={settings.showOriginalStart}
                 active={!showExportModal && !showSettings}
+                onPlayback={() => { if (viewRef.current) viewRef.current.plays += 1; }}
                 onSave={async (startMs, endMs) => {
                   if (session.revision === null) return false;
                   const next = await mutate(() => api<Session>(`/clips/${encodeURIComponent(selected.clip_id)}`, "PATCH", {
                     expected_revision: session.revision, start_ms: startMs, end_ms: endMs,
+                    context: rankingContext(selected),
                   }));
                   return Boolean(next);
                 }} />
@@ -1227,6 +1312,8 @@ export default function App() {
             onApplyClipDir={() => setShowStorageConfirm(true)}
             detectLeadingSilence={settings.detectLeadingSilence}
             showOriginalStart={settings.showOriginalStart}
+            exploreRanking={settings.exploreRanking}
+            onExploreRankingChange={(enabled) => setSettings((current) => ({ ...current, exploreRanking: enabled }))}
             gamepadStatus={gamepadStatus}
             gamepadRepeatDelayMs={settings.gamepadRepeatDelayMs}
             gamepadMappingButtonRef={gamepadMappingButtonRef}

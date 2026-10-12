@@ -117,6 +117,7 @@ class Session:
     srt_fingerprint: str | None = None
     leading_silence_detection_complete: bool = False
     clip_features_complete: bool = False
+    clip_features_version: int | None = None
 
     @property
     def session_path(self) -> Path:
@@ -184,6 +185,7 @@ class Session:
             srt_fingerprint=data.get("srt_fingerprint"),
             leading_silence_detection_complete=data.get("leading_silence_detection_complete", False),
             clip_features_complete=data.get("clip_features_complete", False),
+            clip_features_version=data.get("clip_features_version"),
         )
 
     def save(self) -> None:
@@ -206,6 +208,7 @@ class Session:
                 "srt_fingerprint": self.srt_fingerprint,
                 "leading_silence_detection_complete": self.leading_silence_detection_complete,
                 "clip_features_complete": self.clip_features_complete,
+                "clip_features_version": self.clip_features_version,
                 "audio": str(self.audio),
                 "srt": str(self.srt),
                 "clip_dir": str(self.clip_dir),
@@ -352,6 +355,7 @@ class Session:
         self.srt_fingerprint = fresh.srt_fingerprint
         self.leading_silence_detection_complete = False
         self.clip_features_complete = False
+        self.clip_features_version = None
         return warnings
 
     def get_candidate(self, clip_id: str) -> ClipCandidate | None:

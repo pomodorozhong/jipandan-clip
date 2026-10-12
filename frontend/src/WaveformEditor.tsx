@@ -337,7 +337,7 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
 }
 
 export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamepadAction, onGamepadActionHandled,
-  shortcutsPaused, active = true, detectLeadingSilence, showOriginalStart, onSave }: {
+  shortcutsPaused, active = true, detectLeadingSilence, showOriginalStart, onSave, onPlayback }: {
   clip: Clip;
   durationMs: number;
   audioSrc: string;
@@ -349,6 +349,8 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
   detectLeadingSilence: boolean;
   showOriginalStart: boolean;
   onSave: (startMs: number, endMs: number) => Promise<boolean>;
+  /** Called for every clip playback (replay, play/pause, boundary audition). */
+  onPlayback?: () => void;
 }) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const savingRef = useRef(false);
@@ -613,6 +615,7 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
       canMutate: !controlsDisabled,
     })) return;
     if (action.type === "playback" && action.target === "clip") {
+      onPlayback?.();
       if (action.mode === "replay") void replay();
       else if (action.mode === "toggle") void play();
       else if (action.mode === "audition-start") void audition("start");
