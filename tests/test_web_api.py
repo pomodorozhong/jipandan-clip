@@ -17,6 +17,8 @@ from jipandan.core.waveform_envelope import WaveformEnvelopeCache
 from jipandan.core.whisper import write_segment_scores
 from jipandan.web.api import create_app
 from jipandan.core.store import RecordingStore, store_path
+from jipandan.core.ffmpeg import ExportOptions
+from jipandan.web.preview import PreviewJobs
 from jipandan.web.service import SessionService
 
 
@@ -436,6 +438,7 @@ class WebApiTests(unittest.TestCase):
 
         def render(_audio, _candidate, _options, output):
             output.write_bytes(b"rendered audio")
+            return {"source_duration_ms": 1000, "duration_ms": 800, "kept_ranges_ms": [[100, 900]]}
 
         request = {"clip_id": "1", "expected_revision": 1, "mode": "as_is", "title": "First"}
         with patch("jipandan.web.preview.render_export_preview", side_effect=render) as renderer, \
@@ -449,6 +452,13 @@ class WebApiTests(unittest.TestCase):
             self.assertEqual(renamed.json()["id"], first["id"])
             self.assertEqual(renamed.json()["title"], "Renamed")
             self.assertEqual(renamed.json()["waveform"], completed["waveform"])
+            self.assertEqual(renamed.json()["trim_map"], completed["trim_map"])
+            self.assertEqual(completed["trim_map"]["kept_ranges_ms"], [[100, 900]])
+            restarted = PreviewJobs(self.root / "previews")
+            self.addCleanup(restarted._executor.shutdown)
+            cached = restarted.start(self.audio, self.service.session.candidates[0], 1, ExportOptions("as_is"), "First")
+            self.assertEqual(cached.state, "completed")
+            self.assertEqual(cached.trim_map, completed["trim_map"])
             renderer.assert_called_once()
 
     def test_bulk_reject_and_invalid_bounds(self):
@@ -707,6 +717,32 @@ class WebApiTests(unittest.TestCase):
         reopened = self.open()
         self.assertEqual(reopened["candidates"][0]["status"], "exported")
         self.assertEqual(reopened["candidates"][0]["last_export_path"], state["output_path"])
+        self.assertEqual(reopened["candidates"][0]["export_state"], "matching")
+        previous_path = reopened["candidates"][0]["last_export_path"]
+        renamed = self.client.patch("/api/clips/1?delta=true", json={
+            "expected_revision": reopened["revision"], "title": "Changed title",
+        }, headers=self.headers).json()
+        self.assertEqual(renamed["clips"][0]["export_state"], "changed")
+        self.assertEqual(renamed["clips"][0]["last_export_title"], "First")
+        self.assertEqual(renamed["clips"][0]["last_export_path"], previous_path)
+        undone = self.client.post("/api/session/undo", json={"expected_revision": renamed["revision"]}, headers=self.headers).json()
+        self.assertEqual(undone["candidates"][0]["export_state"], "matching")
+        edited = self.client.patch("/api/clips/1", json={
+            "expected_revision": undone["revision"], "start_ms": 1010,
+        }, headers=self.headers).json()
+        self.assertEqual(edited["candidates"][0]["export_state"], "changed")
+        reloaded = self.open()
+        self.assertEqual(reloaded["candidates"][0]["export_state"], "changed")
+        fresh = self.client.post("/api/previews", json={
+            "clip_id": "1", "expected_revision": reloaded["revision"], "mode": "trim_edges", "title": "First",
+        }, headers=self.headers).json()
+        self.wait_for_job(f"/api/previews/{fresh['id']}", "completed")
+        exported = self.client.post("/api/exports", json={
+            "preview_id": fresh["id"], "expected_revision": reloaded["revision"],
+        }, headers=self.headers).json()
+        self.assertEqual(exported["candidates"][0]["export_state"], "matching")
+        self.assertEqual(exported["candidates"][0]["last_export_snapshot"]["mode"], "trim_edges")
+        self.assertTrue(Path(previous_path).is_file())
 
     def test_publish_reviewed_preview_is_collision_safe_and_stale_preview_is_rejected(self):
         self.open()

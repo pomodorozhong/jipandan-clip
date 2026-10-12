@@ -140,6 +140,7 @@ export default function GamepadMappingScreen({ initialConfig, status, onSave, on
       ← Back to Settings
     </button>
     <p className="subtle text-sm">Change the controls for every registered review, trim, dialog, and export action. Changes stay local to this browser and are not applied until you save.</p>
+    <p className="subtle mt-2 text-xs">Publish uses your export bindings first, then any remaining review controls. The review replay control plays the export candidate. If a control is shared, its export action takes precedence in Publish.</p>
 
     <section className="mt-5 rounded-xl border line p-4" aria-labelledby="active-gamepad-heading">
       <h3 id="active-gamepad-heading" className="text-base font-semibold">Active controller</h3>
@@ -164,7 +165,7 @@ export default function GamepadMappingScreen({ initialConfig, status, onSave, on
             <div className="text-sm font-medium">{binding.actionLabel}</div>
             <div className="subtle mt-1 flex flex-wrap items-center gap-2 text-xs">
               {binding.index === null ? <span>Unbound</span> : <XboxButtonIcon index={binding.index} label={binding.control} />}
-              <span>· {binding.contexts.includes("active-dialog") ? "dialog" : "review"}</span>
+              <span>· {binding.contexts.includes("active-dialog") ? "dialog / Publish" : "review"}</span>
               {binding.keyboard && <span>· keyboard {binding.keyboard}</span>}
             </div>
           </div>

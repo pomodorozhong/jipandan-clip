@@ -3,7 +3,8 @@ import { isExploreClip, orderByLikelyKeep } from "./reviewOrder";
 import TriageScreen from "./TriageScreen";
 import { api, applySessionDelta, audioUrl, bootstrap, sendReviewEvents, uploadAudio, type Clip, type ClipFeaturesJob, type ClipTranscriptionJob, type LeadingSilenceJob, type Session, type SessionDelta, type Status } from "./api";
 import WaveformEditor from "./WaveformEditor";
-import ExportPreview from "./ExportPreview";
+import { publishClips, type PublishView } from "./publish";
+import ExportPreview, { type ExportSettings } from "./ExportPreview";
 import TranscriptionScreen from "./TranscriptionScreen";
 import SettingsScreen from "./SettingsScreen";
 import GamepadControls from "./GamepadControls";
@@ -11,6 +12,7 @@ import GamepadMappingScreen from "./GamepadMappingScreen";
 import { ShortcutBadge, ShortcutDisplayProvider, type BadgeMode, type DisplayInputType, type UnboundBadgeBehavior } from "./ShortcutBadge";
 import {
   bindingsForGamepadConfig,
+  publishGamepadBindings,
   createGamepadAdapter,
   GAMEPAD_REPEAT_DELAY_MS,
   initialGamepadStatus,
@@ -40,7 +42,8 @@ type AllStatusFilter = "all" | Status;
 type AllOrder = "clip-asc" | "clip-desc" | "start-asc" | "start-desc" | "title-asc" | "likely-desc";
 type SaveState = "saved" | "saving" | "failed";
 // Triage: one clip at a time for first-pass decisions. Polish: the list and editor for keepers.
-type Mode = "triage" | "polish";
+// Publish: the Group 2 queue with export previews, title, and timing fixes.
+type Mode = "triage" | "polish" | "publish";
 type AppSettings = {
   detectLeadingSilence: boolean;
   showOriginalStart: boolean;
@@ -87,9 +90,9 @@ function loadSettings(): AppSettings {
 }
 
 const filters: { key: Filter; label: string }[] = [
-  { key: "unsorted", label: "Unsorted" },
   { key: "group1", label: "Group 1" },
   { key: "group2", label: "Group 2" },
+  { key: "unsorted", label: "Unsorted" },
   { key: "exported", label: "Exported" },
   { key: "all", label: "All" },
 ];
@@ -231,6 +234,8 @@ export default function App() {
   const [openPath, setOpenPath] = useState("");
   const [filter, setFilter] = useState<Filter>("unsorted");
   const [mode, setMode] = useState<Mode>("triage");
+  const [publishView, setPublishView] = useState<PublishView>("ready");
+  const [publishSettings, setPublishSettings] = useState<ExportSettings>({ mode: "trim_edges", startDb: "-40", stopDb: "-50" });
   // Short confirmation for actions with no other visible result, such as undo.
   const [notice, setNotice] = useState<{ id: number; text: string } | null>(null);
   const showNotice = useCallback((text: string) => setNotice({ id: Date.now(), text }), []);
@@ -366,7 +371,7 @@ export default function App() {
           filter?: Filter; selectedId?: string;
           allStatusFilter?: AllStatusFilter; allOrder?: AllOrder; mode?: Mode;
         };
-        setMode(preferences.mode === "polish" ? "polish" : "triage");
+        setMode(preferences.mode === "polish" || preferences.mode === "publish" ? preferences.mode : "triage");
         if (preferences.filter && filters.some((item) => item.key === preferences.filter)) {
           setFilter(preferences.filter);
         } else if (session.counts.pending === 0) setFilter("all");
@@ -539,14 +544,15 @@ export default function App() {
   }, []);
 
   const exploreSeed = session?.srt_fingerprint ?? null;
-  // Triage always works through the Unsorted queue in Likely keep order.
-  const activeFilter: Filter = mode === "triage" ? "unsorted" : filter;
-  const activeQuery = mode === "triage" ? "" : query;
-  const activeOrder: AllOrder = mode === "triage" ? "likely-desc" : allOrder;
+  // Triage works through the Unsorted queue in Likely keep order; Publish through Group 2 in clip order.
+  const activeFilter: Filter = mode === "triage" ? "unsorted" : mode === "publish" ? "group2" : filter;
+  const activeQuery = mode === "polish" ? query : "";
+  const activeOrder: AllOrder = mode === "triage" ? "likely-desc" : mode === "publish" ? "clip-asc" : allOrder;
   // Scores shift while clips are still being measured, so hold clip order until they settle.
   const likelyKeepPending = activeOrder === "likely-desc" && Boolean(session && !session.clip_features_complete);
   const effectiveOrder: AllOrder = likelyKeepPending ? "clip-asc" : activeOrder;
   const visible = useMemo(() => {
+    if (mode === "publish") return publishClips(session?.candidates ?? [], publishView);
     const clips = visibleClips(session?.candidates ?? [], activeFilter, activeQuery, allStatusFilter);
     const compareClipId = (a: Clip, b: Clip) => a.index - b.index || a.suffix - b.suffix;
     if (effectiveOrder === "likely-desc") return orderByLikelyKeep(clips, exploreSeed, settings.exploreRanking, compareClipId);
@@ -557,7 +563,7 @@ export default function App() {
       if (effectiveOrder === "title-asc") return a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: "base" }) || compareClipId(a, b);
       return compareClipId(a, b);
     });
-  }, [session?.candidates, activeFilter, activeQuery, allStatusFilter, effectiveOrder, exploreSeed, settings.exploreRanking]);
+  }, [session?.candidates, activeFilter, activeQuery, allStatusFilter, effectiveOrder, exploreSeed, settings.exploreRanking, mode, publishView]);
   const effectiveSelectedId = visible.some((clip) => clip.clip_id === selectedId)
     ? selectedId : (visible[0]?.clip_id ?? null);
   const selected = session?.candidates.find((clip) => clip.clip_id === effectiveSelectedId) ?? null;
@@ -567,7 +573,7 @@ export default function App() {
   const rankingContext = useCallback((clip: Clip) => {
     const rank = visible.findIndex((item) => item.clip_id === clip.clip_id) + 1;
     return {
-      source: lastInputSourceRef.current, order: effectiveOrder, filter: mode === "triage" ? "triage" : activeFilter,
+      source: lastInputSourceRef.current, order: effectiveOrder, filter: mode === "polish" ? activeFilter : mode,
       rank: rank || undefined, score: clip.likely_keep ?? undefined,
       explore: effectiveOrder === "likely-desc" && settings.exploreRanking && exploreSeed !== null
         && isExploreClip(exploreSeed, clip.clip_id),
@@ -780,7 +786,7 @@ export default function App() {
     dispatch: (action) => {
       if (action.type === "focus-move" || action.type === "dialog-confirm" || action.type === "dialog-back" || action.type === "dialog-close") {
         dialogControllerHandlerRef.current?.(action);
-      } else if ((action.type === "playback" || action.type === "nudge" || action.type === "nudge-selected" ||
+      } else if ((action.type === "playback" || action.type === "nudge" || action.type === "nudge-selected" || action.type === "select-boundary" ||
           action.type === "export" || action.type === "export-mode" || action.type === "reveal-export") &&
           (effectiveSelectedId || reviewContext === "active-dialog")) {
         gamepadActionIdRef.current += 1;
@@ -790,7 +796,7 @@ export default function App() {
       }
     },
     availability: {
-      context: reviewContext,
+      context: reviewContext === "review" && mode === "publish" ? "publish" : reviewContext,
       busy,
       hasSelection: Boolean(selected),
       canMutate: Boolean(session && session.revision !== null && !busy),
@@ -803,7 +809,8 @@ export default function App() {
     const hasGamepadApi = typeof navigator !== "undefined" && typeof navigator.getGamepads === "function";
     const adapter = createGamepadAdapter({
       getGamepads: hasGamepadApi ? () => navigator.getGamepads() : undefined,
-      getBindings: () => bindingsForGamepadConfig(gamepadBindingConfigRef.current),
+      getBindings: () => gamepadDispatchRef.current?.availability.context === "publish"
+        ? publishGamepadBindings(gamepadBindingConfigRef.current) : bindingsForGamepadConfig(gamepadBindingConfigRef.current),
       getRepeatDelayMs: () => gamepadRepeatDelayRef.current,
       isInputSuppressed: () => gamepadCaptureActiveRef.current,
       getContext: () => gamepadDispatchRef.current?.availability.context ?? "review",
@@ -842,12 +849,15 @@ export default function App() {
         canUndo: Boolean(session?.can_undo && session.revision !== null),
         canDuplicate: Boolean(session && session.revision !== null && effectiveSelectedId),
       })) return;
+      // Publish shows the export panel itself: E picks the Trim edges mode there, and the
+      // title is edited in its export title field rather than Polish's rename box.
+      if (mode === "publish" && (action.type === "open-export" || action.type === "rename")) return;
       event.preventDefault();
       dispatchReviewAction(action);
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [reviewContext, busy, selected, session, effectiveSelectedId, dispatchReviewAction]);
+  }, [reviewContext, busy, selected, session, effectiveSelectedId, dispatchReviewAction, mode]);
 
   useEffect(() => { if (editingTitle) titleRef.current?.focus(); }, [editingTitle]);
 
@@ -867,7 +877,10 @@ export default function App() {
     };
   }, [showClipMenu]);
 
-  useEffect(() => { setShowClipMenu(false); }, [effectiveSelectedId]);
+  useEffect(() => {
+    setShowClipMenu(false);
+    if (!effectiveSelectedId) setShowDetailMobile(false);
+  }, [effectiveSelectedId]);
 
   async function openAudio(event: React.FormEvent) {
     event.preventDefault();
@@ -1009,21 +1022,33 @@ export default function App() {
   if (initializing) return <main className="flex min-h-screen items-center justify-center subtle">Opening Jipandan…</main>;
 
   return <ShortcutDisplayProvider mode={settings.badgeMode} inputType={inputType}
-    unboundBehavior={settings.unboundBadgeBehavior} bindings={configuredGamepadBindings}>
-  <div className={`flex flex-col ${session?.audio ? "h-dvh min-h-0 overflow-hidden" : "min-h-screen"}`}>
-    <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b line px-4 py-3 md:px-7">
-      <div className="flex items-center gap-3">
-        <div aria-hidden="true" className="flex size-9 items-center justify-center rounded-xl bg-[#b7d69d] text-xl font-bold text-[#263c2b]">J</div>
-        <div>
-          <div className="font-semibold tracking-wide">Jipandan <span className="subtle font-normal">/ clip review</span></div>
-          <div className="subtle text-xs">Local workspace · {session?.audio_name ?? "No audio open"}</div>
+    unboundBehavior={settings.unboundBadgeBehavior} bindings={mode === "publish" && reviewContext !== "active-dialog"
+      ? publishGamepadBindings(gamepadBindingConfig) : configuredGamepadBindings}>
+  <div className={`flex flex-col ${session?.audio && mode !== "publish" ? "h-dvh min-h-0 overflow-hidden" : "min-h-screen"}`}>
+    <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b line px-4 py-2 md:px-7">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <div aria-hidden="true" className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-[#b7d69d] text-base font-bold text-[#263c2b]">J</div>
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+          <span className="font-semibold tracking-wide">Jipandan</span>
+          {/* The session and export paths are rarely needed, so they live in this tooltip. */}
+          <span className="subtle min-w-0 truncate text-sm" title={session?.audio
+            ? `Session: ${session.session_path ?? "Not created"}\nExports: ${session.clip_dir}` : undefined}>
+            {session?.audio_name ?? "No audio open"}
+          </span>
+          {session?.audio && !session.needs_transcription && <span className="subtle text-xs">
+            <span className="mono">{formatDuration(session.duration_ms ?? 0)}</span> · {session.srt_exists
+              ? "SRT found" : <span className="text-[#ead49b]">SRT missing</span>}
+          </span>}
         </div>
       </div>
       <div className="flex items-center gap-3 text-sm">
         {session?.audio && !session.needs_transcription && <div role="group" aria-label="Stage"
           className="flex overflow-hidden rounded-lg border line bg-[#22312a] p-0.5">
-          {(["triage", "polish"] as Mode[]).map((item) => <button key={item} type="button" aria-pressed={mode === item}
-            onClick={() => setMode(item)}
+          {(["triage", "polish", "publish"] as Mode[]).map((item) => <button key={item} type="button" aria-pressed={mode === item}
+            onClick={() => {
+              if (item === "polish" && mode !== "polish") { setFilter("group1"); setQuery(""); setSelectedId(null); }
+              setEditingTitle(false); setShowClipMenu(false); setMode(item);
+            }}
             className={`rounded-md px-3 py-1.5 font-medium capitalize ${mode === item ? "bg-[#b7d69d] text-[#1b291f]" : "hover:bg-[#304439]"}`}>
             {item}
           </button>)}
@@ -1098,12 +1123,6 @@ export default function App() {
       </label>
       <p className="subtle mt-4 text-sm">You can also launch directly with <code className="accent">uv run jipandan-web /path/to/audio.mp3</code>.</p>
     </main> : <>
-      <div className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-1 border-b line px-4 py-2 text-xs md:px-7">
-        <span><span className="subtle">Duration</span> <span className="mono">{formatDuration(session.duration_ms ?? 0)}</span></span>
-        <span><span className="subtle">SRT</span> {session.srt_exists ? "Found" : "Missing"}</span>
-        <span className="hidden min-w-0 truncate lg:inline"><span className="subtle">Session</span> {session.session_path ?? "Not created"}</span>
-        <span className="hidden min-w-0 truncate xl:inline"><span className="subtle">Exports</span> {session.clip_dir}</span>
-      </div>
       {hasMergeChanges && <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[#7c6845] bg-[#3c3525] px-4 py-2 text-sm md:px-7">
         <span>The SRT changed since this session was saved. Your reviewed clips are still here.</span>
         <ActionButton onClick={() => setShowMerge(true)}>Review SRT changes</ActionButton>
@@ -1121,14 +1140,84 @@ export default function App() {
         onDecide={(status) => dispatchReviewAction({ type: "classify", status })}
         onNavigate={(direction) => dispatchReviewAction({ type: "navigate", direction })}
         onUndo={() => dispatchReviewAction({ type: "undo" })} />
+      : mode === "publish" ? <main className="grid flex-1 grid-cols-1 items-start gap-4 p-4 md:grid-cols-[minmax(200px,25%)_1fr] md:p-5" aria-label="Publish">
+        <section className="surface flex max-h-[calc(100dvh-140px)] flex-col overflow-hidden rounded-2xl" aria-label="Ready to publish">
+          <div className="border-b line px-4 py-3">
+            <h2 className="font-semibold">Publish</h2>
+            <div className="mt-2 flex gap-1" role="group" aria-label="Publish list">
+              {(["ready", "exported"] as const).map((view) => <button key={view} type="button"
+                aria-pressed={publishView === view} onClick={() => { setPublishView(view); setSelectedId(null); }}
+                className={`rounded-lg px-3 py-2 text-xs font-semibold ${publishView === view ? "bg-[#b7d69d] text-[#1b291f]" : "hover:bg-[#304439]"}`}>
+                {view === "ready" ? `Ready · ${session.counts.group2}` : `Exported · ${publishClips(session.candidates, "exported").length}`}
+              </button>)}
+            </div>
+            <p className="subtle mt-2 text-xs">{publishView === "ready" ? "Group 2 in clip order" : "Saved files, including clips edited after export"} · J/K to move</p>
+          </div>
+          <div className="panel-scroll min-h-0 flex-1 overflow-auto" role="listbox" aria-label={publishView === "ready" ? "Group 2 clips" : "Exported clips"}>
+            {visible.length === 0 ? <p className="subtle px-4 py-6 text-sm">{publishView === "ready"
+              ? "Nothing in Group 2. Mark keepers with 2 in Triage or Polish." : "No clips have been exported yet."}</p>
+              : visible.map((clip) => <button key={clip.clip_id} type="button" role="option"
+                aria-selected={clip.clip_id === effectiveSelectedId} data-selected={clip.clip_id === effectiveSelectedId}
+                tabIndex={clip.clip_id === effectiveSelectedId ? 0 : -1}
+                onClick={() => setSelectedId(clip.clip_id)}
+                className="clip-row flex w-full items-baseline gap-2 border-b border-[#29362f] px-4 py-2.5 text-left">
+                <span className="subtle mono shrink-0 text-xs">#{clip.clip_id}</span>
+                <span className="min-w-0 flex-1 text-sm"><span className="block truncate" title={clip.title}>{clip.title}</span>
+                  {clip.last_export_path && <span className={`mt-1 block text-[11px] ${clip.export_state === "matching" ? "subtle" : "text-[#edbc97]"}`}>
+                    {clip.export_state === "matching" ? "Exported" : clip.export_state === "changed" ? "Exported · changed" : "Exported · unverified"}
+                  </span>}
+                </span>
+                <span className="subtle mono shrink-0 text-xs">{formatDuration(clip.end_ms - clip.start_ms)}</span>
+              </button>)}
+          </div>
+        </section>
+        {selected && session.revision !== null ? <ExportPreview key={selected.clip_id} inline clip={selected}
+          recordingDurationMs={session.duration_ms ?? undefined}
+          initialSettings={publishSettings} onSettingsChange={setPublishSettings}
+          revision={session.revision} open={!showSettings && !showHelp && !showJump && !showMerge}
+          nextClipId={nextVisibleClipId} controllerHandlerRef={dialogControllerHandlerRef} onClose={() => {}}
+          gamepadAction={gamepadActionRequest}
+          onGamepadActionHandled={(id) => setGamepadActionRequest((current) => current?.id === id ? null : current)}
+          exportContext={rankingContext(selected)}
+          nudgeDisabled={busy}
+          onTrim={(relativeStart, relativeEnd) => {
+            if (session.revision === null || busy) return;
+            const start = Math.round(selected.start_ms + relativeStart);
+            const end = Math.round(selected.start_ms + relativeEnd);
+            if (start < 0 || end - start < 10 || (session.duration_ms !== null && end > session.duration_ms)) return;
+            if (start === selected.start_ms && end === selected.end_ms) return;
+            void mutate(() => api<SessionDelta>(`/clips/${encodeURIComponent(selected.clip_id)}?delta=true`, "PATCH", {
+              expected_revision: session.revision, start_ms: start, end_ms: end, context: rankingContext(selected),
+            }));
+          }}
+          onNudge={(edge, amount) => {
+            if (session.revision === null) return;
+            const start = edge === "start" ? selected.start_ms + amount : selected.start_ms;
+            const end = edge === "end" ? selected.end_ms + amount : selected.end_ms;
+            if (start < 0 || end - start < 10 || (session.duration_ms !== null && end > session.duration_ms)) return;
+            void mutate(() => api<SessionDelta>(`/clips/${encodeURIComponent(selected.clip_id)}?delta=true`, "PATCH", {
+              expected_revision: session.revision, start_ms: start, end_ms: end, context: rankingContext(selected),
+            }));
+          }}
+          onPublished={(next, advance) => {
+            // The exported clip leaves Group 2; continue with the clip that followed it.
+            setSession(next);
+            setSaveState("saved");
+            if (publishView === "ready" || advance) setSelectedId(nextVisibleClipId);
+          }} />
+          : <section className="surface flex items-center justify-center rounded-2xl p-8 text-center">
+            <p className="subtle">Select a clip to publish.</p>
+          </section>}
+      </main>
       : <>
-      <main className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden md:grid-cols-[minmax(310px,38%)_1fr]">
+      <main className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden md:grid-cols-[minmax(280px,28%)_1fr]" aria-label="Polish">
         <section className={`${showDetailMobile ? "hidden md:flex" : "flex"} min-h-0 flex-col overflow-hidden border-r line`} aria-label="Clip list">
           <div className="shrink-0 border-b line p-4 md:p-5">
             <div className="mb-3 flex items-baseline justify-between gap-3">
-              <h1 className="text-xl font-semibold">Clips</h1>
+              <h1 className="text-xl font-semibold">Polish</h1>
               <span className="subtle text-sm mono">{visible.length} visible / {session.candidates.length} total</span>
             </div>
+            <p className="subtle mb-3 text-xs">Fix Group 1 titles and timing, then move each keeper to Publish.</p>
             <div className="mb-3 grid grid-cols-5 overflow-hidden rounded-lg border line bg-[#22312a] p-1" role="group" aria-label="Status filter">
               {filters.map((item) => <button key={item.key} type="button" onClick={() => setFilter(item.key)}
                 aria-pressed={filter === item.key}
@@ -1227,10 +1316,6 @@ export default function App() {
                 </span>
                 {filter !== "all" && clip.suggested_title && <span className="clip-tag clip-tag-suggestion shrink-0" title="A re-transcribed title is waiting for review">New title</span>}
                 {filter !== "all" && changed && <span className="clip-tag clip-tag-trimmed shrink-0">Trimmed</span>}
-                {clip.likely_keep !== null && <span className="clip-score mono shrink-0"
-                  title="Likely keep score (0–100): louder, voice-like, and confidently transcribed clips score higher">
-                  {Math.round(clip.likely_keep)}
-                </span>}
                 <span className="subtle mono shrink-0 text-xs">{formatDuration(clip.end_ms - clip.start_ms)}</span>
               </button>;
             })}
@@ -1279,8 +1364,11 @@ export default function App() {
                     className="soft-surface inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium hover:bg-[#354b3b]">
                     <span aria-hidden="true">→</span><ShortcutBadge keyboard="J" bindingId="next" />
                   </button>
-                  <ActionButton onClick={() => dispatchReviewAction({ type: "open-export" })} disabled={busy}
-                    title="Open export preview (physical E key position)" shortcut="E" shortcutId="open-export" tone="accent">Export</ActionButton>
+                  <ActionButton onClick={() => dispatchReviewAction({ type: "rename" })} disabled={busy}
+                    title="Edit clip title (R)" shortcut="R" shortcutId="rename">Edit title</ActionButton>
+                  <ActionButton onClick={() => dispatchReviewAction({ type: "classify", status: "group2" })}
+                    disabled={busy || editingTitle || selected.status === "group2"}
+                    title="Mark Group 2 and move it into Publish (2)" shortcut="2" shortcutId="group2" tone="accent">Ready for Publish</ActionButton>
                   <div ref={clipMenuRef} className="relative">
                     <button type="button" onClick={() => setShowClipMenu((open) => !open)}
                       aria-label="More clip actions" aria-expanded={showClipMenu} aria-haspopup="menu" title="More clip actions"
@@ -1288,9 +1376,9 @@ export default function App() {
                     {showClipMenu && <div role="menu" aria-label="More clip actions"
                       className="surface absolute right-0 top-full z-20 mt-1 min-w-40 rounded-lg p-1 shadow-xl">
                       <button type="button" role="menuitem" disabled={busy} onClick={() => {
-                        setShowClipMenu(false); dispatchReviewAction({ type: "rename" });
+                        setShowClipMenu(false); dispatchReviewAction({ type: "open-export" });
                       }} className="flex w-full items-center justify-between gap-4 rounded-md px-3 py-2 text-left text-sm hover:bg-[#304439]">
-                        Rename <ShortcutBadge keyboard="R" bindingId="rename" />
+                        Preview export <ShortcutBadge keyboard="E" bindingId="open-export" />
                       </button>
                       <button type="button" role="menuitem" disabled={busy} onClick={() => {
                         setShowClipMenu(false);
@@ -1343,6 +1431,14 @@ export default function App() {
                   Choose Group 1 <ShortcutBadge keyboard="1" bindingId="group1" />, Group 2 <ShortcutBadge keyboard="2" bindingId="group2" />, Unsure <ShortcutBadge keyboard="3" bindingId="unsure" />, or Rejected <ShortcutBadge keyboard="X" bindingId="rejected" />
                 </span>
               </div>
+              {selected.last_export_path && <div className={`mb-4 rounded-lg border line px-3 py-2 text-xs ${selected.export_state === "matching" ? "subtle" : "text-[#edbc97]"}`}>
+                <p>{selected.export_state === "matching" ? "Exported · matches current edits."
+                  : selected.export_state === "changed" ? "Exported · changed. The saved file needs re-exporting."
+                    : "Exported · unverified. Re-export to record a snapshot."}</p>
+                <ActionButton onClick={() => { setPublishView("exported"); setMode("publish"); setSelectedId(selected.clip_id); }}>
+                  View saved file and re-export
+                </ActionButton>
+              </div>}
               <WaveformEditor key={selected.clip_id} clip={selected}
                 durationMs={session.duration_ms ?? selected.end_ms} audioSrc={audioUrl()} busy={busy}
                 gamepadAction={gamepadActionRequest}
@@ -1368,6 +1464,7 @@ export default function App() {
       </>}
       {selected && session.revision !== null && <ExportPreview key={selected.clip_id} clip={selected}
         revision={session.revision} open={showExportModal} nextClipId={nextVisibleClipId}
+        exportContext={rankingContext(selected)}
         gamepadAction={gamepadActionRequest}
         onGamepadActionHandled={(id) => setGamepadActionRequest((current) => current?.id === id ? null : current)}
         controllerHandlerRef={dialogControllerHandlerRef}

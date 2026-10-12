@@ -41,12 +41,32 @@ class ClipCandidate:
     last_export_start_threshold_db: float | None = None
     last_export_stop_threshold_db: float | None = None
     last_export_path: str | None = None
+    last_export_snapshot: dict | None = None
     # Review-ordering signals measured on the original SRT span.
     avg_logprob: float | None = None
     no_speech_prob: float | None = None
     peak_db: float | None = None
     mid_share_db: float | None = None
     bass_share_db: float | None = None
+
+    def export_snapshot(self) -> dict:
+        """The clip and render settings that a saved file must match."""
+        return {
+            "title": self.title,
+            "start_ms": round(srt_time_to_seconds(self.start.replace(".", ",")) * 1000),
+            "end_ms": round(srt_time_to_seconds(self.end.replace(".", ",")) * 1000),
+            "mode": self.last_export_mode,
+            "start_threshold_db": self.last_export_start_threshold_db if self.last_export_mode != "as_is" else None,
+            "stop_threshold_db": self.last_export_stop_threshold_db if self.last_export_mode != "as_is" else None,
+        }
+
+    @property
+    def export_state(self) -> str:
+        if not self.last_export_path:
+            return "none"
+        if self.last_export_snapshot is None:
+            return "unknown"
+        return "matching" if self.last_export_snapshot == self.export_snapshot() else "changed"
 
     @property
     def clip_id(self) -> str:
@@ -224,6 +244,7 @@ class Session:
                             last_export_start_threshold_db=prior.last_export_start_threshold_db,
                             last_export_stop_threshold_db=prior.last_export_stop_threshold_db,
                             last_export_path=prior.last_export_path,
+                            last_export_snapshot=copy.deepcopy(prior.last_export_snapshot),
                             **_carried_scores(prior, fresh_candidate),
                         )
                     )
@@ -244,6 +265,7 @@ class Session:
                             last_export_start_threshold_db=prior.last_export_start_threshold_db,
                             last_export_stop_threshold_db=prior.last_export_stop_threshold_db,
                             last_export_path=prior.last_export_path,
+                            last_export_snapshot=copy.deepcopy(prior.last_export_snapshot),
                             **_carried_scores(prior, fresh_candidate),
                         )
                     )

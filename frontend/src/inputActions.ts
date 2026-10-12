@@ -1,7 +1,7 @@
 import type { ExportMode, Status } from "./api";
 
 export type InputSurface = "review" | "waveform" | "export" | "dialog";
-export type InputContext = "review" | "active-dialog" | "text-editing" | "composition";
+export type InputContext = "review" | "publish" | "active-dialog" | "text-editing" | "composition";
 export type PlaybackTarget = "clip" | "candidate" | "reference";
 export type ClassificationStatus = Extract<Status, "group1" | "group2" | "rejected" | "unsure">;
 export type ShortcutSource = "keyboard" | "pointer" | "gamepad";
@@ -414,6 +414,11 @@ function contextAllowsAction(action: InputAction, context: InputContext): boolea
   if (action.type === "deactivate-text-editing") return true;
   if (context === "text-editing" || context === "composition") return false;
   if (context === "active-dialog") return isDialogAction(action);
+  if (context === "publish") return action.type === "export" || action.type === "export-mode" ||
+    action.type === "reveal-export" || action.type === "navigate" || action.type === "classify" ||
+    action.type === "undo" || action.type === "nudge" || action.type === "nudge-selected" ||
+    action.type === "select-boundary" || action.type === "jump" || action.type === "show-help" ||
+    action.type === "playback" && action.target !== "clip";
   return !isDialogAction(action);
 }
 

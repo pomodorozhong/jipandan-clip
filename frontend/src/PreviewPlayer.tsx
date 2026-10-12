@@ -1,5 +1,7 @@
-import { forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from "react";
-import type { WaveformWindow } from "./api";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import type { TrimMap, WaveformWindow } from "./api";
+import { removedRanges, renderedTimeToSource, sourceTimeToRendered } from "./trimMap";
+import { boundedRange, initialRange, useWaveform, WaveformPlot } from "./WaveformEditor";
 import type { InputAction } from "./inputActions";
 import { ShortcutBadge } from "./ShortcutBadge";
 
@@ -7,6 +9,7 @@ export interface PreviewPlayerHandle {
   toggle(): void;
   replay(): void;
   pause(): void;
+  seek(ms: number): void;
 }
 
 type Props = {
@@ -20,50 +23,24 @@ type Props = {
   endMs: number;
   waveform: WaveformWindow | null;
   sharedPeak: number;
+  trimMap?: TrimMap | null;
   src?: string;
   placeholder: string;
   playShortcut: string;
   replayShortcut: string;
   playShortcutId: string;
   replayShortcutId: string;
+  onTrim?: (start: number, end: number, edge?: "start" | "end") => void;
+  editingDisabled?: boolean;
+  /** Show the candidate on the original timeline; clicks outside the clip play that nearby audio. */
+  sourceContext?: { clipId: string; audioSrc: string; durationMs: number; startMs: number; endMs: number };
+  /** A problem shown prominently above the waveform, such as a failed render. */
+  alert?: React.ReactNode;
   onActivate(): void;
   onAction(action: InputAction): void;
 };
 
-const WIDTH = 1000;
-const HEIGHT = 128;
-
-const WaveformView = memo(function WaveformView({
-  variant, waveformPath, ready, durationMs, positionMs, maskId, onPointerDown, onKeyDown,
-}: {
-  variant: "reference" | "candidate";
-  waveformPath: string;
-  ready: boolean;
-  durationMs: number;
-  positionMs: number;
-  maskId: string;
-  onPointerDown(event: React.PointerEvent<SVGSVGElement>): void;
-  onKeyDown(event: React.KeyboardEvent<SVGSVGElement>): void;
-}) {
-  const reference = variant === "reference";
-  const playheadX = clamp((positionMs / durationMs) * WIDTH, 0, WIDTH);
-  return <svg role="slider" tabIndex={ready ? 0 : -1}
-    aria-label={`Seek in ${reference ? "As is reference" : "export candidate"}`}
-    aria-valuemin={0} aria-valuemax={durationMs} aria-valuenow={clamp(positionMs, 0, durationMs)}
-    aria-valuetext={clock(positionMs)}
-    viewBox={`0 0 ${WIDTH} ${HEIGHT}`} preserveAspectRatio="none"
-    onPointerDown={onPointerDown} onKeyDown={onKeyDown}
-    className={`h-full w-full touch-none ${ready ? "cursor-crosshair" : "cursor-default"}`}>
-    <line x1="0" y1={HEIGHT / 2} x2={WIDTH} y2={HEIGHT / 2}
-      stroke={reference ? "#3f5c68" : "#385145"} strokeWidth="1" />
-    <path d={waveformPath} fill="none" stroke={reference ? "#80b7c8" : "#91bd89"} strokeWidth="1.8" strokeLinecap="round" />
-    <clipPath id={maskId}><rect x="0" y="0" width={playheadX} height={HEIGHT} /></clipPath>
-    <path d={waveformPath} fill="none" stroke={reference ? "#d1e8ef" : "#d1e6b0"}
-      strokeWidth="1.8" strokeLinecap="round" clipPath={`url(#${maskId})`} />
-    {ready && <><line x1={playheadX} y1="5" x2={playheadX} y2={HEIGHT - 5} stroke="#f6faf1" strokeWidth="2" />
-      <circle cx={playheadX} cy="7" r="4" fill="#f6faf1" /></>}
-  </svg>;
-});
+const NEARBY_AUDIO_MS = 5000;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -79,38 +56,90 @@ function clock(ms: number): string {
 
 const PreviewPlayer = forwardRef<PreviewPlayerHandle, Props>(function PreviewPlayer({
   variant, eyebrow, title, durationLabel, durationText, note, startMs, endMs,
-  waveform, sharedPeak, src, placeholder, playShortcut, replayShortcut, playShortcutId, replayShortcutId, onActivate, onAction,
+  waveform, sharedPeak, trimMap, src, placeholder, playShortcut, replayShortcut, playShortcutId, replayShortcutId, onActivate, onAction, onTrim, editingDisabled = false, sourceContext, alert,
 }, ref) {
   const audioRef = useRef<HTMLAudioElement>(null);
-  const maskId = useId();
+  const contextAudioRef = useRef<HTMLAudioElement>(null);
+  const contextStop = useRef(0);
+  const [contextPlaying, setContextPlaying] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const auditionEnd = useRef(endMs);
   const [positionMs, setPositionMs] = useState(startMs);
   const [playing, setPlaying] = useState(false);
   const [error, setError] = useState("");
   const ready = Boolean(src && endMs > startMs);
   const durationMs = Math.max(1, endMs - startMs);
   const reference = variant === "reference";
+  const timelineOrigin = sourceContext?.startMs ?? startMs;
+  const selectedDuration = sourceContext ? sourceContext.endMs - sourceContext.startMs : durationMs;
+  // The original-timeline view only reaches nearby audio, so a swipe cannot
+  // fling it far from the clip.
+  const timelineMin = sourceContext ? Math.max(0, sourceContext.startMs - NEARBY_AUDIO_MS) - timelineOrigin : 0;
+  const timelineMax = sourceContext
+    ? Math.min(sourceContext.durationMs, sourceContext.endMs + NEARBY_AUDIO_MS) - timelineOrigin : durationMs;
+  const timelineDuration = timelineMax - timelineMin;
+  // The viewport is kept in recording time so a trim, which moves the
+  // timeline origin, does not shift the view for a frame.
+  function boundView(start: number, span: number) {
+    const bounded = boundedRange(start - timelineMin - timelineOrigin, span, timelineDuration);
+    return { start: bounded.start + timelineMin + timelineOrigin, end: bounded.end + timelineMin + timelineOrigin };
+  }
+  function initialViewport() {
+    if (!sourceContext) return { start: timelineOrigin, end: timelineOrigin + durationMs };
+    return initialRange({ start_ms: sourceContext.startMs, end_ms: sourceContext.endMs }, sourceContext.durationMs);
+  }
 
-  const waveformPath = useMemo(() => {
-    if (!waveform?.mins.length || waveform.mins.length !== waveform.maxs.length) return "";
-    const peak = Math.max(0.05, sharedPeak);
-    return waveform.mins.map((minimum, index) => {
-      const x = ((index + 0.5) * WIDTH / waveform.mins.length).toFixed(1);
-      const top = clamp(HEIGHT / 2 - waveform.maxs[index] / peak * 55, 5, HEIGHT - 5);
-      const bottom = clamp(HEIGHT / 2 - minimum / peak * 55, 5, HEIGHT - 5);
-      return `M${x} ${top.toFixed(1)}V${bottom.toFixed(1)}`;
-    }).join("");
-  }, [waveform, sharedPeak]);
+  const [viewport, setViewport] = useState(initialViewport);
+  const range = { start: viewport.start - timelineOrigin, end: viewport.end - timelineOrigin };
+  const [selection, setSelection] = useState({ start: 0, end: selectedDuration });
+  const [contextCursor, setContextCursor] = useState<number | null>(null);
+  useEffect(() => {
+    if (sourceContext) setViewport((current) => {
+      const next = boundView(current.start, current.end - current.start);
+      return next.start === current.start && next.end === current.end ? current : next;
+    });
+    else setViewport(initialViewport());
+    setSelection({ start: 0, end: selectedDuration });
+    setContextCursor(null);
+  }, [src, durationMs, timelineOrigin, selectedDuration, sourceContext?.durationMs]);
+  const sourceWaveform = useWaveform(sourceContext?.clipId ?? "", viewport, 1000, Boolean(sourceContext));
+  const displayWaveform = sourceContext ? sourceWaveform.window && {
+    ...sourceWaveform.window,
+    start_ms: sourceWaveform.window.start_ms - timelineOrigin,
+    end_ms: sourceWaveform.window.end_ms - timelineOrigin,
+  } : waveform;
+  function viewportChange(start: number, span: number) {
+    const next = boundView(start + timelineOrigin, span);
+    setViewport(next);
+    return { start: next.start - timelineOrigin, end: next.end - timelineOrigin };
+  }
+  function previewRange(start: number, end: number) {
+    if (onTrim && !editingDisabled) setSelection({ start: clamp(Math.min(start, end), timelineMin, timelineMax), end: clamp(Math.max(start, end), timelineMin, timelineMax) });
+  }
+  function previewEdge(edge: "start" | "end", time: number) {
+    if (!onTrim || editingDisabled) return;
+    setSelection((current) => ({ ...current, [edge]: clamp(time,
+      edge === "start" ? timelineMin : current.start + 10, edge === "start" ? current.end - 10 : timelineMax) }));
+  }
+  function commit(start: number, end: number, edge?: "start" | "end") {
+    if (!onTrim || editingDisabled) return;
+    const lower = Math.max(timelineMin, Math.min(start, end));
+    const upper = Math.min(timelineMax, Math.max(start, end));
+    if (upper - lower >= 10) onTrim(lower, upper, edge);
+    else setSelection({ start: 0, end: selectedDuration });
+  }
 
   useEffect(() => {
     const audio = audioRef.current;
     audio?.pause();
     setPlaying(false);
     setPositionMs(startMs);
+    auditionEnd.current = endMs;
     setError("");
     if (audio && ready && audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
       audio.currentTime = startMs / 1000;
     }
-  }, [src, startMs, ready]);
+  }, [src, startMs, endMs, ready]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -123,8 +152,9 @@ const PreviewPlayer = forwardRef<PreviewPlayerHandle, Props>(function PreviewPla
     let frame = 0;
     const tick = () => {
       const current = Math.round(audio.currentTime * 1000);
-      if (current >= endMs) {
-        setPositionMs(endMs);
+      const limit = auditionEnd.current;
+      if (current >= limit) {
+        setPositionMs(limit);
         audio.pause();
         return;
       }
@@ -135,18 +165,70 @@ const PreviewPlayer = forwardRef<PreviewPlayerHandle, Props>(function PreviewPla
     return () => cancelAnimationFrame(frame);
   }, [playing, startMs, endMs]);
 
+  useEffect(() => {
+    const audio = contextAudioRef.current;
+    if (!audio || !contextPlaying) return;
+    let frame = 0;
+    const tick = () => {
+      const current = Math.round(audio.currentTime * 1000) - timelineOrigin;
+      if (current >= contextStop.current) {
+        setContextCursor(contextStop.current);
+        audio.pause();
+        return;
+      }
+      setContextCursor(current);
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [contextPlaying, timelineOrigin]);
+
   const seek = useCallback((ms: number) => {
     const position = clamp(Math.round(ms), startMs, endMs);
+    auditionEnd.current = endMs;
     const audio = audioRef.current;
     if (audio && ready) audio.currentTime = position / 1000;
     setPositionMs(position);
   }, [startMs, endMs, ready]);
 
+  function seekTimeline(time: number) {
+    if (!sourceContext) { seek(timelineOrigin + time); return; }
+    if (time < 0 || time > selectedDuration) {
+      void playContext(time);
+      return;
+    }
+    contextAudioRef.current?.pause();
+    setContextCursor(null);
+    seek(trimMap ? sourceTimeToRendered(trimMap, time, durationMs) : time / selectedDuration * durationMs);
+  }
+  const timelinePlayhead = contextCursor ?? (sourceContext && !reference
+    ? trimMap ? renderedTimeToSource(trimMap, positionMs, "start", durationMs) : positionMs / durationMs * selectedDuration
+    : positionMs - startMs);
+
+  /** Play original audio from outside the clip: up to the clip start, or on to the end of the nearby range. */
+  async function playContext(time: number) {
+    audioRef.current?.pause();
+    setContextCursor(time);
+    const audio = contextAudioRef.current;
+    if (!audio) return;
+    contextStop.current = time < 0 ? 0 : timelineMax;
+    audio.currentTime = (timelineOrigin + time) / 1000;
+    onActivate();
+    try {
+      await audio.play();
+      setError("");
+    } catch {
+      setError("Playback was blocked. Press Play again after interacting with the page.");
+    }
+  }
+
   async function play(restart: boolean) {
     const audio = audioRef.current;
     if (!audio || !ready) return;
     if (!restart && !audio.paused) { audio.pause(); return; }
-    if (restart || audio.currentTime * 1000 < startMs || audio.currentTime * 1000 >= endMs) seek(startMs);
+    contextAudioRef.current?.pause();
+    setContextCursor(null);
+    if (restart || audio.currentTime * 1000 < startMs || audio.currentTime * 1000 >= auditionEnd.current) seek(startMs);
     onActivate();
     try {
       await audio.play();
@@ -159,25 +241,15 @@ const PreviewPlayer = forwardRef<PreviewPlayerHandle, Props>(function PreviewPla
   useImperativeHandle(ref, () => ({
     toggle: () => { void play(false); },
     replay: () => { void play(true); },
-    pause: () => { audioRef.current?.pause(); },
+    pause: () => { audioRef.current?.pause(); contextAudioRef.current?.pause(); },
+    seek,
   }));
 
-  const seekFromPointer = useCallback((event: React.PointerEvent<SVGSVGElement>) => {
-    if (!ready) return;
-    const box = event.currentTarget.getBoundingClientRect();
-    seek(startMs + (event.clientX - box.left) / box.width * durationMs);
-  }, [ready, startMs, durationMs, seek]);
-
-  const seekFromKey = useCallback((event: React.KeyboardEvent<SVGSVGElement>) => {
-    if (!ready) return;
-    const move = event.key === "ArrowRight" ? 100 : event.key === "ArrowLeft" ? -100 : 0;
-    if (move) { event.preventDefault(); seek(positionMs + move); }
-    else if (event.key === "Home") { event.preventDefault(); seek(startMs); }
-    else if (event.key === "End") { event.preventDefault(); seek(endMs); }
-  }, [ready, positionMs, seek, startMs, endMs]);
-
-  return <div className={`relative grid min-w-0 gap-x-4 rounded-xl border p-3 sm:grid-cols-[270px_minmax(0,1fr)] ${reference
+  return <div ref={cardRef} className={`relative grid min-w-0 gap-x-4 rounded-xl border p-3 sm:grid-cols-[200px_minmax(0,1fr)] ${reference
     ? "border-[#618a9c] bg-[#1c2b32]" : "border-[#8eb36c] bg-[#203225]"}`}>
+    {alert && <div role="alert" className="mb-3 ml-1 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border sm:col-span-2 border-[#e58a7a] bg-[#3b211d] px-3 py-2 text-sm font-medium text-[#ffd6cc]">
+      <span aria-hidden="true" className="text-base leading-none">⚠</span>{alert}
+    </div>}
     <span aria-hidden="true" className={`absolute inset-y-0 left-0 w-1 rounded-l-xl ${reference ? "bg-[#7eb4c7]" : "bg-[#b7d69d]"}`} />
     <div className="min-w-0 pl-1">
       <p className={`text-[10px] font-bold uppercase tracking-[.13em] ${reference ? "text-[#b9dce7]" : "text-[#cee8ad]"}`}>{eyebrow}</p>
@@ -198,30 +270,47 @@ const PreviewPlayer = forwardRef<PreviewPlayerHandle, Props>(function PreviewPla
           aria-label={`Replay ${reference ? "As is reference" : "export candidate"}`}
           className={`inline-flex min-w-0 flex-1 items-center justify-center gap-1 rounded-lg px-2 py-2 text-xs font-semibold disabled:opacity-45 ${reference
             ? "bg-[#344c55]" : "bg-[#38563c]"}`}>
-          <span aria-hidden="true">↺</span><span>Replay</span>
+          <span>Replay</span>
           <ShortcutBadge keyboard={replayShortcut} bindingId={replayShortcutId} />
         </button>
       </div>
-      <p className="mono mt-2 text-xs font-semibold">{clock(positionMs - startMs)} <span className="subtle font-normal">/ {clock(durationMs)}</span></p>
-      <div className="mt-3 text-xs"><span className="subtle">{durationLabel}</span> <strong className={reference ? "text-[#d3ecf3]" : "text-[#d8edb6]"}>{durationText}</strong></div>
-      <p className="subtle mt-1 text-[11px]">{note}</p>
+      <p className="mono mt-2 text-xs font-semibold" aria-label={`${durationLabel} ${durationText}`}>{clock(positionMs - startMs)} <span className="subtle font-normal">/ {clock(durationMs)}</span></p>
       {error && <p role="alert" className="mt-2 text-xs text-[#ffb3a8]">{error}</p>}
     </div>
     <div className="mt-3 min-w-0 sm:mt-0">
       <audio ref={audioRef} src={src} preload="metadata" playsInline
         onLoadedMetadata={() => seek(startMs)} onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)} onEnded={() => { setPlaying(false); setPositionMs(endMs); }} />
-      <div className={`flex h-32 items-center justify-center overflow-hidden rounded-lg border ${reference
-        ? "border-[#4c7180] bg-[#111e24]" : "border-[#55774c] bg-[#132116]"}`}>
-        {waveformPath ? <WaveformView variant={variant} waveformPath={waveformPath} ready={ready}
-          durationMs={durationMs} positionMs={positionMs - startMs} maskId={maskId}
-          onPointerDown={seekFromPointer} onKeyDown={seekFromKey} />
-          : <p className="subtle px-4 text-center text-sm" aria-live="polite">{placeholder}</p>}
-      </div>
-      <div className="subtle mono mt-1 flex justify-between text-[11px]">
-        <span>0:00</span><span>{ready ? "Click waveform to seek" : ""}</span><span>{clock(durationMs)}</span>
-      </div>
+      {sourceContext && <audio ref={contextAudioRef} src={sourceContext.audioSrc} preload="metadata" playsInline
+        onPlay={() => setContextPlaying(true)} onPause={() => setContextPlaying(false)} onEnded={() => setContextPlaying(false)} />}
+      {displayWaveform?.mins.length ? <WaveformPlot
+        label={`${reference ? "As is reference" : "Export candidate"} waveform`}
+        range={range} waveform={displayWaveform} startMs={selection.start} endMs={selection.end}
+        playheadMs={timelinePlayhead} originalStartMs={null} compact
+        sharedPeak={sharedPeak} trimMap={trimMap} disabled={!ready || editingDisabled}
+        canEdit={Boolean(onTrim)}
+        pinHandles={Boolean(sourceContext && onTrim)}
+        gestureTarget={cardRef}
+        clockOffsetMs={sourceContext ? timelineOrigin : 0} onResetViewport={() => setViewport(initialViewport())}
+        minSpan={Math.min(100, timelineDuration)} maxSpan={Math.min(120_000, timelineDuration)} onViewportChange={viewportChange}
+        onPreviewRange={previewRange} onCommitRange={(start, end) => {
+          if (onTrim) commit(start, end);
+          else seekTimeline(end);
+        }}
+        onPreviewEdge={previewEdge} onCommitEdge={(edge, time) => {
+          const bounded = clamp(time, edge === "start" ? timelineMin : selection.start + 10,
+            edge === "start" ? selection.end - 10 : timelineMax);
+          commit(edge === "start" ? bounded : selection.start, edge === "end" ? bounded : selection.end, edge);
+        }}
+        onCancel={() => setSelection({ start: 0, end: selectedDuration })} onSeek={seekTimeline} />
+        : <p className="subtle flex h-24 items-center justify-center px-4 text-center text-sm" aria-live="polite">{sourceContext ? "Loading recording waveform…" : placeholder}</p>}
+      {sourceWaveform.error && sourceContext && <p role="alert" className="text-xs text-[#ffb3a8]">{sourceWaveform.error} <button onClick={sourceWaveform.retry}>Retry</button></p>}
+      {trimMap && <p className="mt-1 flex items-center gap-2 text-[11px] text-[#edbc97]">
+        <span aria-hidden="true" className="h-2.5 w-3 rounded-sm border border-[#edbc97] bg-[#e6ad87]/25" />
+        {removedRanges(trimMap).length ? "Shaded audio is removed from the export" : "No audio removed"}
+      </p>}
     </div>
+    <p className="subtle mt-1 text-[11px] sm:col-span-2">{note}</p>
   </div>;
 });
 

@@ -85,6 +85,27 @@ export function bindingsForGamepadConfig(config: GamepadBindingConfig): readonly
   }));
 }
 
+/** Publish prioritizes explicit export bindings, then reuses free review controls.
+ * In particular, the review replay button plays the candidate. Keeping the
+ * persisted review and dialog maps separate preserves existing custom layouts.
+ */
+export function publishGamepadBindings(config: GamepadBindingConfig): readonly GamepadButtonBinding[] {
+  const bindings = bindingsForGamepadConfig(config);
+  const exports = bindings.filter((binding) => binding.index !== null && (
+    binding.action.type === "export" || binding.action.type === "export-mode" || binding.action.type === "reveal-export" ||
+    binding.action.type === "playback" && binding.action.target !== "clip"));
+  const occupied = new Set(exports.map((binding) => binding.index));
+  const reviews = bindings.filter((binding) => binding.contexts.includes("review") && binding.index !== null && !occupied.has(binding.index) && (
+    binding.action.type === "navigate" || binding.action.type === "classify" || binding.action.type === "undo" ||
+    binding.action.type === "nudge" || binding.action.type === "nudge-selected" || binding.action.type === "select-boundary" ||
+    binding.action.type === "jump" || binding.action.type === "show-help" || binding.action.type === "playback"));
+  return [...exports, ...reviews.map((binding): GamepadButtonBinding => {
+    if (binding.action.type !== "playback") return binding;
+    const id = binding.action.mode === "replay" ? "candidate-replay" : "candidate-play-pause";
+    return { ...binding, id, action: { ...binding.action, target: "candidate" } };
+  })].map((binding) => ({ ...binding, contexts: ["publish"] }));
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }

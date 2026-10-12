@@ -12,6 +12,12 @@ export interface Clip {
   original_end_ms: number;
   duration: string;
   last_export_path: string | null;
+  last_export_title?: string | null;
+  last_export_mode?: ExportMode | null;
+  last_export_start_threshold_db?: number | null;
+  last_export_stop_threshold_db?: number | null;
+  last_export_snapshot?: ExportSnapshot | null;
+  export_state?: "none" | "unknown" | "matching" | "changed";
   /** 0–100 review-order score; null until the clip has been measured. */
   likely_keep: number | null;
   /** Title from re-transcribing this clip's audio, awaiting review. */
@@ -144,6 +150,22 @@ export interface WaveformWindow {
 
 export type ExportMode = "as_is" | "trim_edges" | "trim_all";
 
+export interface ExportSnapshot {
+  title: string;
+  start_ms: number;
+  end_ms: number;
+  mode: ExportMode;
+  start_threshold_db: number | null;
+  stop_threshold_db: number | null;
+}
+
+export interface TrimMap {
+  source_duration_ms: number;
+  duration_ms: number;
+  /** Retained spans on the original clip's timeline, before MP3 encoding. */
+  kept_ranges_ms: [number, number][];
+}
+
 export interface PreviewJob {
   id: string;
   clip_id: string;
@@ -159,6 +181,7 @@ export interface PreviewJob {
   state: "queued" | "running" | "completed" | "failed";
   duration_ms: number | null;
   waveform: WaveformWindow | null;
+  trim_map: TrimMap | null;
   error: string | null;
   stale: boolean;
 }
