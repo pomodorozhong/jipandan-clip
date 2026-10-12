@@ -144,6 +144,13 @@ export interface WaveformWindow {
 
 export type ExportMode = "as_is" | "trim_edges" | "trim_all";
 
+export interface TrimMap {
+  source_duration_ms: number;
+  duration_ms: number;
+  /** Retained spans on the original clip's timeline, before MP3 encoding. */
+  kept_ranges_ms: [number, number][];
+}
+
 export interface PreviewJob {
   id: string;
   clip_id: string;
@@ -159,6 +166,7 @@ export interface PreviewJob {
   state: "queued" | "running" | "completed" | "failed";
   duration_ms: number | null;
   waveform: WaveformWindow | null;
+  trim_map: TrimMap | null;
   error: string | null;
   stale: boolean;
 }

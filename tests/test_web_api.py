@@ -17,6 +17,8 @@ from jipandan.core.waveform_envelope import WaveformEnvelopeCache
 from jipandan.core.whisper import write_segment_scores
 from jipandan.web.api import create_app
 from jipandan.core.store import RecordingStore, store_path
+from jipandan.core.ffmpeg import ExportOptions
+from jipandan.web.preview import PreviewJobs
 from jipandan.web.service import SessionService
 
 
@@ -436,6 +438,7 @@ class WebApiTests(unittest.TestCase):
 
         def render(_audio, _candidate, _options, output):
             output.write_bytes(b"rendered audio")
+            return {"source_duration_ms": 1000, "duration_ms": 800, "kept_ranges_ms": [[100, 900]]}
 
         request = {"clip_id": "1", "expected_revision": 1, "mode": "as_is", "title": "First"}
         with patch("jipandan.web.preview.render_export_preview", side_effect=render) as renderer, \
@@ -449,6 +452,13 @@ class WebApiTests(unittest.TestCase):
             self.assertEqual(renamed.json()["id"], first["id"])
             self.assertEqual(renamed.json()["title"], "Renamed")
             self.assertEqual(renamed.json()["waveform"], completed["waveform"])
+            self.assertEqual(renamed.json()["trim_map"], completed["trim_map"])
+            self.assertEqual(completed["trim_map"]["kept_ranges_ms"], [[100, 900]])
+            restarted = PreviewJobs(self.root / "previews")
+            self.addCleanup(restarted._executor.shutdown)
+            cached = restarted.start(self.audio, self.service.session.candidates[0], 1, ExportOptions("as_is"), "First")
+            self.assertEqual(cached.state, "completed")
+            self.assertEqual(cached.trim_map, completed["trim_map"])
             renderer.assert_called_once()
 
     def test_bulk_reject_and_invalid_bounds(self):

@@ -18,12 +18,14 @@ from pathlib import Path
 
 import numpy as np
 
-from jipandan.core.ffmpeg import ExportOptions, export_basename, probe_duration_seconds, render_export_preview
+from jipandan.core.ffmpeg import (
+    NO_AUDIO_LEFT, ExportOptions, export_basename, probe_duration_seconds, render_export_preview,
+)
 from jipandan.core.models import ClipCandidate
 from jipandan.core.srt import srt_time_to_seconds
 from jipandan.core.waveform_envelope import build_envelope_from_audio_slice
 
-PREVIEW_CACHE_VERSION = 2
+PREVIEW_CACHE_VERSION = 3
 PREVIEW_WAVEFORM_BUCKETS = 400
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,7 @@ class PreviewJob:
     state: str = "queued"
     duration_ms: int | None = None
     waveform: dict | None = None
+    trim_map: dict | None = None
     error: str | None = None
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -62,6 +65,7 @@ class PreviewJob:
                 "state": self.state,
                 "duration_ms": self.duration_ms,
                 "waveform": copy.deepcopy(self.waveform),
+                "trim_map": copy.deepcopy(self.trim_map),
                 "error": self.error,
                 "stale": stale,
             }
@@ -150,11 +154,13 @@ class PreviewJobs:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
             duration_ms = metadata["duration_ms"]
             waveform = metadata["waveform"]
+            trim_map = metadata["trim_map"]
             if (
                 metadata.get("version") != PREVIEW_CACHE_VERSION
                 or metadata.get("key") != job.cache_key
                 or not isinstance(duration_ms, int) or duration_ms <= 0
                 or (waveform is not None and not self._valid_waveform(waveform))
+                or (trim_map is not None and not self._valid_trim_map(trim_map))
                 or not output.is_file() or output.stat().st_size == 0
             ):
                 return None
@@ -164,7 +170,33 @@ class PreviewJobs:
         job.state = "completed"
         job.duration_ms = duration_ms
         job.waveform = waveform
+        job.trim_map = trim_map
         return job
+
+    @staticmethod
+    def _valid_trim_map(value: object) -> bool:
+        if not isinstance(value, dict):
+            return False
+        try:
+            source_duration, duration = value["source_duration_ms"], value["duration_ms"]
+            if not all(isinstance(n, (int, float)) and math.isfinite(n) and n > 0
+                       for n in (source_duration, duration)):
+                return False
+            ranges = value["kept_ranges_ms"]
+            if not isinstance(ranges, list) or not ranges:
+                return False
+            end = 0
+            total = 0
+            for start, stop in ranges:
+                if not all(isinstance(n, (int, float)) and math.isfinite(n) for n in (start, stop)):
+                    return False
+                if not end <= start < stop <= source_duration:
+                    return False
+                total += stop - start
+                end = stop
+            return abs(total - duration) < 0.01
+        except (KeyError, TypeError, ValueError):
+            return False
 
     @staticmethod
     def _valid_waveform(waveform: object) -> bool:
@@ -213,20 +245,21 @@ class PreviewJobs:
             job.state = "running"
         try:
             work_dir.mkdir(parents=True, exist_ok=False)
-            render_export_preview(job.audio, job.candidate, job.options, job.output)
+            trim_map = render_export_preview(job.audio, job.candidate, job.options, job.output)
             try:
                 seconds = probe_duration_seconds(job.output)
             except (subprocess.CalledProcessError, ValueError) as exc:
-                raise RuntimeError(
-                    "The selected thresholds removed all playable audio. Lower them and retry"
-                ) from exc
+                raise RuntimeError(NO_AUDIO_LEFT) from exc
             if not math.isfinite(seconds) or seconds <= 0:
-                raise RuntimeError("The selected silence settings produced no playable audio")
+                raise RuntimeError(NO_AUDIO_LEFT)
             duration_ms = round(seconds * 1000)
             try:
                 envelope = build_envelope_from_audio_slice(
                     job.output, 0, duration_ms / 1000, PREVIEW_WAVEFORM_BUCKETS,
                 )
+                # MP3's container duration includes encoder padding. Use the
+                # decoded waveform's duration for the playback ruler instead.
+                duration_ms = round(envelope.duration * 1000)
                 waveform = {
                     "start_ms": 0,
                     "end_ms": duration_ms,
@@ -236,10 +269,11 @@ class PreviewJobs:
             except (OSError, subprocess.CalledProcessError, ValueError):
                 logger.exception("Could not build waveform for preview %s", job.id)
                 waveform = None
-            self._publish_cache(job, duration_ms, waveform)
+            self._publish_cache(job, duration_ms, waveform, trim_map)
             with job.lock:
                 job.duration_ms = duration_ms
                 job.waveform = waveform
+                job.trim_map = trim_map
                 job.state = "completed"
             completed = True
         except Exception as exc:
@@ -252,7 +286,7 @@ class PreviewJobs:
             if not completed:
                 shutil.rmtree(work_dir, ignore_errors=True)
 
-    def _publish_cache(self, job: PreviewJob, duration_ms: int, waveform: dict | None) -> None:
+    def _publish_cache(self, job: PreviewJob, duration_ms: int, waveform: dict | None, trim_map: dict | None) -> None:
         cache_dir = self.cache_root / job.cache_key
         cache_dir.mkdir(parents=True, exist_ok=True)
         cache_audio_path = cache_dir / "preview.mp3"
@@ -268,6 +302,7 @@ class PreviewJobs:
                     "key": job.cache_key,
                     "duration_ms": duration_ms,
                     "waveform": waveform,
+                    "trim_map": trim_map,
                 }, handle, separators=(",", ":"))
                 handle.flush()
                 os.fsync(handle.fileno())

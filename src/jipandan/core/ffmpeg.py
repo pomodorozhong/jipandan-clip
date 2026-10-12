@@ -3,6 +3,8 @@ import os
 import shutil
 import subprocess
 import tempfile
+import logging
+import wave
 from uuid import uuid4
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +12,7 @@ from typing import Literal
 
 from jipandan.core.models import ClipCandidate
 from jipandan.core.srt import srt_time_to_seconds
+from jipandan.core.trim_map import retained_ranges
 
 ExportMode = Literal["as_is", "trim_edges", "trim_all"]
 
@@ -245,12 +248,15 @@ def _publish_clip(source: Path, final_clip: Path, *, replace_existing: bool) -> 
             number += 1
 
 
+NO_AUDIO_LEFT = "Trimming removed all of the clip's audio. Lower the thresholds or choose As is"
+
+
 def render_export_preview(
     input_audio: Path,
     candidate: ClipCandidate,
     options: ExportOptions,
     output: Path,
-) -> None:
+) -> dict | None:
     """Render one immutable export preview without publishing a clip."""
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="jipandan-preview-") as directory:
@@ -261,11 +267,25 @@ def render_export_preview(
             shutil.copy2(source, output)
             return
         rendered = Path(directory) / "rendered.mp3"
+        original_pcm = Path(directory) / "original.wav"
+        retained_pcm = Path(directory) / "retained.wav"
         result = subprocess.run(
             ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(source),
-             "-af", audio_filter, str(rendered)],
+             "-filter_complex", f"aformat=sample_fmts=flt,asplit=2[original][trim];"
+             f"[trim]{audio_filter},asplit=2[audio][kept]",
+             "-map", "[audio]", str(rendered),
+             "-map", "[original]", "-c:a", "pcm_s32le", str(original_pcm),
+             "-map", "[kept]", "-c:a", "pcm_s32le", str(retained_pcm)],
             capture_output=True, text=True,
         )
         if result.returncode != 0:
+            # The silence filter leaves an empty stream, which FFmpeg reports as an error.
+            if "received no packets" in result.stderr:
+                raise RuntimeError(NO_AUDIO_LEFT)
             raise RuntimeError(result.stderr.strip()[-500:] or "FFmpeg could not render the preview")
         os.replace(rendered, output)
+        try:
+            return retained_ranges(original_pcm, retained_pcm)
+        except (OSError, ValueError, wave.Error):
+            logging.getLogger(__name__).exception("Could not map preview trim to its original waveform")
+            return None
