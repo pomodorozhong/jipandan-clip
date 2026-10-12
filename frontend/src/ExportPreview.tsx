@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, previewUrl, type Clip, type ExportMode, type PreviewJob, type Session, type WaveformWindow } from "./api";
+import { api, audioUrl, previewUrl, type Clip, type ExportMode, type PreviewJob, type Session, type WaveformWindow } from "./api";
 import PreviewPlayer, { type PreviewPlayerHandle } from "./PreviewPlayer";
 import { ShortcutBadge } from "./ShortcutBadge";
 import type { GamepadActionRequest } from "./gamepad";
+import { exportMatchesSettings } from "./publish";
+import { renderedRangeToSource } from "./trimMap";
 import {
   deactivateTextEditingTarget,
   isActionAvailable,
@@ -12,6 +14,9 @@ import {
   shouldDispatchAction,
   type InputAction,
 } from "./inputActions";
+
+// Matches the backend's NO_AUDIO_LEFT message in jipandan.core.ffmpeg.
+const NO_AUDIO_LEFT = "Trimming removed all of the clip's audio. Lower the thresholds or choose As is";
 
 const descriptions: Record<ExportMode, string> = {
   as_is: "Keep the selected clip exactly as it is.",
@@ -37,7 +42,7 @@ function peak(waveform: WaveformWindow | null): number {
   return result;
 }
 
-const nudgeSteps = [-100, -10, 10, 100];
+export type ExportSettings = { mode: ExportMode; startDb: string; stopDb: string };
 
 /**
  * Compare the original clip with its rendered export and publish it. Shown as a
@@ -46,7 +51,7 @@ const nudgeSteps = [-100, -10, 10, 100];
  */
 export default function ExportPreview({ clip, revision, open, nextClipId, onClose, onPublished,
   gamepadAction, onGamepadActionHandled, controllerHandlerRef, inline = false, onNudge, nudgeDisabled = false,
-  exportContext }: {
+  exportContext, initialSettings, onSettingsChange, onTrim, recordingDurationMs }: {
   clip: Clip; revision: number; open: boolean; onClose: () => void;
   nextClipId: string | null;
   onPublished: (session: Session, advance: boolean) => void;
@@ -56,12 +61,16 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
   inline?: boolean;
   onNudge?: (edge: "start" | "end", amountMs: number) => void;
   nudgeDisabled?: boolean;
+  onTrim?: (start: number, end: number) => void;
+  recordingDurationMs?: number;
   /** Ranking context recorded with the export in the review history. */
   exportContext?: object;
+  initialSettings?: ExportSettings;
+  onSettingsChange?: (settings: ExportSettings) => void;
 }) {
-  const [mode, setMode] = useState<ExportMode>("trim_edges");
-  const [startDb, setStartDb] = useState("-40");
-  const [stopDb, setStopDb] = useState("-50");
+  const [mode, setMode] = useState<ExportMode>(clip.last_export_path ? clip.last_export_mode ?? "trim_edges" : initialSettings?.mode ?? "trim_edges");
+  const [startDb, setStartDb] = useState(clip.last_export_path ? String(clip.last_export_start_threshold_db ?? -40) : initialSettings?.startDb ?? "-40");
+  const [stopDb, setStopDb] = useState(clip.last_export_path ? String(clip.last_export_stop_threshold_db ?? -50) : initialSettings?.stopDb ?? "-50");
   const [title, setTitle] = useState(clip.title);
   const [job, setJob] = useState<PreviewJob | null>(null);
   const [referenceJob, setReferenceJob] = useState<PreviewJob | null>(null);
@@ -71,7 +80,8 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
   const [referenceRequesting, setReferenceRequesting] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState("");
-  const [outputPath, setOutputPath] = useState("");
+  const [outputPath, setOutputPath] = useState(clip.last_export_path ?? "");
+  const [selectedEdge, setSelectedEdge] = useState<"start" | "end">("start");
   const referenceStartedFor = useRef("");
   const candidateWasOpen = useRef(false);
   const exportInFlight = useRef(false);
@@ -82,6 +92,10 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
   const handledGamepadAction = useRef<number | null>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
   const wasOpen = useRef(false);
+
+  useEffect(() => {
+    if (inline && !clip.last_export_path) onSettingsChange?.({ mode, startDb, stopDb });
+  }, [inline, clip.last_export_path, mode, startDb, stopDb, onSettingsChange]);
 
   useEffect(() => { setTitle(clip.title); }, [clip.clip_id, clip.title]);
 
@@ -153,8 +167,13 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
   const selectedDuration = clip.end_ms - clip.start_ms;
   const referenceDuration = referenceReady ? referenceJob?.duration_ms ?? selectedDuration : selectedDuration;
   const candidateDuration = waveformReady ? job?.duration_ms ?? 0 : 0;
-  const sharedPeak = Math.max(peak(referenceReady ? referenceJob?.waveform ?? null : null),
+  const renderedPeak = Math.max(peak(referenceReady ? referenceJob?.waveform ?? null : null),
     peak(waveformReady ? job?.waveform ?? null : null));
+  // Both renders restart after every edit; keep the last scale meanwhile so the
+  // waveform does not jump to the 0.05 floor and clip until they finish.
+  const lastPeak = useRef(0);
+  if (renderedPeak > 0) lastPeak.current = renderedPeak;
+  const sharedPeak = lastPeak.current;
 
   function chooseMode(next: ExportMode) {
     setMode(next);
@@ -192,6 +211,12 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
   }
 
   function dispatchAction(action: InputAction) {
+    if (inline && onNudge && (action.type === "nudge" || action.type === "nudge-selected" || action.type === "select-boundary")) {
+      if (nudgeDisabled || exporting || requesting) return;
+      if (action.type === "select-boundary") setSelectedEdge(action.edge);
+      else onNudge(action.type === "nudge" ? action.edge : selectedEdge, action.amount);
+      return;
+    }
     if (action.type === "reveal-export" && !outputPath) return;
     const playbackReady = action.type !== "playback" || (
       action.target === "candidate" ? candidateReady : action.target === "reference" ? referenceReady : true
@@ -270,13 +295,15 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
 
   useEffect(() => {
     if (!open || !gamepadAction || handledGamepadAction.current === gamepadAction.id) return;
+    if (gamepadAction.clipId && gamepadAction.clipId !== clip.clip_id) return;
     const action = gamepadAction.action;
     if (!(action.type === "export" || action.type === "export-mode" || action.type === "reveal-export" ||
+        inline && (action.type === "nudge" || action.type === "nudge-selected" || action.type === "select-boundary") ||
         (action.type === "playback" && (action.target === "candidate" || action.target === "reference")))) return;
     handledGamepadAction.current = gamepadAction.id;
     dispatchAction(action);
     onGamepadActionHandled?.(gamepadAction.id);
-  }, [gamepadAction, onGamepadActionHandled, open, candidateReady, referenceReady, exporting, requesting, nextClipId]);
+  }, [gamepadAction, onGamepadActionHandled, open, candidateReady, referenceReady, exporting, requesting, nextClipId, clip.clip_id, inline, selectedEdge, nudgeDisabled]);
 
   useEffect(() => {
     if (!open) {
@@ -394,9 +421,15 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
       : referenceJob?.state === "running" ? "Rendering the As is reference…"
         : "Preparing the As is reference…";
   const difference = candidateDuration - referenceDuration;
+  const savedMatches = exportMatchesSettings(clip, title, mode, start, stop);
 
   const settingsPanel = <>
-      <div className="border-b line bg-[#1b2821] px-4 py-4 sm:px-7">
+      {clip.last_export_path && <div role="status" className={`border-b line px-4 py-3 text-xs sm:px-7 ${savedMatches ? "subtle" : "text-[#edbc97]"}`}>
+        {savedMatches ? "Exported · matches these edits and settings."
+          : !clip.last_export_snapshot ? "Exported · unverified. This older export has no saved snapshot. Re-export to verify these settings."
+            : "Exported · changed. Re-export to save these edits and settings."}
+      </div>}
+      <div className="border-b line bg-[#1b2821] px-4 py-3 sm:px-5">
         <h3 className="subtle text-[11px] font-bold uppercase tracking-[.15em]">Export settings</h3>
         <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2">
           <div role="group" aria-label="Export mode" className="inline-flex flex-wrap gap-1 rounded-lg border line bg-[#101b16] p-1">
@@ -441,16 +474,18 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
 
   </>;
   const comparePanel = <>
-      <div className="px-4 py-4 sm:px-7">
+      <div className="px-4 py-3 sm:px-5">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <h3 className="subtle text-[11px] font-bold uppercase tracking-[.15em]">Compare audio</h3>
-          <p className="subtle text-[11px]">Play either version or click its waveform to seek</p>
+          <p className="subtle text-[11px]">Click to seek · drag to trim · swipe / Shift-drag to pan · pinch to zoom</p>
         </div>
         <div className="space-y-3">
           <PreviewPlayer ref={referencePlayer} variant="reference" eyebrow="Reference · unchanged" title="As is"
             durationLabel="Selected clip" durationText={duration(selectedDuration)}
-            note="Includes the original edges and pauses" startMs={0} endMs={referenceDuration}
+            note="Original audio reference · playback only"
+            startMs={0} endMs={referenceDuration}
             waveform={referenceReady ? referenceJob?.waveform ?? null : null} sharedPeak={sharedPeak}
+            trimMap={referenceReady && waveformReady && !recordingDurationMs ? job?.trim_map : null}
             src={referenceReady ? previewUrl(referenceJob!.id) : undefined} placeholder={referencePlaceholder}
             playShortcut="⇧Q" replayShortcut="Q" playShortcutId="reference-play-pause" replayShortcutId="reference-replay" onActivate={() => candidatePlayer.current?.pause()}
             onAction={dispatchAction} />
@@ -459,42 +494,56 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
             <button type="button" onClick={() => void renderReference()} disabled={referenceRequesting}
               className="rounded-md border line px-2 py-1 text-white disabled:opacity-50">Retry reference</button>
           </div>}
+          {referenceReady && waveformReady && mode !== "as_is" && !job?.trim_map &&
+            <p role="status" className="subtle text-xs">Trim positions unavailable. Compare the audio using the two players.</p>}
           <PreviewPlayer ref={candidatePlayer} variant="candidate" eyebrow={`Export candidate · ${modes.find((item) => item.value === mode)?.label}`}
             title="Rendered preview" durationLabel="Rendered result"
             durationText={waveformReady ? duration(candidateDuration) : "—"}
-            note={candidateReady ? difference === 0 ? "Same length as the reference"
+            note={recordingDurationMs ? "Original timeline · click outside the clip to hear nearby audio, then drag either handle to include it" : candidateReady ? difference === 0 ? "Same length as the reference"
               : `${duration(Math.abs(difference))} ${difference < 0 ? "shorter" : "longer"} than the reference`
               : "Updates automatically when settings change"}
             startMs={0} endMs={candidateDuration} waveform={waveformReady ? job?.waveform ?? null : null}
+            sourceContext={recordingDurationMs ? { clipId: clip.clip_id, audioSrc: audioUrl(), durationMs: recordingDurationMs, startMs: clip.start_ms, endMs: clip.end_ms } : undefined}
+            trimMap={recordingDurationMs && waveformReady ? job?.trim_map : null}
             sharedPeak={sharedPeak} src={waveformReady ? previewUrl(job!.id) : undefined}
+            onTrim={onTrim && (recordingDurationMs || mode === "as_is" || job?.trim_map?.kept_ranges_ms.length) ? (start, end, edge) => {
+              if (recordingDurationMs) onTrim(start, end);
+              else if (mode === "as_is") onTrim(start / candidateDuration * selectedDuration, end / candidateDuration * selectedDuration);
+              else if (job?.trim_map) onTrim(...renderedRangeToSource(job.trim_map, start, end, candidateDuration, edge));
+            } : undefined}
+            editingDisabled={nudgeDisabled || exporting || requesting || !candidateReady}
             placeholder={candidatePlaceholder} playShortcut="⇧Space" replayShortcut="Space" playShortcutId="candidate-play-pause" replayShortcutId="candidate-replay"
+            alert={job?.state === "failed" && !stale ? <>
+              <span className="min-w-0 flex-1">{job.error === NO_AUDIO_LEFT ? `${job.error}.` : `Render failed: ${job.error}. Adjust the settings to retry.`}</span>
+              {mode !== "as_is" && <button type="button" onClick={() => dispatchAction({ type: "export-mode", mode: "as_is" })}
+                className="shrink-0 rounded-md bg-[#ffd6cc] px-2.5 py-1 text-xs font-semibold text-[#3b211d]">Use As is</button>}
+            </> : undefined}
             onActivate={() => referencePlayer.current?.pause()} onAction={dispatchAction} />
-          {job?.state === "failed" && !stale && <p role="alert" className="text-xs text-[#ffb3a8]">Render failed: {job.error}. Adjust the settings to retry.</p>}
         </div>
       </div>
 
   </>;
   const footerPanel = <>
-      <footer className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-t line bg-[#17211d] px-4 py-4 sm:px-7">
-        <div className="min-w-0 flex-1"><p className="subtle text-[10px] font-bold uppercase tracking-[.12em]">{outputPath ? "Exported file" : "Proposed filename"}</p>
-          <p className="mt-1 break-all text-xs font-semibold">{outputPath || (job && !stale ? job.proposed_filename : "Filename updates with the preview")}</p>
-          <p className="subtle mt-1 break-all text-[11px]">{outputPath
+      <footer className="grid grid-cols-1 gap-x-4 gap-y-2 border-t line bg-[#17211d] px-4 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:px-5">
+        <div className="min-w-0"><p className="subtle text-[10px] font-bold uppercase tracking-[.12em]">{outputPath ? "Exported file" : "Proposed filename"}</p>
+          <p className="mt-1 truncate text-xs font-semibold" title={outputPath || undefined}>{outputPath?.split("/").at(-1) || (job && !stale ? job.proposed_filename : "Filename updates with the preview")}</p>
+          {!inline && <p className="subtle mt-1 break-all text-[11px]">{outputPath
             ? `Next export: ${job && !stale ? job.proposed_filename : "filename updates with the preview"}`
-            : "Saved in the session’s export directory"}</p>
+            : "Saved in the session’s export directory"}</p>}
           {exportError && <p role="alert" className="mt-2 text-xs text-[#ffb3a8]">{exportError}</p>}
         </div>
-        <div className="subtle flex flex-wrap items-center gap-2 text-xs">
+        <div className="subtle flex flex-wrap items-center gap-2 text-xs sm:col-span-2 sm:row-start-2">
           <span>As is <strong className="text-[#d3ecf3]">{duration(referenceDuration)}</strong></span>
           <span aria-hidden="true">→</span>
           <span>{modes.find((item) => item.value === mode)?.label} <strong className="text-[#d8edb6]">{candidateReady ? duration(candidateDuration) : "—"}</strong></span>
           {candidateReady && <span>· {difference < 0 ? "Shorter" : difference > 0 ? "Longer" : "Difference"} <strong className="text-[#d8edb6]">{duration(Math.abs(difference))}</strong></span>}
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2 sm:col-start-2 sm:row-start-1">
           {outputPath && <button type="button" onClick={() => dispatchAction({ type: "reveal-export" })}
             className="rounded-lg border line px-4 py-2 text-sm font-semibold">Reveal file</button>}
           <button type="button" onClick={() => dispatchAction({ type: "export", advance: false })} disabled={!candidateReady || exporting || requesting}
             className="rounded-lg border line px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50">
-            Export <ShortcutBadge keyboard="Enter" bindingId="export" /></button>
+            {clip.last_export_path ? "Re-export" : "Export"} <ShortcutBadge keyboard="Enter" bindingId="export" /></button>
           <button type="button" onClick={() => dispatchAction({ type: "export", advance: true })} disabled={!candidateReady || exporting || requesting || !nextClipId}
             title={nextClipId ? "Export and open the next clip (Command+Enter)" : "No next clip in this view"}
             className="rounded-lg bg-[#b7d69d] px-4 py-2 text-sm font-semibold text-[#1d2d20] disabled:cursor-not-allowed disabled:opacity-50">
@@ -505,33 +554,14 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
       </footer>
   </>;
 
-  const timing = onNudge && <div className="border-b line px-4 py-3 sm:px-7">
-    <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
-      <h3 className="subtle text-[11px] font-bold uppercase tracking-[.15em]">Timing</h3>
-      {(["start", "end"] as const).map((edge) => <div key={edge} className="flex items-center gap-1.5" role="group"
-        aria-label={`Nudge ${edge}`}>
-        <span className="mr-1 font-medium capitalize">{edge}</span>
-        {nudgeSteps.map((amount) => <button key={amount} type="button" disabled={nudgeDisabled}
-          onClick={() => onNudge(edge, amount)}
-          title={`${edge === "start" ? "Start" : "End"} ${amount > 0 ? "+" : ""}${amount} ms (${Math.abs(amount) === 100 ? "Shift+" : ""}${
-            edge === "start" ? (amount < 0 ? "," : ".") : (amount < 0 ? "[" : "]")})`}
-          className="mono rounded-md bg-[#304538] px-2 py-1 hover:bg-[#3b5543] disabled:opacity-50">
-          {amount > 0 ? "+" : ""}{amount}
-        </button>)}
-      </div>)}
-      <span className="subtle">Keys , . start · [ ] end · Shift for 100 ms · previews update automatically</span>
-    </div>
-  </div>;
-
   if (inline) {
     return <section ref={dialogRef} aria-label={`Export clip ${clip.clip_id}`}
-      className="surface flex min-h-0 w-full flex-col overflow-y-auto rounded-2xl">
-      <header className="border-b line px-4 py-4 sm:px-7">
+      className="surface flex w-full flex-col self-start rounded-2xl">
+      <header className="border-b line px-4 py-3 sm:px-5">
         <p className="accent mono text-[11px] font-bold uppercase tracking-[.16em]">Publish · Clip #{clip.clip_id}</p>
         <h2 className="mt-1 break-words text-xl font-semibold">{clip.title}</h2>
       </header>
       {settingsPanel}
-      {timing}
       {comparePanel}
       {footerPanel}
     </section>;

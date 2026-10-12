@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, type Clip, type WaveformWindow } from "./api";
+import { api, type Clip, type TrimMap, type WaveformWindow } from "./api";
+import { removedRanges } from "./trimMap";
 import {
   deactivateTextEditingTarget,
   getInputContext,
@@ -37,15 +38,22 @@ function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
 }
 
-function boundedRange(start: number, span: number, duration: number): TimeRange {
+export function boundedRange(start: number, span: number, duration: number): TimeRange {
   const width = Math.min(duration, Math.max(1, Math.round(span)));
   const boundedStart = clamp(Math.round(start), 0, duration - width);
   return { start: boundedStart, end: boundedStart + width };
 }
 
-function initialRange(clip: Clip, duration: number): TimeRange {
-  const span = clamp(clip.end_ms - clip.start_ms + 2000, 2000, MAX_WINDOW_MS);
-  return boundedRange(clip.start_ms - 1000, span, duration);
+export function waveformPanDelta(event: Pick<WheelEvent, "deltaX" | "deltaY" | "shiftKey">): number {
+  return event.deltaX || (event.shiftKey ? event.deltaY : 0);
+}
+
+export function initialRange(clip: Pick<Clip, "start_ms" | "end_ms">, duration: number): TimeRange {
+  // A little context on each side, so the clip fills most of the view.
+  const length = clip.end_ms - clip.start_ms;
+  const padding = clamp(Math.round(length * 0.15), 200, 1000);
+  const span = clamp(length + 2 * padding, 500, MAX_WINDOW_MS);
+  return boundedRange(clip.start_ms - padding, span, duration);
 }
 
 function fineRange(time: number, duration: number): TimeRange {
@@ -65,12 +73,13 @@ function signed(ms: number): string {
   return `${ms > 0 ? "+" : ""}${ms} ms`;
 }
 
-function useWaveform(clipId: string, range: TimeRange, buckets: number) {
+export function useWaveform(clipId: string, range: TimeRange, buckets: number, active = true) {
   const [waveform, setWindow] = useState<WaveformWindow | null>(null);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
 
   useEffect(() => {
+    if (!active) return;
     const controller = new AbortController();
     setError("");
     // Keep the previous window on screen while the next one loads so panning
@@ -86,13 +95,14 @@ function useWaveform(clipId: string, range: TimeRange, buckets: number) {
         });
     }, WAVEFORM_FETCH_DELAY_MS);
     return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [clipId, range.start, range.end, buckets, retry]);
+  }, [clipId, range.start, range.end, buckets, retry, active]);
 
   return { window: waveform, error, retry: () => setRetry((value) => value + 1) };
 }
 
-function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, editableEdge,
-  originalStartMs, disabled, minSpan, maxSpan, onViewportChange,
+export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, editableEdge,
+  originalStartMs, disabled, minSpan, maxSpan, onViewportChange, trimMap, sharedPeak, compact = false, onSeek, canEdit = true, gestureTarget,
+  clockOffsetMs = 0, onResetViewport, pinHandles = false,
   onPreviewRange, onCommitRange, onPreviewEdge, onCommitEdge, onCancel }: {
   label: string;
   range: TimeRange;
@@ -105,6 +115,15 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
   disabled: boolean;
   minSpan: number;
   maxSpan: number;
+  trimMap?: TrimMap | null;
+  sharedPeak?: number;
+  compact?: boolean;
+  onSeek?: (time: number) => void;
+  canEdit?: boolean;
+  gestureTarget?: React.RefObject<HTMLElement | null>;
+  clockOffsetMs?: number;
+  onResetViewport?: () => void;
+  pinHandles?: boolean;
   onViewportChange: (start: number, span: number) => TimeRange;
   onPreviewRange: (start: number, end: number) => void;
   onCommitRange: (start: number, end: number) => void;
@@ -113,11 +132,12 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
   onCancel: () => void;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
-  const dragging = useRef<{ kind: "range"; start: number } | { kind: "edge"; edge: Edge } | null>(null);
+  const dragging = useRef<{ kind: "range"; start: number; clientX: number } | { kind: "edge"; edge: Edge }
+    | { kind: "pan"; start: number; span: number; clientX: number } | null>(null);
   const points = useMemo(() => {
     if (!waveform?.mins.length) return "";
     const count = Math.min(waveform.mins.length, waveform.maxs.length);
-    const peak = Math.max(0.05, ...waveform.mins.map(Math.abs), ...waveform.maxs.map(Math.abs));
+    const peak = Math.max(0.05, sharedPeak ?? Math.max(...waveform.mins.map(Math.abs), ...waveform.maxs.map(Math.abs)));
     const lines: string[] = [];
     for (let index = 0; index < count; index += 1) {
       const x = ((index + 0.5) * PLOT_WIDTH / count).toFixed(1);
@@ -126,7 +146,7 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
       lines.push(`M${x} ${top.toFixed(1)}V${bottom.toFixed(1)}`);
     }
     return lines.join("");
-  }, [waveform]);
+  }, [waveform, sharedPeak]);
 
   const span = range.end - range.start;
   // The waveform may be a stale window from before the latest pan or zoom.
@@ -138,12 +158,19 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
   // against this ref instead of the last rendered range.
   const view = useRef(range);
   view.current = range;
-  const gesture = useRef({ minSpan, maxSpan, onViewportChange, dragging });
-  gesture.current = { minSpan, maxSpan, onViewportChange, dragging };
+  const gesture = useRef({ minSpan, maxSpan, onViewportChange, dragging, onCancel });
+  gesture.current = { minSpan, maxSpan, onViewportChange, dragging, onCancel };
 
   useEffect(() => {
     const svg = svgRef.current!;
+    const target = gestureTarget?.current ?? svg;
     let pinchStartSpan: number | null = null;
+
+    function cancelDrag() {
+      if (!dragging.current) return;
+      dragging.current = null;
+      gesture.current.onCancel();
+    }
 
     function apply(start: number, nextSpan: number) {
       const { minSpan: low, maxSpan: high, onViewportChange: change } = gesture.current;
@@ -161,9 +188,13 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
     }
 
     function wheel(event: WheelEvent) {
-      if (gesture.current.dragging.current) return;
+      if (dragging.current) {
+        if (event.buttons) return;
+        cancelDrag();
+      }
+      const width = Math.max(1, svg.getBoundingClientRect().width);
       const scale = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16
-        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? svg.clientWidth : 1;
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? width : 1;
       const { start, end } = view.current;
       const current = end - start;
       if (event.ctrlKey) {
@@ -173,16 +204,16 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
       }
       // Horizontal two-finger swipes pan; vertical ones keep scrolling the page
       // unless Shift turns them into a horizontal scroll.
-      const delta = Math.abs(event.deltaX) >= Math.abs(event.deltaY) ? event.deltaX
-        : event.shiftKey ? event.deltaY : 0;
+      const delta = waveformPanDelta(event);
       if (!delta) return;
       event.preventDefault();
-      apply(start + delta * scale / svg.clientWidth * current, current);
+      apply(start + delta * scale / width * current, current);
     }
 
     // Safari reports trackpad pinches as gesture events instead of ctrl+wheel.
     function gestureStart(event: Event) {
       event.preventDefault();
+      cancelDrag();
       pinchStartSpan = view.current.end - view.current.start;
     }
     function gestureChange(event: Event) {
@@ -196,15 +227,17 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
       pinchStartSpan = null;
     }
 
-    svg.addEventListener("wheel", wheel, { passive: false });
-    svg.addEventListener("gesturestart", gestureStart);
-    svg.addEventListener("gesturechange", gestureChange);
-    svg.addEventListener("gestureend", gestureEnd);
+    target.addEventListener("wheel", wheel as EventListener, { passive: false, capture: true });
+    target.addEventListener("gesturestart", gestureStart, { passive: false, capture: true });
+    target.addEventListener("gesturechange", gestureChange, { passive: false, capture: true });
+    target.addEventListener("gestureend", gestureEnd, { passive: false, capture: true });
+    window.addEventListener("blur", cancelDrag);
     return () => {
-      svg.removeEventListener("wheel", wheel);
-      svg.removeEventListener("gesturestart", gestureStart);
-      svg.removeEventListener("gesturechange", gestureChange);
-      svg.removeEventListener("gestureend", gestureEnd);
+      target.removeEventListener("wheel", wheel as EventListener, true);
+      target.removeEventListener("gesturestart", gestureStart, true);
+      target.removeEventListener("gesturechange", gestureChange, true);
+      target.removeEventListener("gestureend", gestureEnd, true);
+      window.removeEventListener("blur", cancelDrag);
     };
   }, []);
 
@@ -212,6 +245,12 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
   const inRange = (time: number) => time >= range.start && time <= range.end;
   const startX = markerX(startMs);
   const endX = markerX(endMs);
+  const nubWidth = compact ? 40 : NUB_WIDTH;
+  function nubTop(edge: Edge) {
+    const overlap = pinHandles && !inRange(startMs) && !inRange(endMs)
+      && (startMs < range.start) === (endMs < range.start);
+    return NUB_TOP + (overlap && edge === "end" ? NUB_HEIGHT + 5 : 0);
+  }
 
   function position(clientX: number, clientY: number): { time: number; x: number; y: number } {
     const rectangle = svgRef.current!.getBoundingClientRect();
@@ -226,10 +265,10 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
 
   function hitsNub(edge: Edge, point: { x: number; y: number }): boolean {
     const time = edge === "start" ? startMs : endMs;
-    if (!inRange(time)) return false;
-    const left = clamp(markerX(time) - NUB_WIDTH / 2, 0, PLOT_WIDTH - NUB_WIDTH);
-    return point.x >= left && point.x <= left + NUB_WIDTH
-      && point.y >= NUB_TOP && point.y <= NUB_TOP + NUB_HEIGHT;
+    if (!inRange(time) && !pinHandles) return false;
+    const left = clamp(markerX(time) - nubWidth / 2, 0, PLOT_WIDTH - nubWidth);
+    return point.x >= left && point.x <= left + nubWidth
+      && point.y >= nubTop(edge) && point.y <= nubTop(edge) + NUB_HEIGHT;
   }
 
   function hitsMarkerLine(point: { x: number }): boolean {
@@ -256,6 +295,12 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
     if (disabled || event.button !== 0) return;
     const point = position(event.clientX, event.clientY);
     event.preventDefault();
+    if (event.shiftKey) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      dragging.current = { kind: "pan", start: range.start, span, clientX: event.clientX };
+      return;
+    }
+    if (!canEdit) { onSeek?.(point.time); return; }
     const edge = hitNub(point);
     if (edge) {
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -265,13 +310,18 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
     }
     if (hitsMarkerLine(point)) return;
     event.currentTarget.setPointerCapture(event.pointerId);
-    dragging.current = { kind: "range", start: point.time };
+    dragging.current = { kind: "range", start: point.time, clientX: event.clientX };
     onPreviewRange(point.time, endMs);
   }
 
   function pointerMove(event: React.PointerEvent<SVGSVGElement>) {
     const drag = dragging.current;
     if (!drag) return;
+    if (drag.kind === "pan") {
+      const width = event.currentTarget.getBoundingClientRect().width;
+      view.current = onViewportChange(drag.start - (event.clientX - drag.clientX) / width * drag.span, drag.span);
+      return;
+    }
     const point = position(event.clientX, event.clientY);
     if (drag.kind === "edge") onPreviewEdge(drag.edge, point.time);
     else onPreviewRange(drag.start, point.time);
@@ -284,9 +334,15 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+    if (drag.kind === "pan") return;
     const time = position(event.clientX, event.clientY).time;
     if (drag.kind === "edge") onCommitEdge(drag.edge, time);
     else {
+      if (onSeek && Math.abs(event.clientX - drag.clientX) < 4) {
+        onCancel();
+        onSeek(time);
+        return;
+      }
       onPreviewRange(drag.start, time);
       onCommitRange(drag.start, time);
     }
@@ -299,10 +355,26 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
   }
 
   return <div>
-    <svg ref={svgRef} role="img" aria-label={label} viewBox={`0 0 ${PLOT_WIDTH} ${PLOT_HEIGHT}`}
+    <svg ref={svgRef} role={onSeek ? "slider" : "img"} aria-label={label} viewBox={`0 0 ${PLOT_WIDTH} ${PLOT_HEIGHT}`}
+      aria-valuemin={onSeek ? Math.min(range.start, startMs) : undefined} aria-valuemax={onSeek ? Math.max(range.end, endMs) : undefined}
+      aria-valuenow={onSeek ? playheadMs : undefined} aria-valuetext={onSeek ? formatClock(playheadMs + clockOffsetMs) : undefined}
+      data-view-start={range.start} data-view-end={range.end}
+      tabIndex={onSeek && !disabled ? 0 : undefined}
+      onKeyDown={(event) => {
+        if (!onSeek || disabled) return;
+        const target = event.key === "ArrowLeft" ? playheadMs - 100 : event.key === "ArrowRight" ? playheadMs + 100
+          : event.key === "Home" ? startMs : event.key === "End" ? endMs : null;
+        if (target !== null) { event.preventDefault(); onSeek(target); }
+      }}
       preserveAspectRatio="none" onPointerDown={pointerDown} onPointerMove={pointerMove}
-      onPointerUp={pointerUp} onPointerCancel={pointerCancel}
-      className="block h-36 w-full cursor-crosshair overscroll-x-none rounded-lg border border-[#46584c] bg-[#101a17] touch-none">
+      onPointerUp={pointerUp} onPointerCancel={pointerCancel} onLostPointerCapture={pointerCancel}
+      className={`block ${compact ? "h-24" : "h-36"} w-full cursor-crosshair overscroll-x-none rounded-lg border border-[#46584c] bg-[#101a17] touch-none`}>
+      {trimMap && removedRanges(trimMap).map(([start, end]) => <g key={start}>
+        <title>{`Removed ${(start / 1000).toFixed(2)}–${(end / 1000).toFixed(2)} s`}</title>
+        <rect x={markerX(start)} y="0" width={(end - start) / span * PLOT_WIDTH} height={PLOT_HEIGHT} fill="#e6ad87" fillOpacity=".22" />
+        {[start, end].map((time) => <line key={time} x1={markerX(time)} x2={markerX(time)} y1="0" y2={PLOT_HEIGHT}
+          stroke="#edbc97" strokeDasharray="4 4" />)}
+      </g>)}
       {[250, 500, 750].map((x) => <line key={x} x1={x} y1="0" x2={x} y2={PLOT_HEIGHT} stroke="#526259" strokeWidth="1" opacity="0.35" />)}
       <line x1="0" y1={PLOT_HEIGHT / 2} x2={PLOT_WIDTH} y2={PLOT_HEIGHT / 2} stroke="#46584c" strokeWidth="1" />
       {inRange(startMs) && inRange(endMs) && <rect x={Math.min(startX, endX)} y="0" width={Math.abs(endX - startX)} height={PLOT_HEIGHT} fill="#b7d69d" opacity="0.08" />}
@@ -315,23 +387,34 @@ function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, edit
         <text x={clamp(markerX(originalStartMs) + 5, 5, PLOT_WIDTH - 35)} y="14"
           fill="#a9d6e2" fontSize="11">SRT</text>
       </g>}
-      {(["start", "end"] as Edge[]).map((edge) => {
+      {canEdit && (["start", "end"] as Edge[]).map((edge) => {
         const time = edge === "start" ? startMs : endMs;
-        if (!inRange(time)) return null;
+        if (!inRange(time) && !pinHandles) return null;
         const x = markerX(time);
         const color = edge === "start" ? "#f2cf86" : "#e7a6ca";
-        return <g key={edge}>
+        return <g key={edge} aria-label={`${edge === "start" ? "Start" : "End"} boundary handle`}>
+          <title>{`${edge === "start" ? "Start" : "End"} ${formatClock(time + clockOffsetMs)}${inRange(time) ? "" : " · outside this view; drag to move"}`}</title>
           <line x1={x} y1="0" x2={x} y2={PLOT_HEIGHT} stroke={color} strokeWidth="3" />
-          <rect x={clamp(x - NUB_WIDTH / 2, 0, PLOT_WIDTH - NUB_WIDTH)} y={NUB_TOP}
-            width={NUB_WIDTH} height={NUB_HEIGHT} rx="4" fill={color} />
+          <rect x={clamp(x - nubWidth / 2, 0, PLOT_WIDTH - nubWidth)} y={nubTop(edge)}
+            width={nubWidth} height={NUB_HEIGHT} rx="4" fill={color} />
         </g>;
       })}
       {inRange(playheadMs) && <line x1={markerX(playheadMs)} y1="0" x2={markerX(playheadMs)} y2={PLOT_HEIGHT} stroke="#f2f4ef" strokeWidth="2" opacity="0.9" />}
     </svg>
     <div className="subtle mono mt-1 flex justify-between text-[11px]">
-      <span>{formatClock(range.start)}</span>
-      <span>{formatClock(Math.round((range.start + range.end) / 2))}</span>
-      <span>{formatClock(range.end)}</span>
+      <span>{formatClock(range.start + clockOffsetMs)}</span>
+      {onResetViewport ? <span className="flex gap-1">
+        <button type="button" aria-label={`Zoom out ${label}`} onClick={() => {
+          const next = Math.min(maxSpan, span * 2);
+          onViewportChange((range.start + range.end - next) / 2, next);
+        }} className="rounded px-1 hover:bg-[#304538]">−</button>
+        <button type="button" aria-label={`Fit ${label}`} onClick={onResetViewport} className="rounded px-1 hover:bg-[#304538]">Fit</button>
+        <button type="button" aria-label={`Zoom in ${label}`} onClick={() => {
+          const next = Math.max(minSpan, span / 2);
+          onViewportChange((range.start + range.end - next) / 2, next);
+        }} className="rounded px-1 hover:bg-[#304538]">+</button>
+      </span> : <span>{formatClock(Math.round((range.start + range.end) / 2) + clockOffsetMs)}</span>}
+      <span>{formatClock(range.end + clockOffsetMs)}</span>
     </div>
   </div>;
 }
