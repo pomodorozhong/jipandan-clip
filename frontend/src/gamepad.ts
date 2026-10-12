@@ -530,6 +530,9 @@ export function createGamepadAdapter(options: GamepadAdapterOptions): GamepadAda
 
     for (const binding of bindings) {
       if (binding.index === null || fixedIndexes.has(binding.index)) continue;
+      // A control may be bound once per context, so only the current context's
+      // binding may fire; otherwise a dialog action would shadow a review one.
+      if (context !== undefined && !binding.contexts.includes(context as InputContext)) continue;
       dispatchBinding(binding.index, binding.action);
     }
     for (const binding of fixed) dispatchBinding(binding.index, binding.action);
