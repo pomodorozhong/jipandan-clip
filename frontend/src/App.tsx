@@ -361,7 +361,11 @@ export default function App() {
       } catch {
         if (session.counts.pending === 0) setFilter("all");
       }
-    } else if (session.counts.pending === 0) setFilter("all");
+    } else {
+      // New sessions review in Likely keep order (with exploration picks) by default.
+      setAllOrder("likely-desc");
+      if (session.counts.pending === 0) setFilter("all");
+    }
   }, [session?.audio]);
 
   useEffect(() => {
@@ -515,18 +519,21 @@ export default function App() {
   }, []);
 
   const exploreSeed = session?.srt_fingerprint ?? null;
+  // Scores shift while clips are still being measured, so hold clip order until they settle.
+  const likelyKeepPending = allOrder === "likely-desc" && Boolean(session && !session.clip_features_complete);
+  const effectiveOrder: AllOrder = likelyKeepPending ? "clip-asc" : allOrder;
   const visible = useMemo(() => {
     const clips = visibleClips(session?.candidates ?? [], filter, query, allStatusFilter);
     const compareClipId = (a: Clip, b: Clip) => a.index - b.index || a.suffix - b.suffix;
-    if (allOrder === "likely-desc") return orderByLikelyKeep(clips, exploreSeed, settings.exploreRanking, compareClipId);
+    if (effectiveOrder === "likely-desc") return orderByLikelyKeep(clips, exploreSeed, settings.exploreRanking, compareClipId);
     return clips.sort((a, b) => {
-      if (allOrder === "clip-desc") return compareClipId(b, a);
-      if (allOrder === "start-asc") return a.start_ms - b.start_ms || compareClipId(a, b);
-      if (allOrder === "start-desc") return b.start_ms - a.start_ms || compareClipId(a, b);
-      if (allOrder === "title-asc") return a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: "base" }) || compareClipId(a, b);
+      if (effectiveOrder === "clip-desc") return compareClipId(b, a);
+      if (effectiveOrder === "start-asc") return a.start_ms - b.start_ms || compareClipId(a, b);
+      if (effectiveOrder === "start-desc") return b.start_ms - a.start_ms || compareClipId(a, b);
+      if (effectiveOrder === "title-asc") return a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: "base" }) || compareClipId(a, b);
       return compareClipId(a, b);
     });
-  }, [session?.candidates, filter, query, allStatusFilter, allOrder, exploreSeed, settings.exploreRanking]);
+  }, [session?.candidates, filter, query, allStatusFilter, effectiveOrder, exploreSeed, settings.exploreRanking]);
   const effectiveSelectedId = visible.some((clip) => clip.clip_id === selectedId)
     ? selectedId : (visible[0]?.clip_id ?? null);
   const selected = session?.candidates.find((clip) => clip.clip_id === effectiveSelectedId) ?? null;
@@ -536,13 +543,13 @@ export default function App() {
   const rankingContext = useCallback((clip: Clip) => {
     const rank = visible.findIndex((item) => item.clip_id === clip.clip_id) + 1;
     return {
-      source: lastInputSourceRef.current, order: allOrder, filter,
+      source: lastInputSourceRef.current, order: effectiveOrder, filter,
       rank: rank || undefined, score: clip.likely_keep ?? undefined,
-      explore: allOrder === "likely-desc" && settings.exploreRanking && exploreSeed !== null
+      explore: effectiveOrder === "likely-desc" && settings.exploreRanking && exploreSeed !== null
         && isExploreClip(exploreSeed, clip.clip_id),
       score_version: session?.likely_keep_version,
     };
-  }, [visible, allOrder, filter, settings.exploreRanking, exploreSeed, session?.likely_keep_version]);
+  }, [visible, effectiveOrder, filter, settings.exploreRanking, exploreSeed, session?.likely_keep_version]);
 
   // A "view" is logged once a clip has been on screen for VIEW_MIN_MS, with how often it was played.
   const viewRef = useRef<{ audio: string; clipId: string; started: number; plays: number; context: object } | null>(null);
@@ -1123,6 +1130,7 @@ export default function App() {
             {(clipFeaturesJob?.state === "queued" || clipFeaturesJob?.state === "running") &&
               <p className="subtle mt-2 text-xs" role="status">
                 Measuring clips for likely keep · {clipFeaturesJob.progress.toLocaleString()} of {clipFeaturesJob.total.toLocaleString()}
+                {likelyKeepPending && " · showing clip order until done"}
               </p>}
             {clipFeaturesJob?.state === "failed" && <p className="mt-2 text-xs text-[#ffcfc4]" role="status">
               Could not measure clips: {clipFeaturesJob.error}{" "}
