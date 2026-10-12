@@ -257,6 +257,21 @@ class WebApiTests(unittest.TestCase):
             job = self.wait_for_job(path, "failed")
         self.assertEqual(job["error"], "no model")
 
+    def test_delta_responses_carry_only_changed_clips(self):
+        self.open()
+        marked = self.client.patch("/api/clips/1?delta=true", json={"expected_revision": 1, "status": "group1"},
+                                   headers=self.headers).json()
+        self.assertTrue(marked["delta"])
+        self.assertEqual([(c["clip_id"], c["status"]) for c in marked["clips"]], [("1", "group1")])
+        self.assertEqual((marked["removed"], marked["counts"]["group1"], marked["can_undo"]), ([], 1, True))
+        duplicated = self.client.post("/api/clips/2/duplicate?delta=true", json={"expected_revision": 2},
+                                      headers=self.headers).json()
+        self.assertEqual((duplicated["created_clip_id"], [c["clip_id"] for c in duplicated["clips"]]), ("2-2", ["2-2"]))
+        undone = self.client.post("/api/session/undo?delta=true", json={"expected_revision": 3},
+                                  headers=self.headers).json()
+        self.assertEqual((undone["clips"], undone["removed"]), ([], ["2-2"]))
+        self.assertNotIn("candidates", undone)
+
     def test_older_session_files_are_refused_with_a_fresh_start_hint(self):
         legacy = self.audio.with_suffix(".jipandan.json")
         legacy.write_text(json.dumps({"version": 2, "candidates": []}), encoding="utf-8")

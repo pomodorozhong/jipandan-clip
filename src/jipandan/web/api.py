@@ -220,25 +220,28 @@ def create_app(
             request.expected_revision, request.srt_fingerprint, request.remove_indexes
         ))
 
+    # With ?delta=true, edits return only the changed clips plus counts, not the whole session.
     @app.patch("/api/clips/{clip_id}")
-    def patch_clip(clip_id: str, request: ClipPatch):
+    def patch_clip(clip_id: str, request: ClipPatch, delta: bool = False):
         return SessionJSON(app.state.service.patch_clip(
             clip_id, request.expected_revision, status=request.status,
             title=request.title, start_ms=request.start_ms, end_ms=request.end_ms,
-            context=request.context,
+            context=request.context, delta=delta,
         ))
 
     @app.post("/api/clips/{clip_id}/duplicate")
-    def duplicate(clip_id: str, request: RevisionRequest):
-        return SessionJSON(app.state.service.duplicate(clip_id, request.expected_revision, request.context))
+    def duplicate(clip_id: str, request: RevisionRequest, delta: bool = False):
+        return SessionJSON(app.state.service.duplicate(clip_id, request.expected_revision, request.context, delta))
 
     @app.post("/api/clips/bulk-reject")
-    def bulk_reject(request: BulkReject):
-        return SessionJSON(app.state.service.bulk_reject(request.clip_ids, request.expected_revision, request.context))
+    def bulk_reject(request: BulkReject, delta: bool = False):
+        return SessionJSON(app.state.service.bulk_reject(
+            request.clip_ids, request.expected_revision, request.context, delta,
+        ))
 
     @app.post("/api/session/undo")
-    def undo(request: RevisionRequest):
-        return SessionJSON(app.state.service.undo(request.expected_revision, request.context))
+    def undo(request: RevisionRequest, delta: bool = False):
+        return SessionJSON(app.state.service.undo(request.expected_revision, request.context, delta))
 
     @app.post("/api/review-log")
     def record_review_events(request: ReviewEvents):

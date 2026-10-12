@@ -107,6 +107,8 @@ class SessionService:
         # Snapshot parts reused while their inputs are unchanged; a full snapshot of a
         # 5,000-clip recording is otherwise rebuilt on every key press.
         self._payload_cache: dict[str, tuple[ClipCandidate, dict]] = {}
+        # Clips the latest change touched, for delta responses.
+        self._last_changed: set[str] = set()
         self._score_cache: tuple[tuple, list[float | None]] | None = None
         self._merge_preview_cache: tuple[tuple, dict] | None = None
         # Re-transcribed titles awaiting review, keyed by clip ID; mirrored in the store.
@@ -834,36 +836,55 @@ class SessionService:
         self._score_cache = None
         self._merge_preview_cache = None
 
-    def _clip_payloads(self, session: Session) -> list[dict]:
+    def _scores(self, session: Session) -> list[float | None]:
         signals = tuple(
             (c.clip_id, c.peak_db, c.mid_share_db, c.bass_share_db, c.no_speech_prob) for c in session.candidates
         )
         if self._score_cache is None or self._score_cache[0] != signals:
             self._score_cache = (signals, likely_keep_scores(session.candidates))
-        scores = self._score_cache[1]
+        return self._score_cache[1]
+
+    def _clip_payloads(self, session: Session) -> list[dict]:
+        scores = self._scores(session)
         cache = self._payload_cache
-        payloads = []
-        for candidate, score in zip(session.candidates, scores):
-            cached = cache.get(candidate.clip_id)
-            if cached is None or cached[0] is not candidate:
-                cached = cache[candidate.clip_id] = (candidate, clip_payload(candidate))
-            payloads.append({
-                **cached[1], "likely_keep": score,
-                "suggested_title": self._title_suggestions.get(candidate.clip_id),
-            })
+        payloads = [self._payload(candidate, score) for candidate, score in zip(session.candidates, scores)]
         if len(cache) > len(payloads) + 100:
             current = {c.clip_id for c in session.candidates}
             for clip_id in [key for key in cache if key not in current]:
                 del cache[clip_id]
         return payloads
 
+    def _payload(self, candidate: ClipCandidate, score: float | None) -> dict:
+        cached = self._payload_cache.get(candidate.clip_id)
+        if cached is None or cached[0] is not candidate:
+            cached = self._payload_cache[candidate.clip_id] = (candidate, clip_payload(candidate))
+        return {**cached[1], "likely_keep": score, "suggested_title": self._title_suggestions.get(candidate.clip_id)}
+
+    def _counts(self, session: Session | None) -> dict[str, int]:
+        counts = {name: 0 for name in ("pending", "group1", "group2", "exported", "rejected", "unsure")}
+        for candidate in session.candidates if session else []:
+            counts[candidate.status] += 1
+        return counts
+
+    def _delta(self) -> dict:
+        """Only what the latest change touched, for fast updates of a loaded session."""
+        with self._lock:
+            session = self._ready()
+            scores = dict(zip((c.clip_id for c in session.candidates), self._scores(session)))
+            present = {c.clip_id: c for c in session.candidates}
+            return {
+                "delta": True,
+                "revision": session.revision,
+                "counts": self._counts(session),
+                "can_undo": bool(self.store and self.store.can_undo()),
+                "clips": [self._payload(present[i], scores[i]) for i in sorted(self._last_changed) if i in present],
+                "removed": sorted(i for i in self._last_changed if i not in present),
+            }
+
     def snapshot(self) -> dict:
         with self._lock:
             session = self.session
-            counts = {name: 0 for name in ("pending", "group1", "group2", "exported", "rejected", "unsure")}
-            if session is not None:
-                for candidate in session.candidates:
-                    counts[candidate.status] += 1
+            counts = self._counts(session)
             return {
                 "audio": str(self.audio) if self.audio else None,
                 "audio_name": self.audio.name if self.audio else None,
@@ -935,25 +956,27 @@ class SessionService:
     def _mutate(
         self, operation: Callable[[Session], object], events: list[dict] | None = None, *,
         label: str | None = None, undo_group: str | None = None, undoable: bool | None = None,
-        undoes: list[int] | None = None,
+        undoes: list[int] | None = None, delta: bool = False,
     ) -> tuple[dict, object]:
         """Apply ``operation`` to a copy of the session and save it with ``events``.
 
         ``events`` may be filled in by ``operation``. The change is undoable when it
-        has a label (by default) and actually changed a clip.
+        has a label (by default) and actually changed a clip. With ``delta`` the
+        response holds only the touched clips instead of the full snapshot.
         """
         with self._lock:
             current = self._ready()
             draft = current.copy_for_edit()
             result = operation(draft)
             before = self._changed_clips(current, draft)
+            self._last_changed = set(before)
             if not before and not events:
-                return self.snapshot(), result
+                return (self._delta() if delta else self.snapshot()), result
             undo = bool(before) and (undoable if undoable is not None else label is not None)
             self._commit(lambda store, d: store.commit(
                 d, before, list(events or []), label=label, undo_group=undo_group, undoable=undo, undoes=undoes,
             ), draft)
-            return self.snapshot(), result
+            return (self._delta() if delta else self.snapshot()), result
 
     def _save_measurements(self, operation: Callable[[Session], None]) -> None:
         with self._lock:
@@ -978,7 +1001,7 @@ class SessionService:
         self, clip_id: str, expected_revision: int, *,
         status: str | None = None, title: str | None = None,
         start_ms: int | None = None, end_ms: int | None = None,
-        context: object = None,
+        context: object = None, delta: bool = False,
     ) -> dict:
         if all(value is None for value in (status, title, start_ms, end_ms)):
             raise InvalidEdit("No clip change provided")
@@ -1022,12 +1045,12 @@ class SessionService:
                 candidate.start = seconds_to_ffmpeg_timestamp(start / 1000)
                 candidate.duration = f"{(end - start) / 1000:.3f}"
 
-        snapshot, _ = self._mutate(change, events, label=clip_id)
-        if title is not None:
-            with self._lock:
-                if self._title_suggestions.get(clip_id) == title.strip():
-                    self._set_title_suggestion(clip_id, None)
-                    snapshot = self.snapshot()
+        with self._lock:
+            snapshot, _ = self._mutate(change, events, label=clip_id, delta=delta)
+            if title is not None and self._title_suggestions.get(clip_id) == title.strip():
+                self._set_title_suggestion(clip_id, None)
+                self._last_changed = {clip_id}
+                snapshot = self._delta() if delta else self.snapshot()
         self._prewarm_grouped_clip(clip_id)
         return snapshot
 
@@ -1052,7 +1075,7 @@ class SessionService:
         except Exception:
             logger.exception("Could not prewarm export preview for clip %s", clip_id)
 
-    def duplicate(self, clip_id: str, expected_revision: int, context: object = None) -> dict:
+    def duplicate(self, clip_id: str, expected_revision: int, context: object = None, delta: bool = False) -> dict:
         def change(session: Session) -> str:
             duplicate = session.duplicate_candidate(clip_id)
             if duplicate is None:
@@ -1066,11 +1089,13 @@ class SessionService:
             events.append({"type": "duplicate", "clip": clip_id, "created": created, **clean_context(context)})
             return created
 
-        snapshot, result = self._mutate(change_and_log, events, label=clip_id)
+        snapshot, result = self._mutate(change_and_log, events, label=clip_id, delta=delta)
         snapshot["created_clip_id"] = result
         return snapshot
 
-    def bulk_reject(self, clip_ids: list[str], expected_revision: int, context: object = None) -> dict:
+    def bulk_reject(
+        self, clip_ids: list[str], expected_revision: int, context: object = None, delta: bool = False,
+    ) -> dict:
         if not clip_ids:
             raise InvalidEdit("Select at least one clip")
         if len(set(clip_ids)) != len(clip_ids):
@@ -1094,11 +1119,11 @@ class SessionService:
                 events.append({"type": "bulk-reject", "clips": changed, **clean_context(context)})
             return changed
 
-        snapshot, changed = self._mutate(change_and_log, events, label="Reject clips")
+        snapshot, changed = self._mutate(change_and_log, events, label="Reject clips", delta=delta)
         snapshot["changed_clip_ids"] = changed
         return snapshot
 
-    def undo(self, expected_revision: int, context: object = None) -> dict:
+    def undo(self, expected_revision: int, context: object = None, delta: bool = False) -> dict:
         """Revert the latest undoable change (a whole background run counts as one)."""
         with self._lock:
             self._ready()
@@ -1121,7 +1146,7 @@ class SessionService:
                 "type": "undo", "label": label, "targets": seqs,
                 "restored": {clip_id: old.status if old else None for clip_id, old in restored.items()},
                 **clean_context(context),
-            }], undoable=False, undoes=seqs)[0]
+            }], undoable=False, undoes=seqs, delta=delta)[0]
 
     def merge_preview(self) -> dict | None:
         with self._lock:
