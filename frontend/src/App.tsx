@@ -88,7 +88,7 @@ const filters: { key: Filter; label: string }[] = [
 
 const labels: Record<Status, string> = {
   pending: "Unsorted", group1: "Group 1", group2: "Group 2",
-  exported: "Exported", rejected: "Rejected",
+  exported: "Exported", rejected: "Rejected", unsure: "Unsure",
 };
 
 const allOrders: { key: AllOrder; label: string }[] = [
@@ -1242,7 +1242,7 @@ export default function App() {
                   <select id="clip-status" value={selected.status} disabled={busy}
                     onChange={(event) => dispatchReviewAction({ type: "set-status", status: event.target.value as Status })}
                     className="appearance-none rounded-lg border line bg-[#22312a] py-2 pl-3 pr-9 text-[#e7eee7] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b4e2b6]">
-                    {(["group1", "group2", "rejected", "pending"] as Status[]).map((status) =>
+                    {(["group1", "group2", "unsure", "rejected", "pending"] as Status[]).map((status) =>
                       <option key={status} value={status}>{labels[status]}</option>)}
                     {selected.status === "exported" && <option value="exported">Exported</option>}
                   </select>
@@ -1252,7 +1252,7 @@ export default function App() {
                   </svg>
                 </span>
                 <span className="subtle inline-flex flex-wrap items-center gap-1.5 text-xs">
-                  Choose Group 1 <ShortcutBadge keyboard="1" bindingId="group1" />, Group 2 <ShortcutBadge keyboard="2" bindingId="group2" />, or Rejected <ShortcutBadge keyboard="X" bindingId="rejected" />
+                  Choose Group 1 <ShortcutBadge keyboard="1" bindingId="group1" />, Group 2 <ShortcutBadge keyboard="2" bindingId="group2" />, Unsure <ShortcutBadge keyboard="3" bindingId="unsure" />, or Rejected <ShortcutBadge keyboard="X" bindingId="rejected" />
                 </span>
               </div>
               <WaveformEditor key={selected.clip_id} clip={selected}

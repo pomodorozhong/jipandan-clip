@@ -1,4 +1,4 @@
-export type Status = "pending" | "group1" | "group2" | "exported" | "rejected";
+export type Status = "pending" | "group1" | "group2" | "exported" | "rejected" | "unsure";
 
 export interface Clip {
   clip_id: string;

@@ -434,8 +434,13 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(rejected.status_code, 200)
         self.assertEqual(rejected.json()["changed_clip_ids"], ["1", "2"])
         self.assertEqual(rejected.json()["counts"]["rejected"], 2)
+        unsure = self.client.patch("/api/clips/1", json={"expected_revision": 2, "status": "unsure"},
+                                   headers=self.headers)
+        self.assertEqual(unsure.status_code, 200, unsure.text)
+        self.assertEqual((unsure.json()["counts"]["unsure"], unsure.json()["counts"]["rejected"]), (1, 1))
+        self.client.post("/api/session/undo", json={"expected_revision": 3}, headers=self.headers)
         undone = self.client.post(
-            "/api/session/undo", json={"expected_revision": 2}, headers=self.headers,
+            "/api/session/undo", json={"expected_revision": 4}, headers=self.headers,
         )
         self.assertEqual(undone.json()["counts"]["pending"], 2)
 

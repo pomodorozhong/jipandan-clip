@@ -848,7 +848,7 @@ class SessionService:
     def snapshot(self) -> dict:
         with self._lock:
             session = self.session
-            counts = {name: 0 for name in ("pending", "group1", "group2", "exported", "rejected")}
+            counts = {name: 0 for name in ("pending", "group1", "group2", "exported", "rejected", "unsure")}
             if session is not None:
                 for candidate in session.candidates:
                     counts[candidate.status] += 1
@@ -965,7 +965,7 @@ class SessionService:
     ) -> dict:
         if all(value is None for value in (status, title, start_ms, end_ms)):
             raise InvalidEdit("No clip change provided")
-        if status is not None and status not in {"pending", "group1", "group2", "rejected"}:
+        if status is not None and status not in {"pending", "group1", "group2", "rejected", "unsure"}:
             raise InvalidEdit("Invalid status")
         if title is not None and not title.strip():
             raise InvalidEdit("Title cannot be empty")

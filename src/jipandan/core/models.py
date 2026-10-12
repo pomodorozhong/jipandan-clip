@@ -18,7 +18,8 @@ from jipandan.core.srt import (
 )
 from jipandan.core.paths import default_export_dir
 
-ClipStatus = Literal["pending", "group1", "group2", "exported", "rejected"]
+# "unsure" records a deliberate "can't decide", distinct from a clip nobody reviewed yet.
+ClipStatus = Literal["pending", "group1", "group2", "exported", "rejected", "unsure"]
 # Version 3 starts the review-log era ("rejected" status, measurement versions);
 # older files are refused rather than migrated.
 SESSION_VERSION = 3
