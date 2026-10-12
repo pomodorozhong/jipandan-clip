@@ -48,6 +48,8 @@ type AppSettings = {
   autoplayClips: boolean;
 };
 
+// Titles longer than this get a "Show full title" toggle under their two-line clamp.
+const LONG_TITLE_CHARS = 60;
 // A clip counts as viewed for the review log after this long on screen.
 const VIEW_MIN_MS = 1000;
 const VIEW_FLUSH_MS = 10_000;
@@ -233,6 +235,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
+  const [titleExpanded, setTitleExpanded] = useState(false);
   const [showClipMenu, setShowClipMenu] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [showHelp, setShowHelp] = useState(false);
@@ -613,7 +616,16 @@ export default function App() {
 
   useEffect(() => {
     detailScrollRef.current?.scrollTo(0, 0);
+    setTitleExpanded(false);
   }, [effectiveSelectedId]);
+
+  // Keep the selected row visible when keyboard/gamepad navigation or a reorder moves it (#29).
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      clipListRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [effectiveSelectedId, effectiveOrder, filter]);
 
   useEffect(() => { setShowExportModal(false); }, [session?.audio]);
 
@@ -1143,7 +1155,9 @@ export default function App() {
           <div ref={clipListRef} className="panel-scroll min-h-0 flex-1 overflow-auto" role="listbox" aria-label="Clips">
             {visible.length === 0 ? <p className="subtle px-5 py-8 text-sm">No clips match this view.</p> : visible.map((clip) => {
               const changed = clip.start_ms !== clip.original_start_ms || clip.end_ms !== clip.original_end_ms;
+              // One tab stop for the whole list: only the selected row is focusable; J/K and arrows move (#29).
               return <button key={clip.clip_id} type="button" role="option" aria-selected={clip.clip_id === effectiveSelectedId}
+                tabIndex={clip.clip_id === effectiveSelectedId ? 0 : -1}
                 data-selected={clip.clip_id === effectiveSelectedId} onClick={() => { setSelectedId(clip.clip_id); setShowDetailMobile(true); }}
                 className="clip-row flex w-full items-start gap-3 border-b border-[#29362f] px-4 py-3 text-left transition-colors md:px-5">
                 {filter === "all" && <span className={`status-dot status-${clip.status} mt-2`} aria-hidden="true" />}
@@ -1190,7 +1204,15 @@ export default function App() {
                 <ActionButton onClick={() => void saveTitle()} disabled={busy || !titleDraft.trim()} tone="accent">Save</ActionButton>
                 <ActionButton onClick={() => setEditingTitle(false)}>Cancel</ActionButton>
               </div> : <div className="flex flex-wrap items-start gap-3">
-                <h2 className="min-w-0 flex-1 break-words text-2xl font-semibold leading-snug">{selected.title}</h2>
+                <div className="min-w-0 flex-1">
+                  {/* Very long transcript titles are clamped so the waveform stays in view (#27). */}
+                  <h2 title={selected.title}
+                    className={`break-words text-2xl font-semibold leading-snug ${titleExpanded ? "" : "line-clamp-2"}`}>{selected.title}</h2>
+                  {selected.title.length > LONG_TITLE_CHARS && <button type="button" onClick={() => setTitleExpanded((open) => !open)}
+                    aria-expanded={titleExpanded} className="subtle mt-1 text-xs underline">
+                    {titleExpanded ? "Show less" : `Show full title (${selected.title.length} characters)`}
+                  </button>}
+                </div>
                 <div className="ml-auto flex shrink-0 items-center gap-1.5">
                   <button type="button" onClick={() => dispatchReviewAction({ type: "navigate", direction: "previous" })} disabled={selectedPosition <= 0}
                     aria-label="Previous clip (physical K key position)" title="Previous clip (physical K key position)"

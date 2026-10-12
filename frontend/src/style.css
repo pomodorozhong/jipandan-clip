@@ -18,6 +18,8 @@ input:focus-visible, button:focus-visible { outline: 2px solid #b4e2b6; outline-
 .subtle { color: #9eafa3; }
 .accent { color: #b9e0b8; }
 .line { border-color: #34423b; }
+/* Let the browser skip layout and paint for off-screen rows in long lists (#29). */
+.clip-row { content-visibility: auto; contain-intrinsic-size: auto 52px; }
 .clip-row:hover { background: #283b30; }
 .clip-row[data-selected="true"] { background: #344b39; box-shadow: inset 3px 0 0 #cce7a9; }
 .status-dot { width: .45rem; height: .45rem; border-radius: 50%; flex: none; }
