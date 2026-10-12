@@ -18,6 +18,17 @@ from jipandan.web.service import InvalidEdit, RevealUnavailable, SessionConflict
 from jipandan.web.waveform import WaveformDecodeError
 
 
+class SessionJSON(JSONResponse):
+    """Session snapshots encoded with the C JSON encoder.
+
+    Returning a Response skips FastAPI's per-value encoding, which took most of the
+    time of every decision on recordings with thousands of clips.
+    """
+
+    def render(self, content: object) -> bytes:
+        return json.dumps(content, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
 class OpenAudio(BaseModel):
     path: str
 
@@ -143,11 +154,11 @@ def create_app(
 
     @app.get("/api/session")
     def get_session():
-        return app.state.service.snapshot()
+        return SessionJSON(app.state.service.snapshot())
 
     @app.patch("/api/session/storage")
     def update_storage(request: StorageRequest):
-        return app.state.service.set_export_dir(request.clip_dir, request.expected_revision)
+        return SessionJSON(app.state.service.set_export_dir(request.clip_dir, request.expected_revision))
 
     @app.get("/api/session/storage/default")
     def default_storage():
@@ -184,7 +195,7 @@ def create_app(
     @app.post("/api/session/open")
     def open_session(request: OpenAudio):
         try:
-            return app.state.service.open_audio(Path(request.path))
+            return SessionJSON(app.state.service.open_audio(Path(request.path)))
         except (FileNotFoundError, PermissionError) as exc:
             raise HTTPException(status_code=404, detail="Audio file is unavailable") from exc
         except (OSError, ValueError) as exc:
@@ -193,7 +204,7 @@ def create_app(
     @app.post("/api/session/upload")
     def upload_session(file: UploadFile = File(...)):
         try:
-            return app.state.service.import_audio(file.filename or "", file.file)
+            return SessionJSON(app.state.service.import_audio(file.filename or "", file.file))
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=f"Cannot import audio: {exc}") from exc
         finally:
@@ -205,29 +216,29 @@ def create_app(
 
     @app.post("/api/session/merge")
     def merge(request: MergeRequest):
-        return app.state.service.apply_merge(
+        return SessionJSON(app.state.service.apply_merge(
             request.expected_revision, request.srt_fingerprint, request.remove_indexes
-        )
+        ))
 
     @app.patch("/api/clips/{clip_id}")
     def patch_clip(clip_id: str, request: ClipPatch):
-        return app.state.service.patch_clip(
+        return SessionJSON(app.state.service.patch_clip(
             clip_id, request.expected_revision, status=request.status,
             title=request.title, start_ms=request.start_ms, end_ms=request.end_ms,
             context=request.context,
-        )
+        ))
 
     @app.post("/api/clips/{clip_id}/duplicate")
     def duplicate(clip_id: str, request: RevisionRequest):
-        return app.state.service.duplicate(clip_id, request.expected_revision, request.context)
+        return SessionJSON(app.state.service.duplicate(clip_id, request.expected_revision, request.context))
 
     @app.post("/api/clips/bulk-reject")
     def bulk_reject(request: BulkReject):
-        return app.state.service.bulk_reject(request.clip_ids, request.expected_revision, request.context)
+        return SessionJSON(app.state.service.bulk_reject(request.clip_ids, request.expected_revision, request.context))
 
     @app.post("/api/session/undo")
     def undo(request: RevisionRequest):
-        return app.state.service.undo(request.expected_revision, request.context)
+        return SessionJSON(app.state.service.undo(request.expected_revision, request.context))
 
     @app.post("/api/review-log")
     def record_review_events(request: ReviewEvents):
@@ -300,7 +311,7 @@ def create_app(
 
     @app.delete("/api/clips/{clip_id}/suggested-title")
     def dismiss_title_suggestion(clip_id: str):
-        return app.state.service.dismiss_title_suggestion(clip_id)
+        return SessionJSON(app.state.service.dismiss_title_suggestion(clip_id))
 
     @app.post("/api/previews")
     def start_preview(request: PreviewRequest):
@@ -322,7 +333,7 @@ def create_app(
 
     @app.post("/api/exports")
     def publish_export(request: ExportRequest):
-        return app.state.service.publish_export(request.preview_id, request.expected_revision, request.context)
+        return SessionJSON(app.state.service.publish_export(request.preview_id, request.expected_revision, request.context))
 
     @app.post("/api/clips/{clip_id}/reveal-export")
     def reveal_export(clip_id: str):
