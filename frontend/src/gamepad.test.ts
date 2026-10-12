@@ -292,6 +292,18 @@ describe("gamepad adapter", () => {
     expect(findGamepadBindingConflict({ ...defaults, replay: 0, "play-pause": 0 }, "play-pause", 0)).toBe("replay");
   });
 
+  it("dispatches only the binding for the current context when a control is shared", () => {
+    const config = { ...defaultGamepadBindingConfig(), "candidate-replay": 0 };
+    const { adapter, gamepads, actions } = createHarness(() => bindingsForGamepadConfig(config));
+    const gamepad = fakeGamepad();
+    gamepads.push(gamepad);
+    adapter.setContext("review");
+    adapter.poll(0);
+    press(gamepad, 0, true);
+    adapter.poll(1);
+    expect(actions).toEqual([{ type: "playback", target: "clip", mode: "replay" }]);
+  });
+
   it("uses standard controller focus and confirm conventions in dialogs", () => {
     const { adapter, gamepads, actions } = createHarness();
     const gamepad = fakeGamepad();

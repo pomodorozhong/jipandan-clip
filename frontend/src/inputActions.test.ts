@@ -238,6 +238,22 @@ describe("keyboard action routing", () => {
     });
   });
 
+  it("keeps shortcuts working while a button has focus, except Enter", () => {
+    const onButton = (code: string, extra: Partial<KeyboardInput> = {}) => input({ code, targetInteractive: true, ...extra });
+    expect(resolveKeyboardAction("waveform", onButton("Comma"), "review")).toEqual({
+      type: "nudge", edge: "start", amount: -10, source: "keyboard",
+    });
+    expect(resolveKeyboardAction("waveform", onButton("BracketRight", { shiftKey: true }), "review")).toEqual({
+      type: "nudge", edge: "end", amount: 100, source: "keyboard",
+    });
+    expect(resolveKeyboardAction("export", onButton("KeyQ"), "active-dialog")).toEqual({
+      type: "playback", target: "reference", mode: "replay",
+    });
+    expect(resolveKeyboardAction("export", onButton("KeyA"), "active-dialog")).toEqual({ type: "export-mode", mode: "as_is" });
+    expect(resolveKeyboardAction("export", onButton("Enter", { key: "Enter" }), "active-dialog")).toBeNull();
+    expect(resolveKeyboardAction("waveform", input({ code: "Comma", targetEditable: true }), "review")).toBeNull();
+  });
+
   it("deactivates text editing without closing its parent context", () => {
     const escape = input({ key: "Escape", code: "Escape", targetEditable: true, targetTextEditing: true });
     expect(resolveKeyboardAction("review", escape, "text-editing")).toEqual({ type: "deactivate-text-editing" });
