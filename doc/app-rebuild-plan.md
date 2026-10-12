@@ -1,6 +1,6 @@
 # App rebuild plan
 
-Status (2026-10-13): step 1 is complete. Step 2 is in owner review: review findings are being fixed, and a UI consistency pass comes before step 3. Work is on the `rebuild/event-store` branch, which is built on `feat/review-log`. The branch is not pushed or opened as a PR yet. Each step is judged by the owner in the real app before the next one starts. Use the [step 2 review guide](app-rebuild-step-2-review.md) for the current checkpoint.
+Status (2026-10-13): step 1 is complete. Step 2 is merged and in owner review, and a UI consistency pass comes before step 3. Steps 1–2 were merged to `main` as [#34](https://github.com/pomodorozhong/jipandan-clip/pull/34)–[#39](https://github.com/pomodorozhong/jipandan-clip/pull/39). Each step is judged by the owner in the real app before the next one starts. Use the [step 2 review guide](app-rebuild-step-2-review.md) for the current checkpoint.
 
 ## Outcome and scope
 
@@ -23,19 +23,19 @@ Old `.jipandan.json` sessions are intentionally not converted. Work from them is
 
 ### Step 1: event store and Triage (done)
 
-- Each recording is stored in `<recording>.jipandan.db`: current clip state plus an append-only event log with undo information. It replaces `.jipandan.json` and the separate review log, and undo history survives restarts (`4859313`).
-- Session snapshots use the C JSON encoder, and edits return only the changed clips (`053bcfa`, `4d944a4`).
-- Triage is gamepad-first, with autoplay, Unsure, and Reject (`bc2d197`). It explains when the browser blocks sound and confirms undo (`b4a07a0`).
-- Gamepad bindings fire only in their own context, so a control bound in both review and a dialog no longer has its review action shadowed (`fc72f1a`).
+- Each recording is stored in `<recording>.jipandan.db`: current clip state plus an append-only event log with undo information. It replaces `.jipandan.json` and the separate review log, and undo history survives restarts ([#37](https://github.com/pomodorozhong/jipandan-clip/pull/37)).
+- Session snapshots use the C JSON encoder, and edits return only the changed clips ([#37](https://github.com/pomodorozhong/jipandan-clip/pull/37)).
+- Triage is gamepad-first, with autoplay, Unsure, and Reject ([#36](https://github.com/pomodorozhong/jipandan-clip/pull/36), [#38](https://github.com/pomodorozhong/jipandan-clip/pull/38)). It explains when the browser blocks sound and confirms undo.
+- Gamepad bindings fire only in their own context, so a control bound in both review and a dialog no longer has its review action shadowed ([#34](https://github.com/pomodorozhong/jipandan-clip/pull/34)).
 
 ### Step 2: previews and Publish (in owner review)
 
 Done:
 
-- Previews and exports seek straight to each clip (0.5 s pre-roll, verified once per file) without losing sample accuracy (`724e3cd`).
-- Publish stage for the Group 2 queue, with an inline export panel, an editable export title, and `,` `.` `[` `]` nudges that update the previews (`da573c4`).
+- Previews and exports seek straight to each clip (0.5 s pre-roll, verified once per file) without losing sample accuracy ([#35](https://github.com/pomodorozhong/jipandan-clip/pull/35)).
+- Publish stage for the Group 2 queue, with an inline export panel, an editable export title, and `,` `.` `[` `]` nudges that update the previews ([#39](https://github.com/pomodorozhong/jipandan-clip/pull/39)).
 
-Committed on 2026-10-13 (`cbe5de4`, `e8b75d5`, `40afb6a`, `fed576c`):
+Added on 2026-10-13 ([#39](https://github.com/pomodorozhong/jipandan-clip/pull/39)):
 
 - The original waveform shades the audio removed by the rendered candidate, including middle cuts in Trim all. Geometry is derived from FFmpeg's retained PCM and cached with the render; obsolete geometry is hidden while settings change. The ruler uses decoded duration instead of MP3 container padding. Mapping failure leaves playback available with an explicit message.
 - Publish has Ready and Exported lists. The latter includes clips with a saved file even if their current status changes. Export mode and thresholds stay in use across the ready queue; inspecting an export starts with its saved settings.
@@ -43,7 +43,7 @@ Committed on 2026-10-13 (`cbe5de4`, `e8b75d5`, `40afb6a`, `fed576c`):
 - Publish has its own controller context. Explicit export bindings take priority over shared review controls; remaining navigation and trim controls work, and the review replay control plays the candidate. Start/End selects the boundary for mapped selected-boundary nudges.
 - Polish opens the Group 1 queue and gives the waveform more space. Edit title and Ready for Publish are primary actions; preview/export and duplicate remain in the secondary menu. Completing the last clip returns the narrow layout to its list.
 
-Owner review fixes on 2026-10-13 (`873f618`, `69b3de1`, `b18aed5`, `7fc9491`, `b4fb6cd`, `fa6ee40`, `7110acc`, `3b23a83`):
+Owner review fixes on 2026-10-13 ([#39](https://github.com/pomodorozhong/jipandan-clip/pull/39); the focus policy is [#34](https://github.com/pomodorozhong/jipandan-clip/pull/34)):
 
 - Publish keeps one editable waveform. The As is reference is a play-only render of the clip, as in Polish's export dialog. The candidate shows the original timeline with removed audio shaded, pans and extends only within 5 s of the clip, and plays nearby original audio when clicked outside the clip. Showing the recording twice, panning separately, was too much to work with.
 - Waveforms keep their height scale while previews re-render after an edit, and the view stays put through a trim.

@@ -2,6 +2,10 @@
 
 See the [project README](../README.md) for installation, commands, and testing.
 
+## Reference
+
+- [Architecture](architecture.md): how the browser, server, SQLite store, FFmpeg, and Whisper fit together.
+
 ## Active plans
 
 - [App rebuild plan](app-rebuild-plan.md): the staged rebuild (event store, Triage, Publish), with progress and remaining work.
