@@ -1025,12 +1025,20 @@ export default function App() {
     unboundBehavior={settings.unboundBadgeBehavior} bindings={mode === "publish" && reviewContext !== "active-dialog"
       ? publishGamepadBindings(gamepadBindingConfig) : configuredGamepadBindings}>
   <div className={`flex flex-col ${session?.audio && mode !== "publish" ? "h-dvh min-h-0 overflow-hidden" : "min-h-screen"}`}>
-    <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b line px-4 py-3 md:px-7">
-      <div className="flex items-center gap-3">
-        <div aria-hidden="true" className="flex size-9 items-center justify-center rounded-xl bg-[#b7d69d] text-xl font-bold text-[#263c2b]">J</div>
-        <div>
-          <div className="font-semibold tracking-wide">Jipandan <span className="subtle font-normal">/ clip review</span></div>
-          <div className="subtle text-xs">Local workspace · {session?.audio_name ?? "No audio open"}</div>
+    <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b line px-4 py-2 md:px-7">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <div aria-hidden="true" className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-[#b7d69d] text-base font-bold text-[#263c2b]">J</div>
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+          <span className="font-semibold tracking-wide">Jipandan</span>
+          {/* The session and export paths are rarely needed, so they live in this tooltip. */}
+          <span className="subtle min-w-0 truncate text-sm" title={session?.audio
+            ? `Session: ${session.session_path ?? "Not created"}\nExports: ${session.clip_dir}` : undefined}>
+            {session?.audio_name ?? "No audio open"}
+          </span>
+          {session?.audio && !session.needs_transcription && <span className="subtle text-xs">
+            <span className="mono">{formatDuration(session.duration_ms ?? 0)}</span> · {session.srt_exists
+              ? "SRT found" : <span className="text-[#ead49b]">SRT missing</span>}
+          </span>}
         </div>
       </div>
       <div className="flex items-center gap-3 text-sm">
@@ -1115,12 +1123,6 @@ export default function App() {
       </label>
       <p className="subtle mt-4 text-sm">You can also launch directly with <code className="accent">uv run jipandan-web /path/to/audio.mp3</code>.</p>
     </main> : <>
-      <div className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-1 border-b line px-4 py-2 text-xs md:px-7">
-        <span><span className="subtle">Duration</span> <span className="mono">{formatDuration(session.duration_ms ?? 0)}</span></span>
-        <span><span className="subtle">SRT</span> {session.srt_exists ? "Found" : "Missing"}</span>
-        <span className="hidden min-w-0 truncate lg:inline"><span className="subtle">Session</span> {session.session_path ?? "Not created"}</span>
-        <span className="hidden min-w-0 truncate xl:inline"><span className="subtle">Exports</span> {session.clip_dir}</span>
-      </div>
       {hasMergeChanges && <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[#7c6845] bg-[#3c3525] px-4 py-2 text-sm md:px-7">
         <span>The SRT changed since this session was saved. Your reviewed clips are still here.</span>
         <ActionButton onClick={() => setShowMerge(true)}>Review SRT changes</ActionButton>
