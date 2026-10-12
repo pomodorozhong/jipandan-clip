@@ -313,6 +313,12 @@ export function isActionAvailable(action: InputAction, availability: InputAvaila
   }
 }
 
+/**
+ * Focus policy: shortcuts work wherever focus is, except in text fields and
+ * during IME composition. A focused button keeps only Enter, which activates
+ * it; Space always drives playback rather than re-clicking the last button.
+ * Clicking a button therefore never disables the keyboard shortcuts.
+ */
 export function resolveKeyboardAction(
   surface: InputSurface,
   input: KeyboardInput,
@@ -355,12 +361,9 @@ function resolveReviewAction(input: KeyboardInput, context: InputContext): Input
 
 function resolveWaveformAction(input: KeyboardInput, context: InputContext): InputAction | null {
   if (context !== "review" || input.targetEditable || input.altKey || input.ctrlKey || input.metaKey) return null;
-  // Space always drives playback, even when a button has focus; otherwise the
-  // browser would activate whichever button was last clicked.
   if (input.code === "Space") {
     return actionForShortcut(input.shiftKey ? "play-pause" : "replay", "keyboard");
   }
-  if (input.targetInteractive) return null;
   const edge = input.code === "BracketLeft" || input.code === "BracketRight" ? "end"
     : input.code === "Comma" || input.code === "Period" ? "start" : null;
   if (!edge) return null;
@@ -386,7 +389,6 @@ function resolveExportAction(input: KeyboardInput, context: InputContext): Input
   if (input.code === "Space") {
     return actionForShortcut(input.shiftKey ? "candidate-play-pause" : "candidate-replay", "keyboard");
   }
-  if (input.targetInteractive) return null;
   if (isCode(input, "KeyQ")) {
     return actionForShortcut(input.shiftKey ? "reference-play-pause" : "reference-replay", "keyboard");
   }
