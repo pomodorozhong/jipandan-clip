@@ -37,14 +37,27 @@ function peak(waveform: WaveformWindow | null): number {
   return result;
 }
 
+const nudgeSteps = [-100, -10, 10, 100];
+
+/**
+ * Compare the original clip with its rendered export and publish it. Shown as a
+ * dialog from Polish, or ``inline`` as the Publish stage's main panel, where
+ * ``onNudge`` adds timing fixes so a clip never has to go back to Polish.
+ */
 export default function ExportPreview({ clip, revision, open, nextClipId, onClose, onPublished,
-  gamepadAction, onGamepadActionHandled, controllerHandlerRef }: {
+  gamepadAction, onGamepadActionHandled, controllerHandlerRef, inline = false, onNudge, nudgeDisabled = false,
+  exportContext }: {
   clip: Clip; revision: number; open: boolean; onClose: () => void;
   nextClipId: string | null;
   onPublished: (session: Session, advance: boolean) => void;
   gamepadAction?: GamepadActionRequest | null;
   onGamepadActionHandled?: (id: number) => void;
   controllerHandlerRef: React.MutableRefObject<((action: InputAction) => void) | null>;
+  inline?: boolean;
+  onNudge?: (edge: "start" | "end", amountMs: number) => void;
+  nudgeDisabled?: boolean;
+  /** Ranking context recorded with the export in the review history. */
+  exportContext?: object;
 }) {
   const [mode, setMode] = useState<ExportMode>("trim_edges");
   const [startDb, setStartDb] = useState("-40");
@@ -157,7 +170,7 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
     setExportError("");
     try {
       const result = await api<Session>("/exports", "POST", {
-        preview_id: job.id, expected_revision: revision,
+        preview_id: job.id, expected_revision: revision, context: exportContext,
       });
       setOutputPath(result.output_path ?? "");
       onPublished(result, advance);
@@ -167,7 +180,7 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
       exportInFlight.current = false;
       setExporting(false);
     }
-  }, [candidateReady, job, exporting, requesting, nextClipId, revision, onPublished]);
+  }, [candidateReady, job, exporting, requesting, nextClipId, revision, onPublished, exportContext]);
 
   async function reveal() {
     setExportError("");
@@ -217,7 +230,7 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
   }
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || inline) return;
     const handler = (action: InputAction) => {
       const root = dialogRef.current;
       if (!root) return;
@@ -253,7 +266,7 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
     return () => {
       if (controllerHandlerRef.current === handler) controllerHandlerRef.current = null;
     };
-  }, [controllerHandlerRef, onClose, open]);
+  }, [controllerHandlerRef, onClose, open, inline]);
 
   useEffect(() => {
     if (!open || !gamepadAction || handledGamepadAction.current === gamepadAction.id) return;
@@ -330,7 +343,17 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
     if (!open) return;
     function onKeyDown(event: KeyboardEvent) {
       const input = keyboardInputFromEvent(event);
+      if (onNudge && !nudgeDisabled) {
+        // Publish reuses Polish's nudge keys: , . for the start and [ ] for the end (Shift for 100 ms).
+        const nudge = resolveKeyboardAction("waveform", input, "review");
+        if (nudge?.type === "nudge" && shouldDispatchAction(nudge, input)) {
+          event.preventDefault();
+          onNudge(nudge.edge, nudge.amount);
+          return;
+        }
+      }
       const action = resolveKeyboardAction("export", input, "active-dialog");
+      if (inline && action?.type === "dialog-close") return;
       if (!action || !shouldDispatchAction(action, input)) return;
       if (action.type === "deactivate-text-editing") {
         event.preventDefault();
@@ -372,24 +395,7 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
         : "Preparing the As is reference…";
   const difference = candidateDuration - referenceDuration;
 
-  return <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#07100be0] p-2 sm:p-5"
-    role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <section ref={dialogRef} role="dialog" aria-modal="true" aria-label={`Export preview for clip ${clip.clip_id}`} tabIndex={-1}
-      className="surface panel-scroll flex max-h-[95dvh] w-full max-w-[1100px] flex-col overflow-y-auto rounded-2xl shadow-2xl">
-      <header className="flex items-center justify-between gap-4 border-b line px-4 py-4 sm:px-7">
-        <div className="min-w-0">
-          <p className="accent mono text-[11px] font-bold uppercase tracking-[.16em]">Export preview · Clip #{clip.clip_id}</p>
-          <h2 className="mt-1 break-words text-xl font-semibold">{clip.title}</h2>
-        </div>
-        <div className="flex shrink-0 items-center gap-4">
-          <span className="subtle hidden text-xs sm:block">Compare the original clip with your export</span>
-          <button type="button" onClick={() => dispatchAction({ type: "dialog-close" })} aria-label="Close export preview (Esc)"
-            className="subtle inline-flex items-center gap-1.5 rounded-lg px-1 py-1 text-xl hover:bg-[#283b30]">
-            <span aria-hidden="true">×</span><ShortcutBadge keyboard="Esc" bindingId="dialog-close" />
-          </button>
-        </div>
-      </header>
-
+  const settingsPanel = <>
       <div className="border-b line bg-[#1b2821] px-4 py-4 sm:px-7">
         <h3 className="subtle text-[11px] font-bold uppercase tracking-[.15em]">Export settings</h3>
         <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2">
@@ -433,6 +439,8 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
         {error && <p role="alert" className="mt-2 text-xs text-[#ffb3a8]">{error}</p>}
       </div>
 
+  </>;
+  const comparePanel = <>
       <div className="px-4 py-4 sm:px-7">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <h3 className="subtle text-[11px] font-bold uppercase tracking-[.15em]">Compare audio</h3>
@@ -465,6 +473,8 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
         </div>
       </div>
 
+  </>;
+  const footerPanel = <>
       <footer className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-t line bg-[#17211d] px-4 py-4 sm:px-7">
         <div className="min-w-0 flex-1"><p className="subtle text-[10px] font-bold uppercase tracking-[.12em]">{outputPath ? "Exported file" : "Proposed filename"}</p>
           <p className="mt-1 break-all text-xs font-semibold">{outputPath || (job && !stale ? job.proposed_filename : "Filename updates with the preview")}</p>
@@ -493,6 +503,61 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
           </button>
         </div>
       </footer>
+  </>;
+
+  const timing = onNudge && <div className="border-b line px-4 py-3 sm:px-7">
+    <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
+      <h3 className="subtle text-[11px] font-bold uppercase tracking-[.15em]">Timing</h3>
+      {(["start", "end"] as const).map((edge) => <div key={edge} className="flex items-center gap-1.5" role="group"
+        aria-label={`Nudge ${edge}`}>
+        <span className="mr-1 font-medium capitalize">{edge}</span>
+        {nudgeSteps.map((amount) => <button key={amount} type="button" disabled={nudgeDisabled}
+          onClick={() => onNudge(edge, amount)}
+          title={`${edge === "start" ? "Start" : "End"} ${amount > 0 ? "+" : ""}${amount} ms (${Math.abs(amount) === 100 ? "Shift+" : ""}${
+            edge === "start" ? (amount < 0 ? "," : ".") : (amount < 0 ? "[" : "]")})`}
+          className="mono rounded-md bg-[#304538] px-2 py-1 hover:bg-[#3b5543] disabled:opacity-50">
+          {amount > 0 ? "+" : ""}{amount}
+        </button>)}
+      </div>)}
+      <span className="subtle">Keys , . start · [ ] end · Shift for 100 ms · previews update automatically</span>
+    </div>
+  </div>;
+
+  if (inline) {
+    return <section ref={dialogRef} aria-label={`Export clip ${clip.clip_id}`}
+      className="surface flex min-h-0 w-full flex-col overflow-y-auto rounded-2xl">
+      <header className="border-b line px-4 py-4 sm:px-7">
+        <p className="accent mono text-[11px] font-bold uppercase tracking-[.16em]">Publish · Clip #{clip.clip_id}</p>
+        <h2 className="mt-1 break-words text-xl font-semibold">{clip.title}</h2>
+      </header>
+      {settingsPanel}
+      {timing}
+      {comparePanel}
+      {footerPanel}
+    </section>;
+  }
+
+  return <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#07100be0] p-2 sm:p-5"
+    role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <section ref={dialogRef} role="dialog" aria-modal="true" aria-label={`Export preview for clip ${clip.clip_id}`} tabIndex={-1}
+      className="surface panel-scroll flex max-h-[95dvh] w-full max-w-[1100px] flex-col overflow-y-auto rounded-2xl shadow-2xl">
+      <header className="flex items-center justify-between gap-4 border-b line px-4 py-4 sm:px-7">
+        <div className="min-w-0">
+          <p className="accent mono text-[11px] font-bold uppercase tracking-[.16em]">Export preview · Clip #{clip.clip_id}</p>
+          <h2 className="mt-1 break-words text-xl font-semibold">{clip.title}</h2>
+        </div>
+        <div className="flex shrink-0 items-center gap-4">
+          <span className="subtle hidden text-xs sm:block">Compare the original clip with your export</span>
+          <button type="button" onClick={() => dispatchAction({ type: "dialog-close" })} aria-label="Close export preview (Esc)"
+            className="subtle inline-flex items-center gap-1.5 rounded-lg px-1 py-1 text-xl hover:bg-[#283b30]">
+            <span aria-hidden="true">×</span><ShortcutBadge keyboard="Esc" bindingId="dialog-close" />
+          </button>
+        </div>
+      </header>
+
+      {settingsPanel}
+      {comparePanel}
+      {footerPanel}
     </section>
   </div>;
 }

@@ -40,7 +40,8 @@ type AllStatusFilter = "all" | Status;
 type AllOrder = "clip-asc" | "clip-desc" | "start-asc" | "start-desc" | "title-asc" | "likely-desc";
 type SaveState = "saved" | "saving" | "failed";
 // Triage: one clip at a time for first-pass decisions. Polish: the list and editor for keepers.
-type Mode = "triage" | "polish";
+// Publish: the Group 2 queue with export previews, title, and timing fixes.
+type Mode = "triage" | "polish" | "publish";
 type AppSettings = {
   detectLeadingSilence: boolean;
   showOriginalStart: boolean;
@@ -366,7 +367,7 @@ export default function App() {
           filter?: Filter; selectedId?: string;
           allStatusFilter?: AllStatusFilter; allOrder?: AllOrder; mode?: Mode;
         };
-        setMode(preferences.mode === "polish" ? "polish" : "triage");
+        setMode(preferences.mode === "polish" || preferences.mode === "publish" ? preferences.mode : "triage");
         if (preferences.filter && filters.some((item) => item.key === preferences.filter)) {
           setFilter(preferences.filter);
         } else if (session.counts.pending === 0) setFilter("all");
@@ -539,10 +540,10 @@ export default function App() {
   }, []);
 
   const exploreSeed = session?.srt_fingerprint ?? null;
-  // Triage always works through the Unsorted queue in Likely keep order.
-  const activeFilter: Filter = mode === "triage" ? "unsorted" : filter;
-  const activeQuery = mode === "triage" ? "" : query;
-  const activeOrder: AllOrder = mode === "triage" ? "likely-desc" : allOrder;
+  // Triage works through the Unsorted queue in Likely keep order; Publish through Group 2 in clip order.
+  const activeFilter: Filter = mode === "triage" ? "unsorted" : mode === "publish" ? "group2" : filter;
+  const activeQuery = mode === "polish" ? query : "";
+  const activeOrder: AllOrder = mode === "triage" ? "likely-desc" : mode === "publish" ? "clip-asc" : allOrder;
   // Scores shift while clips are still being measured, so hold clip order until they settle.
   const likelyKeepPending = activeOrder === "likely-desc" && Boolean(session && !session.clip_features_complete);
   const effectiveOrder: AllOrder = likelyKeepPending ? "clip-asc" : activeOrder;
@@ -567,7 +568,7 @@ export default function App() {
   const rankingContext = useCallback((clip: Clip) => {
     const rank = visible.findIndex((item) => item.clip_id === clip.clip_id) + 1;
     return {
-      source: lastInputSourceRef.current, order: effectiveOrder, filter: mode === "triage" ? "triage" : activeFilter,
+      source: lastInputSourceRef.current, order: effectiveOrder, filter: mode === "polish" ? activeFilter : mode,
       rank: rank || undefined, score: clip.likely_keep ?? undefined,
       explore: effectiveOrder === "likely-desc" && settings.exploreRanking && exploreSeed !== null
         && isExploreClip(exploreSeed, clip.clip_id),
@@ -842,12 +843,15 @@ export default function App() {
         canUndo: Boolean(session?.can_undo && session.revision !== null),
         canDuplicate: Boolean(session && session.revision !== null && effectiveSelectedId),
       })) return;
+      // Publish shows the export panel itself: E picks the Trim edges mode there, and the
+      // title is edited in its export title field rather than Polish's rename box.
+      if (mode === "publish" && (action.type === "open-export" || action.type === "rename")) return;
       event.preventDefault();
       dispatchReviewAction(action);
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [reviewContext, busy, selected, session, effectiveSelectedId, dispatchReviewAction]);
+  }, [reviewContext, busy, selected, session, effectiveSelectedId, dispatchReviewAction, mode]);
 
   useEffect(() => { if (editingTitle) titleRef.current?.focus(); }, [editingTitle]);
 
@@ -1022,7 +1026,7 @@ export default function App() {
       <div className="flex items-center gap-3 text-sm">
         {session?.audio && !session.needs_transcription && <div role="group" aria-label="Stage"
           className="flex overflow-hidden rounded-lg border line bg-[#22312a] p-0.5">
-          {(["triage", "polish"] as Mode[]).map((item) => <button key={item} type="button" aria-pressed={mode === item}
+          {(["triage", "polish", "publish"] as Mode[]).map((item) => <button key={item} type="button" aria-pressed={mode === item}
             onClick={() => setMode(item)}
             className={`rounded-md px-3 py-1.5 font-medium capitalize ${mode === item ? "bg-[#b7d69d] text-[#1b291f]" : "hover:bg-[#304439]"}`}>
             {item}
@@ -1121,6 +1125,49 @@ export default function App() {
         onDecide={(status) => dispatchReviewAction({ type: "classify", status })}
         onNavigate={(direction) => dispatchReviewAction({ type: "navigate", direction })}
         onUndo={() => dispatchReviewAction({ type: "undo" })} />
+      : mode === "publish" ? <main className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-hidden p-4 md:grid-cols-[minmax(240px,28%)_1fr] md:p-5" aria-label="Publish">
+        <section className="surface flex min-h-0 flex-col overflow-hidden rounded-2xl" aria-label="Ready to publish">
+          <div className="border-b line px-4 py-3">
+            <h2 className="font-semibold">Ready to publish</h2>
+            <p className="subtle text-xs">{visible.length} in Group 2 · {session.counts.exported} exported · J/K to move</p>
+          </div>
+          <div className="panel-scroll min-h-0 flex-1 overflow-auto" role="listbox" aria-label="Group 2 clips">
+            {visible.length === 0 ? <p className="subtle px-4 py-6 text-sm">Nothing in Group 2. Mark keepers with 2 in Triage or Polish.</p>
+              : visible.map((clip) => <button key={clip.clip_id} type="button" role="option"
+                aria-selected={clip.clip_id === effectiveSelectedId} data-selected={clip.clip_id === effectiveSelectedId}
+                tabIndex={clip.clip_id === effectiveSelectedId ? 0 : -1}
+                onClick={() => setSelectedId(clip.clip_id)}
+                className="clip-row flex w-full items-baseline gap-2 border-b border-[#29362f] px-4 py-2.5 text-left">
+                <span className="subtle mono shrink-0 text-xs">#{clip.clip_id}</span>
+                <span className="min-w-0 flex-1 truncate text-sm" title={clip.title}>{clip.title}</span>
+                <span className="subtle mono shrink-0 text-xs">{formatDuration(clip.end_ms - clip.start_ms)}</span>
+              </button>)}
+          </div>
+        </section>
+        {selected && session.revision !== null ? <ExportPreview key={selected.clip_id} inline clip={selected}
+          revision={session.revision} open={!showSettings && !showHelp && !showJump && !showMerge}
+          nextClipId={nextVisibleClipId} controllerHandlerRef={dialogControllerHandlerRef} onClose={() => {}}
+          exportContext={rankingContext(selected)}
+          nudgeDisabled={busy}
+          onNudge={(edge, amount) => {
+            if (session.revision === null) return;
+            const start = edge === "start" ? selected.start_ms + amount : selected.start_ms;
+            const end = edge === "end" ? selected.end_ms + amount : selected.end_ms;
+            if (start < 0 || end - start < 10 || (session.duration_ms !== null && end > session.duration_ms)) return;
+            void mutate(() => api<SessionDelta>(`/clips/${encodeURIComponent(selected.clip_id)}?delta=true`, "PATCH", {
+              expected_revision: session.revision, start_ms: start, end_ms: end, context: rankingContext(selected),
+            }));
+          }}
+          onPublished={(next) => {
+            // The exported clip leaves Group 2; continue with the clip that followed it.
+            setSession(next);
+            setSaveState("saved");
+            setSelectedId(nextVisibleClipId);
+          }} />
+          : <section className="surface flex items-center justify-center rounded-2xl p-8 text-center">
+            <p className="subtle">Select a clip to publish.</p>
+          </section>}
+      </main>
       : <>
       <main className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden md:grid-cols-[minmax(310px,38%)_1fr]">
         <section className={`${showDetailMobile ? "hidden md:flex" : "flex"} min-h-0 flex-col overflow-hidden border-r line`} aria-label="Clip list">
@@ -1368,6 +1415,7 @@ export default function App() {
       </>}
       {selected && session.revision !== null && <ExportPreview key={selected.clip_id} clip={selected}
         revision={session.revision} open={showExportModal} nextClipId={nextVisibleClipId}
+        exportContext={rankingContext(selected)}
         gamepadAction={gamepadActionRequest}
         onGamepadActionHandled={(id) => setGamepadActionRequest((current) => current?.id === id ? null : current)}
         controllerHandlerRef={dialogControllerHandlerRef}
