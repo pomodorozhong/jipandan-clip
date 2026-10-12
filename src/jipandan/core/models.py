@@ -18,7 +18,7 @@ from jipandan.core.srt import (
 )
 from jipandan.core.paths import default_export_dir
 
-ClipStatus = Literal["pending", "group1", "group2", "exported", "skipped"]
+ClipStatus = Literal["pending", "group1", "group2", "exported", "rejected"]
 SESSION_VERSION = 2
 
 # When an operation collapses a clip to zero duration (start == end), the end is
@@ -98,11 +98,17 @@ def _carried_scores(prior: ClipCandidate, fresh: ClipCandidate) -> dict[str, flo
     }
 
 
+# Sessions saved before "Skip" was renamed "Reject" store the old status name.
+_LEGACY_STATUSES = {"skipped": "rejected"}
+
+
 def _clip_candidate_from_dict(item: dict) -> ClipCandidate:
     """Build a candidate from session JSON, ignoring unknown legacy keys."""
-    return ClipCandidate(
+    candidate = ClipCandidate(
         **{key: value for key, value in item.items() if key in _CLIP_CANDIDATE_FIELD_NAMES}
     )
+    candidate.status = _LEGACY_STATUSES.get(candidate.status, candidate.status)
+    return candidate
 
 
 @dataclass
@@ -463,8 +469,8 @@ class Session:
         candidate.duration = f"{duration:.3f}"
         self._ensure_nonzero_duration(candidate)
 
-    def bulk_skip(self, clip_ids: list[str]) -> int:
-        """Mark pending candidates in clip_ids as skipped. Returns count changed."""
+    def bulk_reject(self, clip_ids: list[str]) -> int:
+        """Mark pending candidates in clip_ids as rejected. Returns count changed."""
         clip_id_set = set(clip_ids)
         count = 0
         for candidate in self.candidates:
@@ -472,6 +478,6 @@ class Session:
                 continue
             if candidate.status != "pending":
                 continue
-            candidate.status = "skipped"
+            candidate.status = "rejected"
             count += 1
         return count

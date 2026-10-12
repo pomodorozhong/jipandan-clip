@@ -95,7 +95,7 @@ describe("gamepad adapter", () => {
       { type: "playback", target: "clip", mode: "replay" },
       { type: "classify", status: "group1" },
       { type: "classify", status: "group2" },
-      { type: "classify", status: "skipped" },
+      { type: "classify", status: "rejected" },
     ]);
   });
 
@@ -283,6 +283,14 @@ describe("gamepad adapter", () => {
       } }),
       setItem: () => {},
     })).toEqual(defaults);
+  });
+
+  it("keeps a custom button saved for the old Skip action on Reject", () => {
+    const config = loadGamepadBindingConfig({
+      getItem: () => JSON.stringify({ version: 1, bindings: { ...defaultGamepadBindingConfig(), rejected: undefined, skipped: 9 } }),
+      setItem: () => {},
+    });
+    expect(config.rejected).toBe(9);
   });
 
   it("allows the same control in separate contexts but rejects overlap", () => {

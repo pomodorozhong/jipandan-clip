@@ -237,6 +237,19 @@ class WebApiTests(unittest.TestCase):
             job = self.wait_for_job(path, "failed")
         self.assertEqual(job["error"], "no model")
 
+    def test_sessions_saved_with_skipped_status_open_as_rejected(self):
+        self.open()
+        path = self.audio.with_suffix(".jipandan.json")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["candidates"][1]["status"] = "skipped"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        state = self.open()
+        self.assertEqual(state["candidates"][1]["status"], "rejected")
+        self.assertEqual((state["counts"]["rejected"], state["counts"]["pending"]), (1, 1))
+        old_name = self.client.patch("/api/clips/1", json={"expected_revision": state["revision"], "status": "skipped"},
+                                     headers=self.headers)
+        self.assertEqual(old_name.status_code, 422)
+
     def review_log(self):
         path = self.audio.with_suffix(".review-log.jsonl")
         return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
@@ -255,14 +268,14 @@ class WebApiTests(unittest.TestCase):
         # An unchanged status is not a decision, so it is not logged.
         revision = self.client.patch("/api/clips/1", json={"expected_revision": revision, "status": "group1"},
                                      headers=self.headers).json()["revision"]
-        revision = self.client.post("/api/clips/bulk-skip", json={
+        revision = self.client.post("/api/clips/bulk-reject", json={
             "expected_revision": revision, "clip_ids": ["2"], "context": {"source": "pointer"},
         }, headers=self.headers).json()["revision"]
         self.client.post("/api/session/undo", json={"expected_revision": revision, "context": {"source": "gamepad"}},
                          headers=self.headers)
 
         events = self.review_log()
-        self.assertEqual([e["type"] for e in events], ["status", "title", "trim", "bulk-skip", "undo"])
+        self.assertEqual([e["type"] for e in events], ["status", "title", "trim", "bulk-reject", "undo"])
         self.assertTrue(all(e["v"] == 1 and e["t"].endswith("Z") for e in events))
         status = events[0]
         self.assertEqual((status["clip"], status["from"], status["to"]), ("1", "pending", "group1"))
@@ -364,7 +377,7 @@ class WebApiTests(unittest.TestCase):
             self.assertEqual(renamed.json()["waveform"], completed["waveform"])
             renderer.assert_called_once()
 
-    def test_bulk_skip_and_invalid_bounds(self):
+    def test_bulk_reject_and_invalid_bounds(self):
         self.open()
         bad = self.client.patch(
             "/api/clips/1", json={"expected_revision": 1, "start_ms": 2000, "end_ms": 2000},
@@ -372,12 +385,13 @@ class WebApiTests(unittest.TestCase):
         )
         self.assertEqual(bad.status_code, 422)
         self.assertEqual(self.service.snapshot()["revision"], 1)
-        skipped = self.client.post(
-            "/api/clips/bulk-skip",
+        rejected = self.client.post(
+            "/api/clips/bulk-reject",
             json={"expected_revision": 1, "clip_ids": ["1", "2"]}, headers=self.headers,
         )
-        self.assertEqual(skipped.status_code, 200)
-        self.assertEqual(skipped.json()["changed_clip_ids"], ["1", "2"])
+        self.assertEqual(rejected.status_code, 200)
+        self.assertEqual(rejected.json()["changed_clip_ids"], ["1", "2"])
+        self.assertEqual(rejected.json()["counts"]["rejected"], 2)
         undone = self.client.post(
             "/api/session/undo", json={"expected_revision": 2}, headers=self.headers,
         )
@@ -521,7 +535,7 @@ class WebApiTests(unittest.TestCase):
         )
         self.assertEqual(first.status_code, 200)
         stale = second_client.patch(
-            "/api/clips/1", json={"expected_revision": 1, "status": "skipped"},
+            "/api/clips/1", json={"expected_revision": 1, "status": "rejected"},
             headers={"x-jipandan-token": second_token},
         )
         self.assertEqual(stale.status_code, 409)

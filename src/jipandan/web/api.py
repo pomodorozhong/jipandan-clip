@@ -50,7 +50,7 @@ class StorageRequest(BaseModel):
     clip_dir: str = Field(min_length=1, max_length=4096)
 
 
-class BulkSkip(RevisionRequest):
+class BulkReject(RevisionRequest):
     clip_ids: list[str]
 
 
@@ -221,9 +221,9 @@ def create_app(
     def duplicate(clip_id: str, request: RevisionRequest):
         return app.state.service.duplicate(clip_id, request.expected_revision, request.context)
 
-    @app.post("/api/clips/bulk-skip")
-    def bulk_skip(request: BulkSkip):
-        return app.state.service.bulk_skip(request.clip_ids, request.expected_revision, request.context)
+    @app.post("/api/clips/bulk-reject")
+    def bulk_reject(request: BulkReject):
+        return app.state.service.bulk_reject(request.clip_ids, request.expected_revision, request.context)
 
     @app.post("/api/session/undo")
     def undo(request: RevisionRequest):

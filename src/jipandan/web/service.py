@@ -836,7 +836,7 @@ class SessionService:
     def snapshot(self) -> dict:
         with self._lock:
             session = self.session
-            counts = {name: 0 for name in ("pending", "group1", "group2", "exported", "skipped")}
+            counts = {name: 0 for name in ("pending", "group1", "group2", "exported", "rejected")}
             if session is not None:
                 for candidate in session.candidates:
                     counts[candidate.status] += 1
@@ -934,7 +934,7 @@ class SessionService:
     ) -> dict:
         if all(value is None for value in (status, title, start_ms, end_ms)):
             raise InvalidEdit("No clip change provided")
-        if status is not None and status not in {"pending", "group1", "group2", "skipped"}:
+        if status is not None and status not in {"pending", "group1", "group2", "rejected"}:
             raise InvalidEdit("Invalid status")
         if title is not None and not title.strip():
             raise InvalidEdit("Title cannot be empty")
@@ -1020,7 +1020,7 @@ class SessionService:
         snapshot["created_clip_id"] = result
         return snapshot
 
-    def bulk_skip(self, clip_ids: list[str], expected_revision: int, context: object = None) -> dict:
+    def bulk_reject(self, clip_ids: list[str], expected_revision: int, context: object = None) -> dict:
         if not clip_ids:
             raise InvalidEdit("Select at least one clip")
         if len(set(clip_ids)) != len(clip_ids):
@@ -1033,13 +1033,13 @@ class SessionService:
                 clip_id for clip_id in clip_ids
                 if session.get_candidate(clip_id).status == "pending"
             ]
-            session.bulk_skip(changed)
+            session.bulk_reject(changed)
             return changed
 
         snapshot, changed = self._mutate(expected_revision, change, undo_ids=clip_ids)
         if changed:
             self._review_log.append(self.audio, [
-                {"type": "bulk-skip", "clips": changed, **clean_context(context)},
+                {"type": "bulk-reject", "clips": changed, **clean_context(context)},
             ])
         snapshot["changed_clip_ids"] = changed
         return snapshot
