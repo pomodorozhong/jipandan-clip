@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isExploreClip, orderByLikelyKeep } from "./reviewOrder";
+import TriageScreen from "./TriageScreen";
 import { api, applySessionDelta, audioUrl, bootstrap, sendReviewEvents, uploadAudio, type Clip, type ClipFeaturesJob, type ClipTranscriptionJob, type LeadingSilenceJob, type Session, type SessionDelta, type Status } from "./api";
 import WaveformEditor from "./WaveformEditor";
 import ExportPreview from "./ExportPreview";
@@ -38,6 +39,8 @@ type Filter = "unsorted" | "group1" | "group2" | "exported" | "all";
 type AllStatusFilter = "all" | Status;
 type AllOrder = "clip-asc" | "clip-desc" | "start-asc" | "start-desc" | "title-asc" | "likely-desc";
 type SaveState = "saved" | "saving" | "failed";
+// Triage: one clip at a time for first-pass decisions. Polish: the list and editor for keepers.
+type Mode = "triage" | "polish";
 type AppSettings = {
   detectLeadingSilence: boolean;
   showOriginalStart: boolean;
@@ -227,6 +230,15 @@ export default function App() {
   const [initializing, setInitializing] = useState(true);
   const [openPath, setOpenPath] = useState("");
   const [filter, setFilter] = useState<Filter>("unsorted");
+  const [mode, setMode] = useState<Mode>("triage");
+  // Short confirmation for actions with no other visible result, such as undo.
+  const [notice, setNotice] = useState<{ id: number; text: string } | null>(null);
+  const showNotice = useCallback((text: string) => setNotice({ id: Date.now(), text }), []);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice((current) => current?.id === notice.id ? null : current), 3000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
   const [allStatusFilter, setAllStatusFilter] = useState<AllStatusFilter>("all");
   const [allOrder, setAllOrder] = useState<AllOrder>("clip-asc");
   const [query, setQuery] = useState("");
@@ -352,8 +364,9 @@ export default function App() {
       try {
         const preferences = JSON.parse(saved) as {
           filter?: Filter; selectedId?: string;
-          allStatusFilter?: AllStatusFilter; allOrder?: AllOrder;
+          allStatusFilter?: AllStatusFilter; allOrder?: AllOrder; mode?: Mode;
         };
+        setMode(preferences.mode === "polish" ? "polish" : "triage");
         if (preferences.filter && filters.some((item) => item.key === preferences.filter)) {
           setFilter(preferences.filter);
         } else if (session.counts.pending === 0) setFilter("all");
@@ -368,7 +381,8 @@ export default function App() {
         if (session.counts.pending === 0) setFilter("all");
       }
     } else {
-      // New sessions review in Likely keep order (with exploration picks) by default.
+      // New sessions start in Triage, and Polish lists them in Likely keep order by default.
+      setMode("triage");
       setAllOrder("likely-desc");
       if (session.counts.pending === 0) setFilter("all");
     }
@@ -377,9 +391,9 @@ export default function App() {
   useEffect(() => {
     if (!session?.audio) return;
     localStorage.setItem(`jipandan-review:${session.audio}`, JSON.stringify({
-      filter, selectedId, allStatusFilter, allOrder,
+      filter, selectedId, allStatusFilter, allOrder, mode,
     }));
-  }, [session?.audio, filter, selectedId, allStatusFilter, allOrder]);
+  }, [session?.audio, filter, selectedId, allStatusFilter, allOrder, mode]);
 
   useEffect(() => {
     if (!settings.detectLeadingSilence || !session?.audio || session.needs_transcription ||
@@ -525,11 +539,15 @@ export default function App() {
   }, []);
 
   const exploreSeed = session?.srt_fingerprint ?? null;
+  // Triage always works through the Unsorted queue in Likely keep order.
+  const activeFilter: Filter = mode === "triage" ? "unsorted" : filter;
+  const activeQuery = mode === "triage" ? "" : query;
+  const activeOrder: AllOrder = mode === "triage" ? "likely-desc" : allOrder;
   // Scores shift while clips are still being measured, so hold clip order until they settle.
-  const likelyKeepPending = allOrder === "likely-desc" && Boolean(session && !session.clip_features_complete);
-  const effectiveOrder: AllOrder = likelyKeepPending ? "clip-asc" : allOrder;
+  const likelyKeepPending = activeOrder === "likely-desc" && Boolean(session && !session.clip_features_complete);
+  const effectiveOrder: AllOrder = likelyKeepPending ? "clip-asc" : activeOrder;
   const visible = useMemo(() => {
-    const clips = visibleClips(session?.candidates ?? [], filter, query, allStatusFilter);
+    const clips = visibleClips(session?.candidates ?? [], activeFilter, activeQuery, allStatusFilter);
     const compareClipId = (a: Clip, b: Clip) => a.index - b.index || a.suffix - b.suffix;
     if (effectiveOrder === "likely-desc") return orderByLikelyKeep(clips, exploreSeed, settings.exploreRanking, compareClipId);
     return clips.sort((a, b) => {
@@ -539,7 +557,7 @@ export default function App() {
       if (effectiveOrder === "title-asc") return a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: "base" }) || compareClipId(a, b);
       return compareClipId(a, b);
     });
-  }, [session?.candidates, filter, query, allStatusFilter, effectiveOrder, exploreSeed, settings.exploreRanking]);
+  }, [session?.candidates, activeFilter, activeQuery, allStatusFilter, effectiveOrder, exploreSeed, settings.exploreRanking]);
   const effectiveSelectedId = visible.some((clip) => clip.clip_id === selectedId)
     ? selectedId : (visible[0]?.clip_id ?? null);
   const selected = session?.candidates.find((clip) => clip.clip_id === effectiveSelectedId) ?? null;
@@ -549,13 +567,13 @@ export default function App() {
   const rankingContext = useCallback((clip: Clip) => {
     const rank = visible.findIndex((item) => item.clip_id === clip.clip_id) + 1;
     return {
-      source: lastInputSourceRef.current, order: effectiveOrder, filter,
+      source: lastInputSourceRef.current, order: effectiveOrder, filter: mode === "triage" ? "triage" : activeFilter,
       rank: rank || undefined, score: clip.likely_keep ?? undefined,
       explore: effectiveOrder === "likely-desc" && settings.exploreRanking && exploreSeed !== null
         && isExploreClip(exploreSeed, clip.clip_id),
       score_version: session?.likely_keep_version,
     };
-  }, [visible, effectiveOrder, filter, settings.exploreRanking, exploreSeed, session?.likely_keep_version]);
+  }, [visible, effectiveOrder, activeFilter, mode, settings.exploreRanking, exploreSeed, session?.likely_keep_version]);
 
   // A "view" is logged once a clip has been on screen for VIEW_MIN_MS, with how often it was played.
   const viewRef = useRef<{ audio: string; clipId: string; started: number; plays: number; context: object } | null>(null);
@@ -664,7 +682,7 @@ export default function App() {
     let nextSelection = effectiveSelectedId;
     if (selected && typeof change.status === "string") {
       const changed = { ...selected, status: change.status as Status };
-      if (visibleClips([changed], filter, query, allStatusFilter).length === 0) {
+      if (visibleClips([changed], activeFilter, activeQuery, allStatusFilter).length === 0) {
         nextSelection = visible[selectedPosition + 1]?.clip_id ??
           visible[selectedPosition - 1]?.clip_id ?? effectiveSelectedId;
       }
@@ -672,7 +690,7 @@ export default function App() {
     void mutate(() => api<SessionDelta>(`/clips/${encodeURIComponent(effectiveSelectedId)}?delta=true`, "PATCH", {
       expected_revision: session.revision, ...change, context: selected ? rankingContext(selected) : undefined,
     })).then((next) => { if (next) setSelectedId(nextSelection); });
-  }, [session, effectiveSelectedId, selected, filter, query, allStatusFilter,
+  }, [session, effectiveSelectedId, selected, activeFilter, activeQuery, allStatusFilter,
     visible, selectedPosition, mutate, rankingContext]);
 
   const moveSelection = useCallback((delta: number) => {
@@ -687,10 +705,21 @@ export default function App() {
 
   const undo = useCallback(() => {
     if (!session || session.revision === null) return;
+    const before = new Map(session.candidates.map((clip) => [clip.clip_id, clip.status]));
     void mutate(() => api<SessionDelta>("/session/undo?delta=true", "POST", {
       expected_revision: session.revision, context: { source: lastInputSourceRef.current },
-    }));
-  }, [session, mutate]);
+    })).then((delta) => {
+      if (!delta) return;
+      const restored = delta.clips.filter((clip) => before.get(clip.clip_id) !== clip.status);
+      const only = restored.length === 1 ? restored[0] : null;
+      const touched = [...delta.clips.map((clip) => clip.clip_id), ...delta.removed];
+      showNotice(only ? `Undone: #${only.clip_id} is back in ${labels[only.status]}`
+        : touched.length === 1 ? `Undone: change to #${touched[0]}`
+          : `Undone: ${touched.length} clips restored`);
+      // In Triage, bring a clip that returned to the queue back on screen to decide again.
+      if (only && only.status === "pending") setSelectedId(only.clip_id);
+    });
+  }, [session, mutate, showNotice]);
 
   const duplicateSelected = useCallback(() => {
     if (!session || session.revision === null || !effectiveSelectedId) return;
@@ -991,6 +1020,14 @@ export default function App() {
         </div>
       </div>
       <div className="flex items-center gap-3 text-sm">
+        {session?.audio && !session.needs_transcription && <div role="group" aria-label="Stage"
+          className="flex overflow-hidden rounded-lg border line bg-[#22312a] p-0.5">
+          {(["triage", "polish"] as Mode[]).map((item) => <button key={item} type="button" aria-pressed={mode === item}
+            onClick={() => setMode(item)}
+            className={`rounded-md px-3 py-1.5 font-medium capitalize ${mode === item ? "bg-[#b7d69d] text-[#1b291f]" : "hover:bg-[#304439]"}`}>
+            {item}
+          </button>)}
+        </div>}
         {session?.audio && !session.needs_transcription && <span aria-live="polite" className={saveState === "failed" ? "text-[#ffb3a8]" : saveState === "saving" ? "text-[#ead49b]" : "accent"}>
           {saveState === "saving" ? "Saving…" : saveState === "failed" ? "Save failed" : "Saved"}
         </span>}
@@ -1007,6 +1044,10 @@ export default function App() {
       </div>
     </header>
 
+    {notice && <div role="status" aria-live="polite"
+      className="pointer-events-none fixed bottom-6 left-1/2 z-40 -translate-x-1/2 rounded-xl border border-[#55744b] bg-[#24372b] px-5 py-3 text-sm font-medium shadow-2xl">
+      {notice.text}
+    </div>}
     {error && <div role="alert" className="shrink-0 border-b border-[#a96053] bg-[#482d2a] px-5 py-3 text-sm text-[#ffe3dc]">
       {error} <button className="ml-3 underline" onClick={() => setError("")}>Dismiss</button>
     </div>}
@@ -1068,7 +1109,19 @@ export default function App() {
         <ActionButton onClick={() => setShowMerge(true)}>Review SRT changes</ActionButton>
       </div>}
       {session.needs_transcription ? <TranscriptionScreen key={session.audio} session={session}
-        onReady={(next) => { setSession(next); setFilter("unsorted"); setSelectedId(null); }} /> : <>
+        onReady={(next) => { setSession(next); setFilter("unsorted"); setSelectedId(null); }} />
+      : mode === "triage" ? <TriageScreen clip={selected} position={selectedPosition + 1} remaining={visible.length}
+        counts={session.counts} audioSrc={audioUrl()} autoplay={settings.autoplayClips}
+        active={!showExportModal && !showSettings && !showHelp && !showJump && !showMerge}
+        busy={busy} canUndo={Boolean(session.can_undo)}
+        orderNote={likelyKeepPending ? "Showing clip order until measuring finishes" : null}
+        gamepadAction={gamepadActionRequest}
+        onGamepadActionHandled={(id) => setGamepadActionRequest((current) => current?.id === id ? null : current)}
+        onPlayback={() => { if (viewRef.current) viewRef.current.plays += 1; }}
+        onDecide={(status) => dispatchReviewAction({ type: "classify", status })}
+        onNavigate={(direction) => dispatchReviewAction({ type: "navigate", direction })}
+        onUndo={() => dispatchReviewAction({ type: "undo" })} />
+      : <>
       <main className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden md:grid-cols-[minmax(310px,38%)_1fr]">
         <section className={`${showDetailMobile ? "hidden md:flex" : "flex"} min-h-0 flex-col overflow-hidden border-r line`} aria-label="Clip list">
           <div className="shrink-0 border-b line p-4 md:p-5">
@@ -1326,7 +1379,7 @@ export default function App() {
           } else if (!advance) {
             setSelectedId(selected.clip_id);
             const exportedClip = next.candidates.find((clip) => clip.clip_id === selected.clip_id);
-            if (exportedClip && !visibleClips([exportedClip], filter, query, allStatusFilter).length) {
+            if (exportedClip && !visibleClips([exportedClip], activeFilter, activeQuery, allStatusFilter).length) {
               setFilter("all");
               setAllStatusFilter("all");
               if (!visibleClips([exportedClip], "all", query, "all").length) setQuery("");
