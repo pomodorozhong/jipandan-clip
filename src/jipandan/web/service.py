@@ -77,6 +77,7 @@ DEFAULT_CLIP_TRANSCRIPTION_SETTINGS = {
 def clip_payload(candidate: ClipCandidate, likely_keep: float | None = None) -> dict:
     return {
         **asdict(candidate),
+        "export_state": candidate.export_state,
         "likely_keep": likely_keep,
         "clip_id": candidate.clip_id,
         "start_ms": _time_ms(candidate.start),
@@ -360,6 +361,7 @@ class SessionService:
                 exported.last_export_start_threshold_db = job.options.start_threshold_db
                 exported.last_export_stop_threshold_db = job.options.stop_threshold_db
                 exported.last_export_path = str(output)
+                exported.last_export_snapshot = exported.export_snapshot()
 
             try:
                 result, _ = self._mutate(mark_exported, [{
@@ -1034,7 +1036,6 @@ class SessionService:
                 candidate.status = status
             if title is not None:
                 candidate.title = title.strip()
-                candidate.last_export_title = candidate.title
             if start_ms is not None or end_ms is not None:
                 start = start_ms if start_ms is not None else _time_ms(candidate.start)
                 end = end_ms if end_ms is not None else _time_ms(candidate.end)

@@ -717,6 +717,32 @@ class WebApiTests(unittest.TestCase):
         reopened = self.open()
         self.assertEqual(reopened["candidates"][0]["status"], "exported")
         self.assertEqual(reopened["candidates"][0]["last_export_path"], state["output_path"])
+        self.assertEqual(reopened["candidates"][0]["export_state"], "matching")
+        previous_path = reopened["candidates"][0]["last_export_path"]
+        renamed = self.client.patch("/api/clips/1?delta=true", json={
+            "expected_revision": reopened["revision"], "title": "Changed title",
+        }, headers=self.headers).json()
+        self.assertEqual(renamed["clips"][0]["export_state"], "changed")
+        self.assertEqual(renamed["clips"][0]["last_export_title"], "First")
+        self.assertEqual(renamed["clips"][0]["last_export_path"], previous_path)
+        undone = self.client.post("/api/session/undo", json={"expected_revision": renamed["revision"]}, headers=self.headers).json()
+        self.assertEqual(undone["candidates"][0]["export_state"], "matching")
+        edited = self.client.patch("/api/clips/1", json={
+            "expected_revision": undone["revision"], "start_ms": 1010,
+        }, headers=self.headers).json()
+        self.assertEqual(edited["candidates"][0]["export_state"], "changed")
+        reloaded = self.open()
+        self.assertEqual(reloaded["candidates"][0]["export_state"], "changed")
+        fresh = self.client.post("/api/previews", json={
+            "clip_id": "1", "expected_revision": reloaded["revision"], "mode": "trim_edges", "title": "First",
+        }, headers=self.headers).json()
+        self.wait_for_job(f"/api/previews/{fresh['id']}", "completed")
+        exported = self.client.post("/api/exports", json={
+            "preview_id": fresh["id"], "expected_revision": reloaded["revision"],
+        }, headers=self.headers).json()
+        self.assertEqual(exported["candidates"][0]["export_state"], "matching")
+        self.assertEqual(exported["candidates"][0]["last_export_snapshot"]["mode"], "trim_edges")
+        self.assertTrue(Path(previous_path).is_file())
 
     def test_publish_reviewed_preview_is_collision_safe_and_stale_preview_is_rejected(self):
         self.open()
