@@ -285,14 +285,6 @@ describe("gamepad adapter", () => {
     })).toEqual(defaults);
   });
 
-  it("keeps a custom button saved for the old Skip action on Reject", () => {
-    const config = loadGamepadBindingConfig({
-      getItem: () => JSON.stringify({ version: 1, bindings: { ...defaultGamepadBindingConfig(), rejected: undefined, skipped: 9 } }),
-      setItem: () => {},
-    });
-    expect(config.rejected).toBe(9);
-  });
-
   it("allows the same control in separate contexts but rejects overlap", () => {
     const defaults = defaultGamepadBindingConfig();
     const separateContexts = { ...defaults, replay: 0, "candidate-replay": 0 };

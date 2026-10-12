@@ -237,16 +237,19 @@ class WebApiTests(unittest.TestCase):
             job = self.wait_for_job(path, "failed")
         self.assertEqual(job["error"], "no model")
 
-    def test_sessions_saved_with_skipped_status_open_as_rejected(self):
+    def test_older_session_files_are_refused_with_a_fresh_start_hint(self):
         self.open()
         path = self.audio.with_suffix(".jipandan.json")
         data = json.loads(path.read_text(encoding="utf-8"))
+        data["version"] = 2
         data["candidates"][1]["status"] = "skipped"
         path.write_text(json.dumps(data), encoding="utf-8")
-        state = self.open()
-        self.assertEqual(state["candidates"][1]["status"], "rejected")
-        self.assertEqual((state["counts"]["rejected"], state["counts"]["pending"]), (1, 1))
-        old_name = self.client.patch("/api/clips/1", json={"expected_revision": state["revision"], "status": "skipped"},
+        refused = self.client.post("/api/session/open", json={"path": str(self.audio)}, headers=self.headers)
+        self.assertEqual(refused.status_code, 422)
+        self.assertIn("start a fresh session", refused.json()["detail"])
+        path.unlink()
+        self.assertEqual(self.open()["counts"]["pending"], 2)
+        old_name = self.client.patch("/api/clips/1", json={"expected_revision": 1, "status": "skipped"},
                                      headers=self.headers)
         self.assertEqual(old_name.status_code, 422)
 
@@ -293,6 +296,7 @@ class WebApiTests(unittest.TestCase):
         audio = str(self.audio.resolve())
         response = self.client.post("/api/review-log", json={"events": [
             {"type": "view", "audio": audio, "clip": "1", "dwell_ms": 2400, "plays": 2,
+             "started_at": int(time.time() * 1000) - 5000,
              "context": {"source": "gamepad", "rank": 1, "score": 50}},
             {"type": "view", "audio": audio, "clip": "2", "dwell_ms": -5},
             {"type": "status", "audio": audio, "clip": "2", "dwell_ms": 100},
@@ -304,6 +308,8 @@ class WebApiTests(unittest.TestCase):
         events = self.review_log()
         self.assertEqual([(e["clip"], e["dwell_ms"], e["plays"]) for e in events], [("1", 2400, 2), ("2", 0, 0)])
         self.assertEqual((events[0]["source"], events[0]["rank"], events[0]["score"]), ("gamepad", 1, 50.0))
+        self.assertLess(events[0]["start"], events[0]["t"])
+        self.assertNotIn("start", events[1])
         too_many = self.client.post("/api/review-log", json={"events": [{}] * 201}, headers=self.headers)
         self.assertEqual(too_many.status_code, 422)
 

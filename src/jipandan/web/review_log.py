@@ -65,11 +65,19 @@ def clean_client_event(raw: object, audio: Path) -> dict | None:
     dwell = _int(raw.get("dwell_ms"), 0, MAX_DWELL_MS)
     if clip is None or dwell is None:
         return None
+    # Views are sent in batches, so keep when the view started, not just when it was written.
+    now_ms = datetime.now(timezone.utc).timestamp() * 1000
+    started = _int(raw.get("started_at"), int(now_ms - 86_400_000), int(now_ms + 60_000))
     return {
         "type": "view", "clip": clip, "dwell_ms": dwell,
+        **({"start": _iso(started / 1000)} if started is not None else {}),
         "plays": _int(raw.get("plays"), 0, 10_000) or 0,
         **clean_context(raw.get("context")),
     }
+
+
+def _iso(seconds: float) -> str:
+    return datetime.fromtimestamp(seconds, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 class ReviewLog:
@@ -79,7 +87,7 @@ class ReviewLog:
     def append(self, audio: Path | None, events: list[dict]) -> None:
         if audio is None or not events:
             return
-        stamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        stamp = _iso(datetime.now(timezone.utc).timestamp())
         lines = "".join(
             json.dumps({"v": LOG_VERSION, "t": stamp, **event}, ensure_ascii=False) + "\n" for event in events
         )

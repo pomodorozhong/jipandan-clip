@@ -558,7 +558,8 @@ export default function App() {
     const dwell = Date.now() - view.started;
     if (dwell >= VIEW_MIN_MS) {
       pendingViewsRef.current.push({
-        type: "view", audio: view.audio, clip: view.clipId, dwell_ms: dwell, plays: view.plays, context: view.context,
+        type: "view", audio: view.audio, clip: view.clipId, started_at: view.started, dwell_ms: dwell,
+        plays: view.plays, context: view.context,
       });
     }
   }, []);

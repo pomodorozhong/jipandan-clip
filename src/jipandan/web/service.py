@@ -35,6 +35,7 @@ from jipandan.core.models import (
     ClipCandidate,
     ConcurrentSessionChange,
     MIN_CLIP_DURATION_SECONDS,
+    OutdatedSession,
     Session,
 )
 from jipandan.core.srt import seconds_to_ffmpeg_timestamp, srt_time_to_seconds
@@ -816,7 +817,10 @@ class SessionService:
         srt = resolved.with_suffix(".srt")
         session_path = resolved.with_suffix(".jipandan.json")
         if session_path.exists():
-            session = Session.load(session_path)
+            try:
+                session = Session.load(session_path)
+            except OutdatedSession as exc:
+                raise InvalidEdit(str(exc)) from exc
             session.audio = resolved
             session.srt = srt
         elif srt.exists():

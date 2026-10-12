@@ -108,8 +108,6 @@ function hasOverlappingConflict(config: GamepadBindingConfig): boolean {
     other.index === binding.index && contextsOverlap(binding.contexts, other.contexts)));
 }
 
-const LEGACY_BINDING_IDS: Partial<Record<GamepadBindingId, string>> = { rejected: "skipped" };
-
 export function normalizeGamepadBindingConfig(value: unknown): GamepadBindingConfig {
   const fallback = defaultGamepadBindingConfig();
   let candidate: unknown = value;
@@ -120,10 +118,8 @@ export function normalizeGamepadBindingConfig(value: unknown): GamepadBindingCon
   const config = {} as GamepadBindingConfig;
   if (!isRecord(candidate)) return fallback;
   for (const definition of bindingDefinitions) {
-    // Mappings saved before "Skip" was renamed "Reject" use the old binding ID.
-    const key = Object.hasOwn(candidate, definition.id) ? definition.id : LEGACY_BINDING_IDS[definition.id];
-    const stored = key === undefined ? undefined : candidate[key];
-    config[definition.id] = key !== undefined && Object.hasOwn(candidate, key) && isValidBindingValue(stored)
+    const stored = candidate[definition.id];
+    config[definition.id] = Object.hasOwn(candidate, definition.id) && isValidBindingValue(stored)
       ? stored : (definition.defaultGamepadIndex ?? null);
   }
   if (hasOverlappingConflict(config)) return fallback;

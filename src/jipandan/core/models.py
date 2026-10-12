@@ -19,7 +19,9 @@ from jipandan.core.srt import (
 from jipandan.core.paths import default_export_dir
 
 ClipStatus = Literal["pending", "group1", "group2", "exported", "rejected"]
-SESSION_VERSION = 2
+# Version 3 starts the review-log era ("rejected" status, measurement versions);
+# older files are refused rather than migrated.
+SESSION_VERSION = 3
 
 # When an operation collapses a clip to zero duration (start == end), the end is
 # pushed out by this many seconds so the clip remains usable.
@@ -98,17 +100,15 @@ def _carried_scores(prior: ClipCandidate, fresh: ClipCandidate) -> dict[str, flo
     }
 
 
-# Sessions saved before "Skip" was renamed "Reject" store the old status name.
-_LEGACY_STATUSES = {"skipped": "rejected"}
+class OutdatedSession(ValueError):
+    """The session file was written by an older, unsupported session format."""
 
 
 def _clip_candidate_from_dict(item: dict) -> ClipCandidate:
-    """Build a candidate from session JSON, ignoring unknown legacy keys."""
-    candidate = ClipCandidate(
+    """Build a candidate from session JSON, ignoring unknown keys."""
+    return ClipCandidate(
         **{key: value for key, value in item.items() if key in _CLIP_CANDIDATE_FIELD_NAMES}
     )
-    candidate.status = _LEGACY_STATUSES.get(candidate.status, candidate.status)
-    return candidate
 
 
 @dataclass
@@ -173,6 +173,11 @@ class Session:
     @classmethod
     def load(cls, path: Path) -> "Session":
         data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("version") != SESSION_VERSION:
+            raise OutdatedSession(
+                f"{path.name} was saved by an older version of Jipandan. "
+                "Move or delete it to start a fresh session from the SRT."
+            )
         candidates = [_clip_candidate_from_dict(item) for item in data["candidates"]]
         for candidate in candidates:
             if candidate.last_export_title:
@@ -186,7 +191,7 @@ class Session:
                 for directory in data.get("export_dirs", [data["clip_dir"]])
             ],
             candidates=candidates,
-            version=data.get("version", SESSION_VERSION),
+            version=SESSION_VERSION,
             revision=data.get("revision", 0),
             srt_fingerprint=data.get("srt_fingerprint"),
             leading_silence_detection_complete=data.get("leading_silence_detection_complete", False),
