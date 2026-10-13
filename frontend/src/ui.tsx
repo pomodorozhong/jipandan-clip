@@ -6,7 +6,7 @@ import { ShortcutBadge } from "./ShortcutBadge";
 // one panel, one section header, three button weights, badges, and one stage layout.
 
 export const statusLabels: Record<Status, string> = {
-  pending: "Unsorted", group1: "Group 1", group2: "Group 2",
+  pending: "Unsorted", group1: "Needs work", group2: "Ready",
   exported: "Exported", rejected: "Rejected", unsure: "Unsure",
 };
 

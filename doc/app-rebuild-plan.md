@@ -4,9 +4,9 @@
 
 Turn the browser GUI into a better long-term app for clipping 4–7 h gaming streams into short soundboard MP3s. Review is split into three stages that match how the owner works:
 
-- **Triage**: one unsorted clip at a time, gamepad-first, for fast first-pass decisions (Group 1, Group 2, Unsure, Reject).
-- **Polish**: the clip list and waveform editor for fixing titles and timing of keepers (Group 1).
-- **Publish**: works through Group 2 in clip order and exports each clip.
+- **Triage**: one unsorted clip at a time, gamepad-first, for fast first-pass decisions (Needs work, Ready, Unsure, Reject).
+- **Polish**: the clip list and waveform editor for fixing titles and timing of keepers (Needs work).
+- **Publish**: works through Ready in clip order and exports each clip.
 
 Old `.jipandan.json` sessions are intentionally not converted. Work from them is exported from an older checkout, and new sessions start fresh from the SRT.
 
@@ -28,7 +28,7 @@ Each recording is stored in `<recording>.jipandan.db`: a clip table with the cur
 
 ### Step 2: previews and Publish
 
-Owner review is tracked in [#46](https://github.com/pomodorozhong/jipandan-clip/issues/46). Previews and exports seek straight to each clip without losing sample accuracy. Publish works through the Group 2 queue with Ready and Exported lists, an inline export panel, and export snapshots that flag later edits. Polish opens on Group 1 and focuses on titles and timing.
+Owner review is tracked in [#46](https://github.com/pomodorozhong/jipandan-clip/issues/46). Previews and exports seek straight to each clip without losing sample accuracy. Publish works through the Ready queue with Ready and Exported lists, an inline export panel, and export snapshots that flag later edits. Polish opens on Group 1 and focuses on titles and timing.
 
 Decisions:
 
@@ -59,5 +59,5 @@ Why the app logs review activity ([#36](https://github.com/pomodorozhong/jipanda
 
 ## Owner workflow assumptions
 
-- Group 1 (to be shown as Needs work) = keep, but title or timing still needs fixing; Group 2 (Ready) = ready to export; Reject = unusable; Unsure = undecided, being removed in #52; Unsorted = not reviewed.
+- Needs work (stored as `group1`) = keep, but title or timing still needs fixing; Ready (`group2`) = ready to export; Reject = unusable; Unsure = undecided, being removed in #52; Unsorted = not reviewed.
 - Triage is done with a gamepad, Polish with both gamepad and keyboard+mouse, Publish mainly with keyboard+mouse. In Publish the owner mostly fixes titles, sometimes timing, and changes thresholds about twice a session.

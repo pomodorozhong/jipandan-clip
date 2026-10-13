@@ -43,7 +43,7 @@ type AllStatusFilter = "all" | Status;
 type AllOrder = "clip-asc" | "clip-desc" | "start-asc" | "start-desc" | "title-asc" | "likely-desc";
 type SaveState = "saved" | "saving" | "failed";
 // Triage: one clip at a time for first-pass decisions. Polish: the list and editor for keepers.
-// Publish: the Group 2 queue with export previews, title, and timing fixes.
+// Publish: the Ready queue with export previews, title, and timing fixes.
 type Mode = "triage" | "polish" | "publish";
 type AppSettings = {
   detectLeadingSilence: boolean;
@@ -91,8 +91,8 @@ function loadSettings(): AppSettings {
 }
 
 const filters: { key: Filter; label: string }[] = [
-  { key: "group1", label: "Group 1" },
-  { key: "group2", label: "Group 2" },
+  { key: "group1", label: statusLabels.group1 },
+  { key: "group2", label: statusLabels.group2 },
   { key: "unsorted", label: "Unsorted" },
   { key: "exported", label: "Exported" },
   { key: "all", label: "All" },
@@ -524,7 +524,7 @@ export default function App() {
   }, []);
 
   const exploreSeed = session?.srt_fingerprint ?? null;
-  // Triage works through the Unsorted queue in Likely keep order; Publish through Group 2 in clip order.
+  // Triage works through the Unsorted queue in Likely keep order; Publish through Ready in clip order.
   const activeFilter: Filter = mode === "triage" ? "unsorted" : mode === "publish" ? "group2" : filter;
   const activeQuery = mode === "polish" ? query : "";
   const activeOrder: AllOrder = mode === "triage" ? "likely-desc" : mode === "publish" ? "clip-asc" : allOrder;
@@ -1130,11 +1130,11 @@ export default function App() {
                 <CountBadge>{view === "ready" ? session.counts.group2 : publishClips(session.candidates, "exported").length}</CountBadge>
               </button>)}
             </div>
-            <p className="subtle mt-2 text-xs">{publishView === "ready" ? "Group 2 in clip order" : "Saved files, including clips edited after export"} · J/K to move</p>
+            <p className="subtle mt-2 text-xs">{publishView === "ready" ? "Ready clips in clip order" : "Saved files, including clips edited after export"} · J/K to move</p>
           </div>
-          <div className="panel-scroll min-h-0 flex-1 overflow-auto" role="listbox" aria-label={publishView === "ready" ? "Group 2 clips" : "Exported clips"}>
+          <div className="panel-scroll min-h-0 flex-1 overflow-auto" role="listbox" aria-label={publishView === "ready" ? "Ready clips" : "Exported clips"}>
             {visible.length === 0 ? <p className="subtle px-4 py-6 text-sm">{publishView === "ready"
-              ? "Nothing in Group 2. Mark keepers with 2 in Triage or Polish." : "No clips have been exported yet."}</p>
+              ? "Nothing is Ready yet. Mark keepers with 2 in Triage or Polish." : "No clips have been exported yet."}</p>
               : visible.map((clip) => <button key={clip.clip_id} type="button" role="option"
                 aria-selected={clip.clip_id === effectiveSelectedId} data-selected={clip.clip_id === effectiveSelectedId}
                 tabIndex={clip.clip_id === effectiveSelectedId ? 0 : -1}
@@ -1178,7 +1178,7 @@ export default function App() {
             }));
           }}
           onPublished={(next, advance) => {
-            // The exported clip leaves Group 2; continue with the clip that followed it.
+            // The exported clip leaves Ready; continue with the clip that followed it.
             setSession(next);
             setSaveState("saved");
             if (publishView === "ready" || advance) setSelectedId(nextVisibleClipId);
@@ -1191,14 +1191,14 @@ export default function App() {
           aside={<span title={`${visible.length} visible of ${session.candidates.length} total`}><CountBadge>{visible.length}</CountBadge></span>}
           className={`${showDetailMobile ? "hidden min-[900px]:flex" : "flex"} min-h-0 flex-col overflow-hidden`}>
           <div className="shrink-0 border-b line p-4">
-            <p className="subtle mb-3 text-xs">Fix Group 1 titles and timing, then move each keeper to Publish.</p>
+            <p className="subtle mb-3 text-xs">Fix titles and timing of clips that need work, then move each keeper to Publish.</p>
             <div className="mb-3 grid grid-cols-5 overflow-hidden rounded-lg border line bg-[#22312a] p-1" role="group" aria-label="Status filter">
               {filters.map((item) => <button key={item.key} type="button" onClick={() => setFilter(item.key)}
                 aria-pressed={filter === item.key}
                 aria-label={`${item.label}, ${item.key === "all" ? session.candidates.length : session.counts[item.key === "unsorted" ? "pending" : item.key]} ${
                   (item.key === "all" ? session.candidates.length : session.counts[item.key === "unsorted" ? "pending" : item.key]) === 1 ? "clip" : "clips"}`}
                 className={`flex min-w-0 flex-col items-center justify-center gap-1 rounded-md px-0.5 py-2 text-[10px] leading-tight sm:text-xs ${filter === item.key ? "bg-[#b7d69d] text-[#1b291f] shadow-sm" : "hover:bg-[#304439] hover:text-white"}`}>
-                <span className="whitespace-nowrap font-semibold">{item.label}</span><span aria-hidden="true" className={`mono text-[11px] font-normal leading-none sm:text-xs ${filter === item.key ? "text-[#435d46]" : "text-[#9eafa3]"}`}>
+                <span className="text-center font-semibold">{item.label}</span><span aria-hidden="true" className={`mono text-[11px] font-normal leading-none sm:text-xs ${filter === item.key ? "text-[#435d46]" : "text-[#9eafa3]"}`}>
                   {item.key === "all" ? session.candidates.length : session.counts[item.key === "unsorted" ? "pending" : item.key]}
                 </span>
               </button>)}
@@ -1232,8 +1232,8 @@ export default function App() {
               <Button onClick={() => void startClipTranscription(
                 session.candidates.filter((clip) => clip.status === "group1").map((clip) => clip.clip_id))}
                 disabled={clipTranscriptionRunning}
-                title="Run Whisper again on each Group 1 clip's own audio and suggest a new title">
-                Re-transcribe Group 1 titles
+                title="Run Whisper again on each Needs work clip's own audio and suggest a new title">
+                Re-transcribe Needs work titles
               </Button>
               {group1SuggestionCount > 0 && <span className="subtle text-xs">{group1SuggestionCount} {group1SuggestionCount === 1 ? "suggestion" : "suggestions"} to review</span>}
             </div>}
@@ -1322,7 +1322,7 @@ export default function App() {
                     title="Edit clip title (R)" shortcut="R" shortcutId="rename">Edit title</Button>
                   <Button onClick={() => dispatchReviewAction({ type: "classify", status: "group2" })}
                     disabled={busy || editingTitle || selected.status === "group2"}
-                    title="Mark Group 2 and move it into Publish (2)" shortcut="2" shortcutId="group2" variant="primary">Ready for Publish</Button>
+                    title="Mark Ready and move it into Publish (2)" shortcut="2" shortcutId="group2" variant="primary">Ready for Publish</Button>
                   <div ref={clipMenuRef} className="relative">
                     <button type="button" onClick={() => setShowClipMenu((open) => !open)}
                       aria-label="More clip actions" aria-expanded={showClipMenu} aria-haspopup="menu" title="More clip actions"
@@ -1406,7 +1406,7 @@ export default function App() {
                   </svg>
                 </span>
                 <span className="subtle inline-flex flex-wrap items-center gap-1.5 text-xs">
-                  Choose Group 1 <ShortcutBadge keyboard="1" bindingId="group1" />, Group 2 <ShortcutBadge keyboard="2" bindingId="group2" />, Unsure <ShortcutBadge keyboard="3" bindingId="unsure" />, or Rejected <ShortcutBadge keyboard="X" bindingId="rejected" />
+                  Choose Needs work <ShortcutBadge keyboard="1" bindingId="group1" />, Ready <ShortcutBadge keyboard="2" bindingId="group2" />, Unsure <ShortcutBadge keyboard="3" bindingId="unsure" />, or Rejected <ShortcutBadge keyboard="X" bindingId="rejected" />
                 </span>
               </div>
               {selected.last_export_path && <div className={`mb-4 rounded-lg border line px-3 py-2 text-xs ${selected.export_state === "matching" ? "subtle" : "text-[#edbc97]"}`}>
