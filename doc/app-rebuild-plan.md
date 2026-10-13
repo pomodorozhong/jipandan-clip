@@ -28,7 +28,7 @@ Each recording is stored in `<recording>.jipandan.db`: a clip table with the cur
 
 ### Step 2: previews and Publish
 
-Owner review uses the [step 2 review guide](app-rebuild-step-2-review.md). Previews and exports seek straight to each clip without losing sample accuracy. Publish works through the Group 2 queue with Ready and Exported lists, an inline export panel, and export snapshots that flag later edits. Polish opens on Group 1 and focuses on titles and timing.
+Owner review is tracked in [#46](https://github.com/pomodorozhong/jipandan-clip/issues/46). Previews and exports seek straight to each clip without losing sample accuracy. Publish works through the Group 2 queue with Ready and Exported lists, an inline export panel, and export snapshots that flag later edits. Polish opens on Group 1 and focuses on titles and timing.
 
 Decisions:
 
