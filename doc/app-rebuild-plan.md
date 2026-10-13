@@ -2,7 +2,7 @@
 
 ## Outcome and scope
 
-Turn the browser GUI into a better long-term app for clipping 4–7 h gaming streams into short soundboard MP3s, and later make it usable by friends on Macs. Review is split into three stages that match how the owner works:
+Turn the browser GUI into a better long-term app for clipping 4–7 h gaming streams into short soundboard MP3s. Review is split into three stages that match how the owner works:
 
 - **Triage**: one unsorted clip at a time, gamepad-first, for fast first-pass decisions (Group 1, Group 2, Unsure, Reject).
 - **Polish**: the clip list and waveform editor for fixing titles and timing of keepers (Group 1).
@@ -19,9 +19,8 @@ Open work for each step is tracked as GitHub issues in that step's milestone. Th
 | 1 | Per-recording SQLite event store, delta responses, Triage stage | Done ([#34](https://github.com/pomodorozhong/jipandan-clip/pull/34), [#36](https://github.com/pomodorozhong/jipandan-clip/pull/36)–[#38](https://github.com/pomodorozhong/jipandan-clip/pull/38)) |
 | 2 | Fast sample-exact previews and a Publish stage | Merged ([#35](https://github.com/pomodorozhong/jipandan-clip/pull/35), [#39](https://github.com/pomodorozhong/jipandan-clip/pull/39)); owner review in [#46](https://github.com/pomodorozhong/jipandan-clip/issues/46), UI pass in [Step 2 UI consistency](https://github.com/pomodorozhong/jipandan-clip/milestone/1) |
 | 3 | Soundboard-oriented candidate generation | Planned: [Step 3 candidate generation](https://github.com/pomodorozhong/jipandan-clip/milestone/2) |
-| 4 | Packaging for Mac-only friends | Planned: [Step 4 packaging](https://github.com/pomodorozhong/jipandan-clip/milestone/3) |
 
-Each step is judged by the owner in the real app before the next one starts.
+Each step is judged by the owner in the real app before the next one starts. A fourth step, packaging the app for friends on Macs, was dropped on 2026-10-13.
 
 ### Step 1: event store and Triage
 
@@ -42,10 +41,6 @@ Decisions:
 ### Step 3: candidate generation
 
 Generate soundboard-oriented candidates from voice activity detection and word timings instead of raw SRT lines, and evaluate them against the owner's kept clips.
-
-### Step 4: packaging
-
-Package the app so friends on Macs can run it without setting up Python, Node.js, and ffmpeg themselves.
 
 ## Ranking direction
 
