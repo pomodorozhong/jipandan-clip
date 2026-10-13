@@ -5,6 +5,7 @@ import { api, applySessionDelta, audioUrl, bootstrap, sendReviewEvents, uploadAu
 import WaveformEditor from "./WaveformEditor";
 import { publishClips, type PublishView } from "./publish";
 import ExportPreview, { type ExportSettings } from "./ExportPreview";
+import ShortcutCheatsheet from "./ShortcutCheatsheet";
 import TranscriptionScreen from "./TranscriptionScreen";
 import SettingsScreen from "./SettingsScreen";
 import GamepadControls from "./GamepadControls";
@@ -31,7 +32,6 @@ import {
   isTextEditingTarget,
   keyboardInputFromEvent,
   resolveKeyboardAction,
-  SHORTCUT_DEFINITIONS,
   shouldDispatchAction,
   type InputAvailability,
   type InputAction,
@@ -1566,12 +1566,7 @@ export default function App() {
     </Dialog>}
 
     {showHelp && <Dialog title="Keyboard shortcuts" controllerHandlerRef={dialogControllerHandlerRef} onClose={() => setShowHelp(false)}>
-      <div className="grid grid-cols-[6rem_1fr] gap-y-2 text-sm">
-        {SHORTCUT_DEFINITIONS.filter((definition) => definition.keyboard).map((definition) => <div key={definition.id} className="contents">
-          <ShortcutBadge keyboard={definition.keyboard} bindingId={definition.id} /><span>{definition.label}</span>
-        </div>)}
-        {/* Shortcut help is generated from SHORTCUT_DEFINITIONS above. */}
-      </div>
+      <ShortcutCheatsheet config={gamepadBindingConfig} />
       <p className="subtle mt-5 text-xs">Review shortcuts pause while you type. Letter and number shortcuts follow their physical US-QWERTY key positions, so a non-QWERTY layout may show different printed characters. Enter and ⌘ Enter work in the export preview when focus is outside an editable field.</p>
       <GamepadControls status={gamepadStatus} />
     </Dialog>}
