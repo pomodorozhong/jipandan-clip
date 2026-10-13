@@ -1,6 +1,6 @@
 # Step 2 owner review
 
-The implementation is ready for app review on `rebuild/event-store`. The step 2 commits are not pushed yet. Approve this step after working with real clips before beginning candidate generation in step 3.
+Step 2 is on `main` ([#35](https://github.com/pomodorozhong/jipandan-clip/pull/35), [#39](https://github.com/pomodorozhong/jipandan-clip/pull/39)); review it there. Approve this step after working with real clips before beginning candidate generation in step 3. The review is tracked in [#46](https://github.com/pomodorozhong/jipandan-clip/issues/46).
 
 ## Open the build
 

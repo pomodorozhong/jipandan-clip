@@ -4,11 +4,11 @@ See the [project README](../README.md) for installation, commands, and testing.
 
 ## Reference
 
-- [Architecture](architecture.md): how the browser, server, SQLite store, FFmpeg, and Whisper fit together.
+- [Architecture](architecture.md): how the browser, server, SQLite store, FFmpeg, and Whisper fit together, and how input is handled.
 
 ## Active plans
 
-- [App rebuild plan](app-rebuild-plan.md): the staged rebuild (event store, Triage, Publish), with progress and remaining work.
+- [App rebuild plan](app-rebuild-plan.md): the staged rebuild, its scope, and the decisions behind each step. Open work is in GitHub issues, one milestone per step.
 - [Step 2 owner review](app-rebuild-step-2-review.md): the Publish and Polish checkpoint before candidate generation.
 
 ## Completed work
