@@ -9,6 +9,7 @@ import {
   type ClassificationStatus,
 } from "./inputActions";
 import { ShortcutBadge } from "./ShortcutBadge";
+import { Button, Panel, StageLayout, statusLabels } from "./ui";
 
 type PlaybackMode = "replay" | "toggle";
 
@@ -16,11 +17,11 @@ function formatSeconds(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-const decisions: { status: ClassificationStatus; label: string; keyboard: string; tone: string }[] = [
-  { status: "group1", label: "Group 1", keyboard: "1", tone: "bg-[#254d38] border-[#498c61] text-[#c1f3cd] hover:bg-[#2d5d43]" },
-  { status: "group2", label: "Group 2", keyboard: "2", tone: "bg-[#284762] border-[#4c80a8] text-[#c4e7ff] hover:bg-[#305676]" },
-  { status: "unsure", label: "Unsure", keyboard: "3", tone: "bg-[#573b26] border-[#a5683c] text-[#f6cfa8] hover:bg-[#68472e]" },
-  { status: "rejected", label: "Reject", keyboard: "X", tone: "bg-[#36413e] border-[#66756e] text-[#d6e0da] hover:bg-[#424f4b]" },
+const decisions: { status: ClassificationStatus; label: string; keyboard: string }[] = [
+  { status: "group1", label: statusLabels.group1, keyboard: "1" },
+  { status: "group2", label: statusLabels.group2, keyboard: "2" },
+  { status: "unsure", label: statusLabels.unsure, keyboard: "3" },
+  { status: "rejected", label: "Reject", keyboard: "X" },
 ];
 
 /**
@@ -154,63 +155,68 @@ export default function TriageScreen({
   const kept = counts.group1 + counts.group2 + counts.exported;
   const decided = kept + counts.rejected + counts.unsure;
 
-  return <main className="flex min-h-0 flex-1 flex-col items-center overflow-auto px-4 py-6 md:py-10" aria-label="Triage">
+  const total = remaining + decided;
+
+  return <StageLayout label="Triage" list={
+    <Panel title="Progress" aside={<span className="subtle mono text-xs">{total ? Math.round(decided / total * 100) : 100}%</span>}>
+      <div className="flex flex-col gap-3 p-4 text-sm" role="status">
+        <div className="flex items-baseline justify-between gap-2">
+          <span><strong className="mono text-2xl font-semibold">{decided.toLocaleString()}</strong> <span className="subtle">of {total.toLocaleString()} decided</span></span>
+          <span className="mono font-semibold text-[#f5e7a9]">{remaining.toLocaleString()} left</span>
+        </div>
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-1">
+          {([["group1", counts.group1], ["group2", counts.group2 + counts.exported], ["unsure", counts.unsure], ["rejected", counts.rejected]] as const)
+            .map(([status, count]) => <div key={status} className="flex items-center gap-2">
+              <span className={`status-dot status-${status}`} aria-hidden="true" />
+              <dt className="flex-1">{statusLabels[status]}</dt><dd className="subtle mono">{count.toLocaleString()}</dd>
+            </div>)}
+        </dl>
+        {orderNote && <p className="subtle text-xs">{orderNote}</p>}
+      </div>
+    </Panel>} main={<div className="flex min-w-0 flex-col gap-3">
     <audio ref={audioRef} src={audioSrc} preload="auto" playsInline
       onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} />
-    <div className="w-full max-w-2xl">
-      <div className="subtle mb-3 flex flex-wrap items-center justify-between gap-2 text-xs" role="status">
-        <span>{remaining.toLocaleString()} left · {decided.toLocaleString()} decided ({kept} kept · {counts.unsure} unsure · {counts.rejected} rejected)</span>
-        {orderNote && <span>{orderNote}</span>}
-      </div>
-      {soundBlocked && <p role="alert" className="mb-3 rounded-lg border border-[#7c6845] bg-[#3c3525] px-4 py-3 text-sm">
-        Sound is blocked until you click or press any key once on this page. Browsers don't count controller buttons.
-      </p>}
-      {clip ? <section className="surface rounded-2xl p-6 md:p-8" aria-label={`Clip ${clip.clip_id}`}>
-        <div className="subtle mono mb-3 flex items-center justify-between text-xs">
-          <span>#{clip.clip_id} · {position} of {remaining}</span>
-          <span>{formatSeconds(clip.end_ms - clip.start_ms)}</span>
-        </div>
-        <h2 title={clip.title} className="line-clamp-3 break-words text-3xl font-semibold leading-snug md:text-4xl">{clip.title}</h2>
-        <div className="mt-6 h-1.5 overflow-hidden rounded-full bg-[#17241c]" role="progressbar"
+    {soundBlocked && <p role="alert" className="rounded-lg border border-[#7c6845] bg-[#3c3525] px-4 py-3 text-sm">
+      Sound is blocked until you click or press any key once on this page. Browsers don't count controller buttons.
+    </p>}
+    {clip ? <Panel ariaLabel={`Clip ${clip.clip_id}`} title={`Clip ${position} of ${remaining}`}
+      aside={<span className="subtle mono flex items-center gap-2 text-xs">#{clip.clip_id} · {formatSeconds(clip.end_ms - clip.start_ms)}</span>}>
+      <div className="p-5 md:p-7">
+        <h2 title={clip.title} className="line-clamp-3 break-words text-3xl font-semibold leading-snug">{clip.title}</h2>
+        <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-[#17241c]" role="progressbar"
           aria-label="Clip playback" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)}>
           <div className="h-full bg-[#b7d69d]" style={{ width: `${progress * 100}%` }} />
         </div>
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          <button type="button" onClick={() => play("replay")}
-            className="inline-flex items-center gap-2 rounded-lg bg-[#b7d69d] px-3 py-2 text-sm font-medium text-[#1b291f] hover:bg-[#c8e5af]">
-            <span aria-hidden="true">↻</span><span>Replay</span><ShortcutBadge keyboard="Space" bindingId="replay" />
-          </button>
-          <button type="button" onClick={() => play("toggle")} aria-label={playing ? "Pause" : "Play"}
-            className="soft-surface inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm">
-            <span aria-hidden="true">{playing ? "❚❚" : "▶"}</span><ShortcutBadge keyboard="Shift+Space" bindingId="play-pause" />
-          </button>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button onClick={() => play("replay")} shortcut="Space" shortcutId="replay">
+            <span aria-hidden="true">↻</span>Replay
+          </Button>
+          <Button onClick={() => play("toggle")} ariaLabel={playing ? "Pause" : "Play"} shortcut="Shift+Space" shortcutId="play-pause">
+            <span aria-hidden="true">{playing ? "❚❚" : "▶"}</span>
+          </Button>
         </div>
-        <div className="mt-6 grid grid-cols-2 gap-2 sm:grid-cols-4" role="group" aria-label="Decision">
+        <div className="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-4" role="group" aria-label="Decision">
           {decisions.map((decision) => <button key={decision.status} type="button" disabled={busy}
             onClick={() => onDecide(decision.status)}
-            className={`flex flex-col items-center gap-2 rounded-xl border px-3 py-4 text-base font-semibold disabled:opacity-50 ${decision.tone}`}>
-            <span>{decision.label}</span><ShortcutBadge keyboard={decision.keyboard} bindingId={decision.status} />
+            className={`btn btn-decision tone-${decision.status}`}>
+            {decision.label}<ShortcutBadge keyboard={decision.keyboard} bindingId={decision.status} />
           </button>)}
         </div>
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-sm">
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t line pt-4">
+          <Button variant="quiet" onClick={() => onNavigate("previous")} shortcut="K" shortcutId="previous">
+            <span aria-hidden="true">←</span>Back
+          </Button>
           <div className="flex gap-2">
-            <button type="button" onClick={() => onNavigate("previous")} className="soft-surface inline-flex items-center gap-2 rounded-lg px-3 py-2">
-              <span aria-hidden="true">←</span><span>Back</span><ShortcutBadge keyboard="K" bindingId="previous" />
-            </button>
-            <button type="button" onClick={() => onNavigate("next")} className="soft-surface inline-flex items-center gap-2 rounded-lg px-3 py-2"
-              title="Leave this clip unsorted and move on">
-              <span>Pass</span><span aria-hidden="true">→</span><ShortcutBadge keyboard="J" bindingId="next" />
-            </button>
+            <Button variant="quiet" onClick={onUndo} disabled={!canUndo || busy} shortcut="U" shortcutId="undo">Undo</Button>
+            <Button variant="quiet" onClick={() => onNavigate("next")} title="Leave this clip unsorted and move on" shortcut="J" shortcutId="next">
+              Pass<span aria-hidden="true">→</span>
+            </Button>
           </div>
-          <button type="button" onClick={onUndo} disabled={!canUndo || busy}
-            className="soft-surface inline-flex items-center gap-2 rounded-lg px-3 py-2 disabled:opacity-50">
-            <span>Undo</span><ShortcutBadge keyboard="U" bindingId="undo" />
-          </button>
         </div>
-      </section> : <section className="surface rounded-2xl p-8 text-center">
-        <h2 className="mb-2 text-2xl font-semibold">Everything is triaged</h2>
-        <p className="subtle">No unsorted clips are left. Switch to Polish to fix titles and timing of your keepers.</p>
-      </section>}
-    </div>
-  </main>;
+      </div>
+    </Panel> : <Panel className="p-8 text-center">
+      <h2 className="mb-2 text-2xl font-semibold">Everything is triaged</h2>
+      <p className="subtle">No unsorted clips are left. Switch to Polish to fix titles and timing of your keepers.</p>
+    </Panel>}
+  </div>} />;
 }

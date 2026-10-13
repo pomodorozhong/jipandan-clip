@@ -540,13 +540,13 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
         </div>
         <div className="flex flex-wrap gap-2 sm:col-start-2 sm:row-start-1">
           {outputPath && <button type="button" onClick={() => dispatchAction({ type: "reveal-export" })}
-            className="rounded-lg border line px-4 py-2 text-sm font-semibold">Reveal file</button>}
+            className="btn btn-quiet">Reveal file</button>}
           <button type="button" onClick={() => dispatchAction({ type: "export", advance: false })} disabled={!candidateReady || exporting || requesting}
-            className="rounded-lg border line px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50">
+            className="btn btn-secondary">
             {clip.last_export_path ? "Re-export" : "Export"} <ShortcutBadge keyboard="Enter" bindingId="export" /></button>
           <button type="button" onClick={() => dispatchAction({ type: "export", advance: true })} disabled={!candidateReady || exporting || requesting || !nextClipId}
             title={nextClipId ? "Export and open the next clip (Command+Enter)" : "No next clip in this view"}
-            className="rounded-lg bg-[#b7d69d] px-4 py-2 text-sm font-semibold text-[#1d2d20] disabled:cursor-not-allowed disabled:opacity-50">
+            className="btn btn-primary">
             {exporting ? "Exporting…" : "Export & Next"}
             <ShortcutBadge keyboard="⌘ Enter" bindingId="export-next" />
           </button>
@@ -556,9 +556,9 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
 
   if (inline) {
     return <section ref={dialogRef} aria-label={`Export clip ${clip.clip_id}`}
-      className="surface flex w-full flex-col self-start rounded-2xl">
+      className="panel flex w-full flex-col self-start">
       <header className="border-b line px-4 py-3 sm:px-5">
-        <p className="accent mono text-[11px] font-bold uppercase tracking-[.16em]">Publish · Clip #{clip.clip_id}</p>
+        <p className="eyebrow mono">Publish · Clip #{clip.clip_id}</p>
         <h2 className="mt-1 break-words text-xl font-semibold">{clip.title}</h2>
       </header>
       {settingsPanel}

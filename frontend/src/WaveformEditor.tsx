@@ -794,15 +794,15 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
     <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
       <div className="flex flex-wrap gap-2">
         <button type="button" onClick={() => dispatchAction({ type: "playback", target: "clip", mode: "replay" })} title="Replay from start (Space)"
-          className="inline-flex items-center gap-2 rounded-lg bg-[#b7d69d] px-3 py-2 text-sm font-medium text-[#1b291f] hover:bg-[#c8e5af]">
+          className="btn btn-secondary">
           <span aria-hidden="true" className="text-base leading-none">↻</span><span>Replay from start</span><ShortcutBadge keyboard="Space" bindingId="replay" />
         </button>
-        <button type="button" onClick={() => dispatchAction({ type: "playback", target: "clip", mode: "toggle" })} className="soft-surface inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm"
+        <button type="button" onClick={() => dispatchAction({ type: "playback", target: "clip", mode: "toggle" })} className="btn btn-secondary"
           aria-label={playing ? "Pause audio" : "Play clip"} title="Play or pause (Shift+Space)">
           <span aria-hidden="true" className="text-xs leading-none">{playing ? "❚❚" : "▶"}</span><span>{playing ? "Pause" : "Play clip"}</span><ShortcutBadge keyboard="Shift+Space" bindingId="play-pause" />
         </button>
-        <button type="button" onClick={() => dispatchAction({ type: "playback", target: "clip", mode: "audition-start" })} className="soft-surface rounded-lg px-3 py-2 text-sm">Hear start</button>
-        <button type="button" onClick={() => dispatchAction({ type: "playback", target: "clip", mode: "audition-end" })} className="soft-surface rounded-lg px-3 py-2 text-sm">Hear end</button>
+        <button type="button" onClick={() => dispatchAction({ type: "playback", target: "clip", mode: "audition-start" })} className="btn btn-quiet">Hear start</button>
+        <button type="button" onClick={() => dispatchAction({ type: "playback", target: "clip", mode: "audition-end" })} className="btn btn-quiet">Hear end</button>
       </div>
       <span className="subtle mono text-xs">Playhead {formatClock(playheadMs)}</span>
     </div>
@@ -861,7 +861,7 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
                   : amount === -100 ? "nudge-end-coarse-back" : amount === -10 ? "nudge-end-fine-back" : amount === 10 ? "nudge-end-fine-forward" : "nudge-end-coarse-forward";
                 return <button key={amount} type="button" onClick={() => dispatchAction({ type: "nudge", edge: which, amount, source: "pointer" })}
                   disabled={controlsDisabled} title={`Nudge ${which} boundary ${amount > 0 ? "+" : ""}${amount} ms (${key})`}
-                  className="mono inline-flex items-center justify-center gap-2 rounded-lg bg-[#304538] px-3 py-2 text-sm hover:bg-[#3b5543] disabled:opacity-50">
+                  className="btn btn-secondary mono">
                   <span>{amount > 0 ? "+" : ""}{amount} ms</span><ShortcutBadge keyboard={key} bindingId={shortcutId} />
                 </button>;
               })}
@@ -869,7 +869,7 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
                 onClick={() => void commitBounds(clip.original_start_ms, endMs)}
                 disabled={controlsDisabled || startMs === clip.original_start_ms || clip.original_start_ms > endMs - MIN_CLIP_MS}
                 title="Restore the start time from the SRT"
-                className="rounded-lg border line px-3 py-2 text-sm hover:bg-[#304538] disabled:opacity-50">
+                className="btn btn-quiet">
                 Use original start
               </button>}
             </div>
