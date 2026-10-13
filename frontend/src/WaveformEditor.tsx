@@ -102,7 +102,7 @@ export function useWaveform(clipId: string, range: TimeRange, buckets: number, a
 
 export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, editableEdge,
   originalStartMs, disabled, minSpan, maxSpan, onViewportChange, trimMap, sharedPeak, compact = false, onSeek, canEdit = true, gestureTarget,
-  clockOffsetMs = 0, onResetViewport, pinHandles = false,
+  clockOffsetMs = 0, onResetViewport, pinHandles = false, shadeOutside = false, showClock = true,
   onPreviewRange, onCommitRange, onPreviewEdge, onCommitEdge, onCancel }: {
   label: string;
   range: TimeRange;
@@ -124,6 +124,9 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
   clockOffsetMs?: number;
   onResetViewport?: () => void;
   pinHandles?: boolean;
+  /** Dim the padding outside the clip, for view-only plots without handles. */
+  shadeOutside?: boolean;
+  showClock?: boolean;
   onViewportChange: (start: number, span: number) => TimeRange;
   onPreviewRange: (start: number, end: number) => void;
   onCommitRange: (start: number, end: number) => void;
@@ -368,7 +371,7 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
       }}
       preserveAspectRatio="none" onPointerDown={pointerDown} onPointerMove={pointerMove}
       onPointerUp={pointerUp} onPointerCancel={pointerCancel} onLostPointerCapture={pointerCancel}
-      className={`block ${compact ? "h-24" : "h-36"} w-full cursor-crosshair overscroll-x-none rounded-lg border border-[#46584c] bg-[#101a17] touch-none`}>
+      className={`block ${compact ? "h-24" : "h-36"} w-full ${canEdit || onSeek ? "cursor-crosshair" : "cursor-default"} overscroll-x-none rounded-lg border border-[#46584c] bg-[#101a17] touch-none`}>
       {trimMap && removedRanges(trimMap).map(([start, end]) => <g key={start}>
         <title>{`Removed ${(start / 1000).toFixed(2)}–${(end / 1000).toFixed(2)} s`}</title>
         <rect x={markerX(start)} y="0" width={(end - start) / span * PLOT_WIDTH} height={PLOT_HEIGHT} fill="#e6ad87" fillOpacity=".22" />
@@ -380,6 +383,11 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
       {inRange(startMs) && inRange(endMs) && <rect x={Math.min(startX, endX)} y="0" width={Math.abs(endX - startX)} height={PLOT_HEIGHT} fill="#b7d69d" opacity="0.08" />}
       {points && <path d={points} transform={waveformTransform} vectorEffect="non-scaling-stroke"
         stroke="#a8c9b0" strokeWidth="1.5" fill="none" />}
+      {shadeOutside && <g aria-hidden="true">
+        <rect x="0" y="0" width={clamp(startX, 0, PLOT_WIDTH)} height={PLOT_HEIGHT} fill="#101816" opacity="0.6" />
+        <rect x={clamp(endX, 0, PLOT_WIDTH)} y="0" width={PLOT_WIDTH - clamp(endX, 0, PLOT_WIDTH)} height={PLOT_HEIGHT} fill="#101816" opacity="0.6" />
+        {[startX, endX].map((x) => <line key={x} x1={x} x2={x} y1="0" y2={PLOT_HEIGHT} stroke="#b7d69d" strokeWidth="1.5" opacity="0.7" />)}
+      </g>}
       {originalStartMs !== null && inRange(originalStartMs) && <g>
         <title>Original SRT start</title>
         <line x1={markerX(originalStartMs)} y1="0" x2={markerX(originalStartMs)} y2={PLOT_HEIGHT}
@@ -401,7 +409,7 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
       })}
       {inRange(playheadMs) && <line x1={markerX(playheadMs)} y1="0" x2={markerX(playheadMs)} y2={PLOT_HEIGHT} stroke="#f2f4ef" strokeWidth="2" opacity="0.9" />}
     </svg>
-    <div className="subtle mono mt-1 flex justify-between text-[11px]">
+    {showClock && <div className="subtle mono mt-1 flex justify-between text-[11px]">
       <span>{formatClock(range.start + clockOffsetMs)}</span>
       {onResetViewport ? <span className="flex gap-1">
         <button type="button" aria-label={`Zoom out ${label}`} onClick={() => {
@@ -415,7 +423,7 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
         }} className="rounded px-1 hover:bg-[#304538]">+</button>
       </span> : <span>{formatClock(Math.round((range.start + range.end) / 2) + clockOffsetMs)}</span>}
       <span>{formatClock(range.end + clockOffsetMs)}</span>
-    </div>
+    </div>}
   </div>;
 }
 

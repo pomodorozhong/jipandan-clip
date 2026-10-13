@@ -1109,7 +1109,7 @@ export default function App() {
       </div>}
       {session.needs_transcription ? <TranscriptionScreen key={session.audio} session={session}
         onReady={(next) => { setSession(next); setFilter("unsorted"); setSelectedId(null); }} />
-      : mode === "triage" ? <TriageScreen clip={selected} position={selectedPosition + 1} remaining={visible.length}
+      : mode === "triage" ? <TriageScreen clip={selected} durationMs={session.duration_ms ?? 0} position={selectedPosition + 1} remaining={visible.length}
         counts={session.counts} audioSrc={audioUrl()} autoplay={settings.autoplayClips}
         active={!showExportModal && !showSettings && !showHelp && !showJump && !showMerge}
         busy={busy} canUndo={Boolean(session.can_undo)}

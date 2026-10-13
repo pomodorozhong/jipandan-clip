@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Clip, Status } from "./api";
 import type { GamepadActionRequest } from "./gamepad";
 import {
@@ -10,6 +10,7 @@ import {
 } from "./inputActions";
 import { ShortcutBadge } from "./ShortcutBadge";
 import { Button, Panel, StageLayout, statusLabels } from "./ui";
+import { initialRange, useWaveform, WaveformPlot } from "./WaveformEditor";
 
 type PlaybackMode = "replay" | "toggle";
 
@@ -30,10 +31,11 @@ const decisions: { status: ClassificationStatus; label: string; keyboard: string
  * handling; this screen owns playback, which plays only the clip's span.
  */
 export default function TriageScreen({
-  clip, position, remaining, counts, audioSrc, autoplay, active, busy, orderNote,
+  clip, durationMs, position, remaining, counts, audioSrc, autoplay, active, busy, orderNote,
   gamepadAction, onGamepadActionHandled, onPlayback, onDecide, onNavigate, onUndo, canUndo,
 }: {
   clip: Clip | null;
+  durationMs: number;
   position: number;
   remaining: number;
   counts: Record<Status, number>;
@@ -53,7 +55,7 @@ export default function TriageScreen({
   const audioRef = useRef<HTMLAudioElement>(null);
   const stopAtRef = useRef<number | null>(null);
   const [playing, setPlaying] = useState(false);
-  const [progress, setProgress] = useState(0);
+  const [playheadMs, setPlayheadMs] = useState(clip?.start_ms ?? 0);
   // Browsers block sound until the page gets a click or key press; controller
   // buttons do not count. Remember the blocked play and retry it after one.
   const [soundBlocked, setSoundBlocked] = useState(false);
@@ -86,7 +88,7 @@ export default function TriageScreen({
     };
   }, [soundBlocked]);
 
-  // Stop at the clip's end and drive the progress bar.
+  // Stop at the clip's end and drive the playhead.
   useEffect(() => {
     if (!playing) return;
     let frame = 0;
@@ -95,11 +97,11 @@ export default function TriageScreen({
       const current = clipRef.current;
       if (!audio || !current) return;
       const now = audio.currentTime * 1000;
-      setProgress(Math.min(1, Math.max(0, (now - current.start_ms) / Math.max(1, current.end_ms - current.start_ms))));
+      setPlayheadMs(Math.min(current.end_ms, Math.max(current.start_ms, now)));
       if (stopAtRef.current !== null && now >= stopAtRef.current) {
         audio.pause();
         stopAtRef.current = null;
-        setProgress(1);
+        setPlayheadMs(current.end_ms);
       } else {
         frame = requestAnimationFrame(tick);
       }
@@ -111,7 +113,7 @@ export default function TriageScreen({
   // A new clip resets playback and, with autoplay, starts it once the audio can seek.
   useEffect(() => {
     const audio = audioRef.current;
-    setProgress(0);
+    setPlayheadMs(clip?.start_ms ?? 0);
     if (!audio || !clip) return;
     audio.pause();
     if (!autoplay || !active) return;
@@ -152,6 +154,11 @@ export default function TriageScreen({
     onGamepadActionHandled?.(gamepadAction.id);
   }, [gamepadAction]);
 
+  // A view-only waveform with the same padding as Polish's overview (#41).
+  const waveformRange = useMemo(() => initialRange(clip ?? { start_ms: 0, end_ms: 1 }, Math.max(durationMs, clip?.end_ms ?? 1)),
+    [clip?.start_ms, clip?.end_ms, durationMs]);
+  const waveform = useWaveform(clip?.clip_id ?? "", waveformRange, 1000, Boolean(clip));
+
   const kept = counts.group1 + counts.group2 + counts.exported;
   const decided = kept + counts.rejected + counts.unsure;
 
@@ -183,9 +190,17 @@ export default function TriageScreen({
       aside={<span className="subtle mono flex items-center gap-2 text-xs">#{clip.clip_id} · {formatSeconds(clip.end_ms - clip.start_ms)}</span>}>
       <div className="p-5 md:p-7">
         <h2 title={clip.title} className="line-clamp-3 break-words text-3xl font-semibold leading-snug">{clip.title}</h2>
-        <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-[#17241c]" role="progressbar"
-          aria-label="Clip playback" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)}>
-          <div className="h-full bg-[#b7d69d]" style={{ width: `${progress * 100}%` }} />
+        <div className="relative mt-5">
+          {waveform.error ? <p role="alert" className="text-sm text-[#ffb3a8]">{waveform.error} <button type="button" onClick={waveform.retry} className="underline">Retry</button></p>
+            : !waveform.window ? <div className="subtle flex h-36 items-center justify-center rounded-lg border border-[#46584c] bg-[#101a17] text-sm">Loading waveform…</div>
+              : <WaveformPlot label="Clip waveform with surrounding audio shaded" range={waveformRange} waveform={waveform.window}
+                startMs={clip.start_ms} endMs={clip.end_ms} playheadMs={playheadMs} originalStartMs={null}
+                disabled minSpan={1} maxSpan={Number.MAX_SAFE_INTEGER} canEdit={false} shadeOutside showClock={false}
+                onViewportChange={() => waveformRange} onPreviewRange={() => {}} onCommitRange={() => {}}
+                onPreviewEdge={() => {}} onCommitEdge={() => {}} onCancel={() => {}} />}
+          <span className="subtle mono pointer-events-none absolute bottom-2 right-3 text-[11px]" aria-live="off">
+            {((playheadMs - clip.start_ms) / 1000).toFixed(1)} / {((clip.end_ms - clip.start_ms) / 1000).toFixed(1)} s
+          </span>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <Button onClick={() => play("replay")} shortcut="Space" shortcutId="replay">
