@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shared pieces mockup</title>
+<style>
+body{margin:0;background:#101816}
+.app{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color:#edf2ee;background:#101816;font-size:14px;line-height:1.4}
+.panel{background:#192420;border:1px solid #34423b;border-radius:16px;min-width:0}
+.panel-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 12px;padding:12px 18px;border-bottom:1px solid #34423b}
+.eyebrow{margin:0;font-size:11px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:#9eafa3}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:40px;box-sizing:border-box;padding:0 14px;border-radius:10px;border:1px solid transparent;font:inherit;font-size:14px;font-weight:600;white-space:nowrap;cursor:pointer}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn-primary{background:#b7d69d;color:#1b291f}.btn-primary:hover{background:#c8e5af}
+.btn-secondary{background:#22312a;color:#edf2ee;border-color:#34423b}.btn-secondary:hover{background:#2c3f35}
+.btn-quiet{background:transparent;color:#b5c4b9}.btn-quiet:hover{background:#22312a;color:#edf2ee}
+.btn-icon{width:40px;padding:0}
+.btn-decision{min-height:64px;border-radius:12px;font-size:15px}
+.kbd{display:inline-flex;min-width:20px;height:22px;box-sizing:border-box;align-items:center;justify-content:center;border:1px solid currentColor;border-radius:5px;padding:0 5px;font-family:inherit;font-size:11px;font-weight:700;line-height:1;opacity:.75}
+.count{display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:20px;box-sizing:border-box;padding:0 7px;border-radius:999px;background:#101816;color:#b5c4b9;font-size:12px;font-weight:650;font-variant-numeric:tabular-nums}
+.seg{display:inline-flex;gap:2px;padding:3px;border:1px solid #34423b;border-radius:12px;background:#17211d}
+.seg-btn{display:inline-flex;align-items:center;gap:8px;min-height:36px;padding:0 14px;border:0;border-radius:9px;background:transparent;color:#d6e0da;font:inherit;font-weight:600;cursor:pointer}
+.seg-btn[aria-pressed="true"]{background:#b7d69d;color:#1b291f}
+.seg-btn[aria-pressed="true"] .count{background:#1b291f;color:#d4ecbe}
+.muted{color:#9eafa3}
+.dot{width:8px;height:8px;border-radius:50%;flex:none}
+.tag{display:inline-flex;align-items:center;border:1px solid;border-radius:6px;padding:2px 7px;font-size:11px;font-weight:650;line-height:1.2;white-space:nowrap}
+.tone-group1{background:#254d38;border-color:#498c61;color:#c1f3cd}
+.tone-group2{background:#284762;border-color:#4c80a8;color:#c4e7ff}
+.tone-unsure{background:#573b26;border-color:#a5683c;color:#f6cfa8}
+.tone-rejected{background:#36413e;border-color:#66756e;color:#d6e0da}
+.tone-pending{background:#534c2e;border-color:#847749;color:#f5e7a9}
+.tone-exported{background:#4d375a;border-color:#825e9c;color:#e9cbf8}
+.score{min-width:30px;border-radius:6px;background:#1f2b26;padding:2px 6px;text-align:center;font-size:12px;color:#b7d69d;font-variant-numeric:tabular-nums}
+.track{display:flex;height:10px;border-radius:999px;overflow:hidden;background:#101816;border:1px solid #34423b}
+.swatch{height:56px;border-radius:10px;border:1px solid #34423b}
+.spec{display:flex;flex-direction:column;gap:14px;padding:18px}
+.label{font-size:12px;color:#9eafa3}
+.skel{border-radius:8px;background:#22312a}
+</style>
+</head>
+<body>
+<div class="app" style="width: 1400px; height: 1180px; box-sizing: border-box; padding: 40px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: min-content; gap: 24px">
+
+<div style="grid-column: 1 / -1; display: flex; align-items: baseline; justify-content: space-between; gap: 16px">
+<h1 style="margin: 0; font-size: 28px; font-weight: 700">Shared pieces</h1>
+<p class="muted" style="margin: 0">One panel, one section header, three button weights, one badge set and one stage layout for Triage, Polish and Publish.</p>
+</div>
+
+<section class="panel" style="grid-column: span 2">
+<div class="panel-head"><h2 class="eyebrow">Color</h2><span class="muted" style="font-size: 12px">From the current style.css</span></div>
+<div class="spec" style="display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px">
+
+<div style="display: flex; flex-direction: column; gap: 6px; min-width: 0"><div class="swatch" style="background: #101816"></div><div style="font-size: 13px; font-weight: 600">Ground</div><div class="label" style="font-family: ui-monospace, monospace">#101816</div></div>
+
+<div style="display: flex; flex-direction: column; gap: 6px; min-width: 0"><div class="swatch" style="background: #141e1a"></div><div style="font-size: 13px; font-weight: 600">Top bar</div><div class="label" style="font-family: ui-monospace, monospace">#141e1a</div></div>
+
+<div style="display: flex; flex-direction: column; gap: 6px; min-width: 0"><div class="swatch" style="background: #192420"></div><div style="font-size: 13px; font-weight: 600">Panel</div><div class="label" style="font-family: ui-monospace, monospace">#192420</div></div>
+
+<div style="display: flex; flex-direction: column; gap: 6px; min-width: 0"><div class="swatch" style="background: #22312a"></div><div style="font-size: 13px; font-weight: 600">Raised</div><div class="label" style="font-family: ui-monospace, monospace">#22312a</div></div>
+
+<div style="display: flex; flex-direction: column; gap: 6px; min-width: 0"><div class="swatch" style="background: #34423b"></div><div style="font-size: 13px; font-weight: 600">Line</div><div class="label" style="font-family: ui-monospace, monospace">#34423b</div></div>
+
+<div style="display: flex; flex-direction: column; gap: 6px; min-width: 0"><div class="swatch" style="background: #344b39"></div><div style="font-size: 13px; font-weight: 600">Selected row</div><div class="label" style="font-family: ui-monospace, monospace">#344b39</div></div>
+
+<div style="display: flex; flex-direction: column; gap: 6px; min-width: 0"><div class="swatch" style="background: #edf2ee"></div><div style="font-size: 13px; font-weight: 600">Text</div><div class="label" style="font-family: ui-monospace, monospace">#edf2ee</div></div>
+
+<div style="display: flex; flex-direction: column; gap: 6px; min-width: 0"><div class="swatch" style="background: #9eafa3"></div><div style="font-size: 13px; font-weight: 600">Muted</div><div class="label" style="font-family: ui-monospace, monospace">#9eafa3</div></div>
+
+<div style="display: flex; flex-direction: column; gap: 6px; min-width: 0"><div class="swatch" style="background: #b7d69d"></div><div style="font-size: 13px; font-weight: 600">Accent</div><div class="label" style="font-family: ui-monospace, monospace">#b7d69d</div></div>
+
+<div style="display: flex; flex-direction: column; gap: 6px; min-width: 0"><div class="swatch" style="background: #1b291f"></div><div style="font-size: 13px; font-weight: 600">On accent</div><div class="label" style="font-family: ui-monospace, monospace">#1b291f</div></div>
+
+<div style="display: flex; flex-direction: column; gap: 6px; min-width: 0"><div class="swatch" style="background: #ead49b"></div><div style="font-size: 13px; font-weight: 600">Warning</div><div class="label" style="font-family: ui-monospace, monospace">#ead49b</div></div>
+
+<div style="display: flex; flex-direction: column; gap: 6px; min-width: 0"><div class="swatch" style="background: #ffb3a8"></div><div style="font-size: 13px; font-weight: 600">Error</div><div class="label" style="font-family: ui-monospace, monospace">#ffb3a8</div></div>
+
+</div>
+</section>
+
+<section class="panel">
+<div class="panel-head"><h2 class="eyebrow">Type</h2></div>
+<div class="spec">
+<div style="font-size: 28px; font-weight: 650; line-height: 1.25">Clip title 28/650</div>
+<div style="font-size: 16px; font-weight: 700">Panel title 16/700</div>
+<div style="font-size: 14px">Body 14/400 · labels and rows</div>
+<div class="muted" style="font-size: 12px">Meta 12 · muted · tabular numbers 0:42.310</div>
+<h3 class="eyebrow">Section header 11/700 · caps</h3>
+</div>
+</section>
+
+<section class="panel" style="grid-column: span 2">
+<div class="panel-head"><h2 class="eyebrow">Buttons</h2><span class="muted" style="font-size: 12px">40 px tall · badge sits after the label</span></div>
+<div class="spec" style="display: grid; grid-template-columns: 140px repeat(3, minmax(0, 1fr)); align-items: center; gap: 14px 18px">
+<span class="label">Primary · one per panel</span>
+<div><button type="button" class="btn btn-primary">Ready for Publish <kbd class="kbd">2</kbd></button></div>
+<div><button type="button" class="btn btn-primary">Export &amp; Next <kbd class="kbd">⌘ Enter</kbd></button></div>
+<div><button type="button" class="btn btn-primary" disabled>Export <kbd class="kbd">Enter</kbd></button></div>
+<span class="label">Secondary · common actions</span>
+<div><button type="button" class="btn btn-secondary">Edit title <kbd class="kbd">R</kbd></button></div>
+<div><button type="button" class="btn btn-secondary">Replay <kbd class="kbd">Space</kbd></button></div>
+<div><button type="button" class="btn btn-secondary">−10 ms <kbd class="kbd">,</kbd></button></div>
+<span class="label">Quiet · navigation, icons</span>
+<div><button type="button" class="btn btn-quiet"><span aria-hidden="true">←</span>Back <kbd class="kbd">K</kbd></button></div>
+<div><button type="button" class="btn btn-quiet">Hear start</button></div>
+<div style="display: flex; gap: 6px"><button type="button" class="btn btn-quiet btn-icon" aria-label="Keyboard shortcuts"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="9" cy="9" r="7.2"></circle><path d="M6.9 7a2.2 2.2 0 1 1 3 2c-.6.3-.9.7-.9 1.3v.4"></path><circle cx="9" cy="13.2" r=".4" fill="currentColor"></circle></svg></button><button type="button" class="btn btn-quiet btn-icon" aria-label="Settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg></button></div>
+<span class="label">Decision · Triage only</span>
+<div style="grid-column: span 3; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px">
+<button type="button" class="btn btn-decision tone-group1">Needs work <kbd class="kbd">1</kbd></button>
+<button type="button" class="btn btn-decision tone-group2">Ready <kbd class="kbd">2</kbd></button>
+<button type="button" class="btn btn-decision tone-rejected">Reject <kbd class="kbd">X</kbd></button>
+</div>
+</div>
+</section>
+
+<section class="panel">
+<div class="panel-head"><h2 class="eyebrow">Badges</h2></div>
+<div class="spec">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px"><span class="label" style="width: 72px">Key</span><kbd class="kbd">J</kbd><kbd class="kbd">Space</kbd><kbd class="kbd">⇧Space</kbd><kbd class="kbd">⌘ Enter</kbd></div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px"><span class="label" style="width: 72px">Count</span><span class="count">412</span><span class="count">38</span><span class="score">87</span></div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 6px"><span class="label" style="width: 72px">Status</span><span class="tag tone-pending">Unsorted</span><span class="tag tone-group1">Needs work</span><span class="tag tone-group2">Ready</span><span class="tag tone-rejected">Rejected</span><span class="tag tone-exported">Exported</span></div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px"><span class="label" style="width: 72px">Stage</span><div class="seg"><button type="button" class="seg-btn" aria-pressed="true">Triage <span class="count">412</span></button><button type="button" class="seg-btn" aria-pressed="false">Polish <span class="count">38</span></button></div></div>
+</div>
+</section>
+
+<section class="panel">
+<div class="panel-head"><h2 class="eyebrow">Panel + section header</h2><span class="count">38</span></div>
+<div class="spec">
+<p class="muted" style="margin: 0">Every surface is this panel: 16 px corners, 1 px line, a header strip with a caps section title on the left and counts or actions on the right.</p>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<h3 class="eyebrow">Progress bar</h3>
+<div style="display: flex; justify-content: space-between"><span><strong>188</strong> <span class="muted">of 600 decided</span></span><span style="color: #f5e7a9; font-weight: 650">412 left</span></div>
+<div class="track" role="img" aria-label="188 of 600 decided"><div style="width: 7.67%; background: #a6d7af"></div><div style="width: 2%; background: #93bde2"></div><div style="width: 21.67%; background: #80918a"></div></div>
+</div>
+</div>
+</section>
+
+<section class="panel" style="grid-column: span 2">
+<div class="panel-head"><h2 class="eyebrow">Stage layout</h2><span class="muted" style="font-size: 12px">List 300–340 px · main fills the rest · stacks below 900 px</span></div>
+<div class="spec" style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px">
+
+<div style="display: flex; flex-direction: column; gap: 8px; min-width: 0">
+<div style="font-weight: 650">Triage</div>
+<div style="display: flex; gap: 8px; height: 150px; padding: 8px; box-sizing: border-box; border: 1px solid #34423b; border-radius: 10px; background: #101816">
+<div style="width: 32%; display: flex; flex-direction: column; gap: 6px"><div class="skel" style="flex: 1; display: flex; align-items: flex-end; padding: 6px; font-size: 11px; color: #9eafa3">Progress · Up next</div></div>
+<div class="skel" style="flex: 1; display: flex; align-items: flex-end; padding: 6px; font-size: 11px; color: #9eafa3">One clip · decisions</div>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 8px; min-width: 0">
+<div style="font-weight: 650">Polish</div>
+<div style="display: flex; gap: 8px; height: 150px; padding: 8px; box-sizing: border-box; border: 1px solid #34423b; border-radius: 10px; background: #101816">
+<div style="width: 32%; display: flex; flex-direction: column; gap: 6px"><div class="skel" style="flex: 1; display: flex; align-items: flex-end; padding: 6px; font-size: 11px; color: #9eafa3">Needs work · search · order</div></div>
+<div class="skel" style="flex: 1; display: flex; align-items: flex-end; padding: 6px; font-size: 11px; color: #9eafa3">Clip · waveform · fine trim</div>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 8px; min-width: 0">
+<div style="font-weight: 650">Publish</div>
+<div style="display: flex; gap: 8px; height: 150px; padding: 8px; box-sizing: border-box; border: 1px solid #34423b; border-radius: 10px; background: #101816">
+<div style="width: 32%; display: flex; flex-direction: column; gap: 6px"><div class="skel" style="flex: 1; display: flex; align-items: flex-end; padding: 6px; font-size: 11px; color: #9eafa3">Ready · Exported</div></div>
+<div class="skel" style="flex: 1; display: flex; align-items: flex-end; padding: 6px; font-size: 11px; color: #9eafa3">Export settings · compare · export</div>
+</div>
+</div>
+
+</div>
+</section>
+
+</div>
+</body>
+</html>
