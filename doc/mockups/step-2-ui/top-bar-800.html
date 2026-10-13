@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Top bar at 800 px mockup</title>
+<style>
+body{margin:0;background:#101816}
+.app{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color:#edf2ee;background:#101816;font-size:14px;line-height:1.4}
+.topbar{container-type:inline-size;background:#141e1a;border-bottom:1px solid #34423b}
+.topbar-row{display:flex;flex-wrap:wrap;align-items:center;gap:10px 20px;padding:10px 20px}
+.topbar-side{display:flex;align-items:center;gap:10px;flex:1 1 0;min-width:0}
+.topbar-stages{flex:0 0 auto}
+@container (max-width: 1000px){.topbar-stages{order:3;flex-basis:100%;display:flex;justify-content:center}.topbar-side{flex-basis:auto}}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:40px;box-sizing:border-box;padding:0 14px;border-radius:10px;border:1px solid transparent;font:inherit;font-size:14px;font-weight:600;white-space:nowrap;cursor:pointer}
+.btn-secondary{background:#22312a;color:#edf2ee;border-color:#34423b}
+.btn-quiet{background:transparent;color:#b5c4b9}
+.btn-icon{width:40px;padding:0}
+.kbd{display:inline-flex;min-width:20px;height:22px;box-sizing:border-box;align-items:center;justify-content:center;border:1px solid currentColor;border-radius:5px;padding:0 5px;font-family:inherit;font-size:11px;font-weight:700;line-height:1;opacity:.75}
+.count{display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:20px;box-sizing:border-box;padding:0 7px;border-radius:999px;background:#101816;color:#b5c4b9;font-size:12px;font-weight:650;font-variant-numeric:tabular-nums}
+.seg{display:inline-flex;gap:2px;padding:3px;border:1px solid #34423b;border-radius:12px;background:#17211d}
+.seg-btn{display:inline-flex;align-items:center;gap:8px;min-height:36px;padding:0 14px;border:0;border-radius:9px;background:transparent;color:#d6e0da;font:inherit;font-weight:600;cursor:pointer}
+.seg-btn[aria-pressed="true"]{background:#b7d69d;color:#1b291f}
+.seg-btn[aria-pressed="true"] .count{background:#1b291f;color:#d4ecbe}
+.muted{color:#9eafa3}
+.dot{width:8px;height:8px;border-radius:50%;flex:none}
+</style>
+</head>
+<body>
+<div class="app" style="width: 800px; height: 190px; display: flex; flex-direction: column">
+<header class="topbar">
+<div class="topbar-row">
+<div class="topbar-side">
+<div style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 9px; background: #b7d69d; color: #1b291f; font-weight: 800; flex: none" aria-hidden="true">J</div>
+<div style="min-width: 0">
+<div style="font-weight: 700">Jipandan</div>
+<div class="muted" style="font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">0526.mp3 · 7:12:40</div>
+</div>
+</div>
+<nav class="topbar-stages" aria-label="Stage">
+<div class="seg">
+<button type="button" class="seg-btn" aria-pressed="true">Triage <span class="count">412</span></button>
+<button type="button" class="seg-btn" aria-pressed="false">Polish <span class="count">38</span></button>
+<button type="button" class="seg-btn" aria-pressed="false">Publish <span class="count">12</span></button>
+</div>
+</nav>
+<div class="topbar-side" style="justify-content: flex-end">
+<span style="display: inline-flex; align-items: center; gap: 6px; color: #b9e0b8; font-size: 13px; margin-right: 4px"><span class="dot" style="background: #b7d69d"></span>Saved</span>
+<button type="button" class="btn btn-secondary"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3 2 6l3 3"></path><path d="M2 6h7.5a4 4 0 0 1 0 8H7"></path></svg>Undo <kbd class="kbd">U</kbd></button>
+<button type="button" class="btn btn-quiet btn-icon" aria-label="Keyboard shortcuts (?)"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="9" cy="9" r="7.2"></circle><path d="M6.9 7a2.2 2.2 0 1 1 3 2c-.6.3-.9.7-.9 1.3v.4"></path><circle cx="9" cy="13.2" r=".4" fill="currentColor"></circle></svg></button>
+<button type="button" class="btn btn-quiet btn-icon" aria-label="Settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg></button>
+</div>
+</div>
+</header>
+<p class="muted" style="margin: 0; padding: 14px 20px; font-size: 12px">Below 1000 px the stage switcher drops to its own centered row; name and actions stay on the first.</p>
+</div>
+</body>
+</html>
