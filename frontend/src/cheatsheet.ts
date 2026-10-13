@@ -69,7 +69,7 @@ export const CHEATSHEET_SECTIONS: readonly CheatsheetSection[] = [
       { id: "group1", label: "Needs work" },
       { id: "group2", label: "Ready for Publish" },
       { id: "unsure", label: "Unsure" },
-      { id: "rejected", label: "Rejected" },
+      { id: "rejected", label: "Reject" },
       ...nudgeRows,
       ...selectedBoundaryRows,
       { id: "open-export", label: "Preview export" },

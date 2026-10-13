@@ -1320,6 +1320,9 @@ export default function App() {
                   </button>
                   <Button onClick={() => dispatchReviewAction({ type: "rename" })} disabled={busy || editingTitle}
                     title="Edit clip title (R)" shortcut="R" shortcutId="rename">Edit title</Button>
+                  <Button onClick={() => dispatchReviewAction({ type: "classify", status: "rejected" })}
+                    disabled={busy || editingTitle || selected.status === "rejected"}
+                    title="Reject this clip (X)" shortcut="X" shortcutId="rejected">Reject</Button>
                   <Button onClick={() => dispatchReviewAction({ type: "classify", status: "group2" })}
                     disabled={busy || editingTitle || selected.status === "group2"}
                     title="Mark Ready and move it into Publish (2)" shortcut="2" shortcutId="group2" variant="primary">Ready for Publish</Button>
