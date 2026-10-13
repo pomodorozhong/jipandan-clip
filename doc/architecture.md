@@ -61,6 +61,7 @@ flowchart LR
 - **SQLite holds all review state.** One `.jipandan.db` beside each recording has a clip table with the current state and an append-only event table with every change, decision, and view; undo comes from the events (`core/store.py`). The SRT is only read to create clips when a session starts.
 - **Whisper runs in child processes,** so long jobs can be cancelled without blocking the server. Full transcription writes the SRT; per-clip re-transcription writes title suggestions to the database.
 - **The browser plays audio itself,** streaming the whole recording or a rendered preview MP3 over HTTP. mpv belonged to the retired TUI and is no longer used.
+- **One set of UI pieces.** `frontend/src/ui.tsx` holds the panel, section header, buttons, badges, and the list-plus-main `StageLayout` that Triage, Polish, and Publish share, with their styles in `style.css`. Status labels come from its `statusLabels` (`group1` shows as Needs work, `group2` as Ready). Build new screens from these rather than one-off Tailwind classes.
 
 ## Input
 

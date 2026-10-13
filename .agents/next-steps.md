@@ -1,6 +1,6 @@
 # Next steps
 
-1. #42 Build shared UI pieces (follows the approved #41 mockup; includes the Needs work / Ready rename)
+1. #42 Build shared UI pieces (done on `feat/shared-ui`; owner review, then push and PR)
 2. #52 Remove the Unsure status (before #44)
 3. #43 Rework the top bar
 4. #44 Add a Triage progress bar (after #52)
