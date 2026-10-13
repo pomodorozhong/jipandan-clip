@@ -39,6 +39,8 @@ To build the frontend manually without starting the server, run:
 cd frontend && npm run build
 ```
 
+A running server serves the last build. After changing the frontend, rebuild it and reload the page; after changing Python code, restart `jipandan-web`.
+
 ### Standalone transcription
 
 ```bash
