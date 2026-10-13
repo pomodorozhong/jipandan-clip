@@ -66,5 +66,6 @@ flowchart LR
 
 - Keyboard shortcuts are matched by `KeyboardEvent.code`, so they follow key position rather than the typed character. To test them from a script or a browser automation tool that sends no `code`, dispatch `KeyboardEvent`s with `code` set from JavaScript.
 - Focus policy: keyboard shortcuts work wherever focus is, except in text fields and during IME composition. A focused button keeps only Enter, and Space always drives playback.
+- The shortcuts help dialog is grouped by stage from `frontend/src/cheatsheet.ts`, which uses the labels each screen shows; `cheatsheet.test.ts` checks that every listed key resolves to its action. Keep frontend file names distinct beyond letter case: `tsc` rejects two files that differ only in case (TS1149), even on macOS.
 - Gamepad actions are polled through the Gamepad API and don't depend on DOM focus.
 - Each control can be bound once per context (review, dialogs, Publish), and only the current context's binding fires.

@@ -37,6 +37,9 @@ Decisions:
 - The removed-audio shading comes from FFmpeg's retained PCM rather than a re-estimate, so it matches what is exported.
 - Keyboard shortcuts work wherever focus is, except while typing, so a clicked button no longer disables them. See the [focus policy](architecture.md#input).
 - The header is one compact bar; session and export paths are in a tooltip on the recording name.
+- The UI consistency pass follows the mockup the owner approved in [#41](https://github.com/pomodorozhong/jipandan-clip/issues/41): one panel, section header, three button weights, a badge set, and a list-plus-main layout shared by all three stages. Triage gains a progress panel and a view-only waveform with padding around the clip.
+- Group 1 and Group 2 are renamed **Needs work** and **Ready** in the UI, since the numbers said nothing about what happens next; stored statuses stay `group1`/`group2` ([#42](https://github.com/pomodorozhong/jipandan-clip/issues/42)).
+- Unsure is dropped: Triage decides Needs work, Ready, or Reject ([#52](https://github.com/pomodorozhong/jipandan-clip/issues/52)).
 
 ### Step 3: candidate generation
 
@@ -56,5 +59,5 @@ Why the app logs review activity ([#36](https://github.com/pomodorozhong/jipanda
 
 ## Owner workflow assumptions
 
-- Group 1 = keep, but title or timing still needs fixing; Group 2 = ready to export; Reject = unusable; Unsure = undecided; Unsorted = not reviewed.
+- Group 1 (to be shown as Needs work) = keep, but title or timing still needs fixing; Group 2 (Ready) = ready to export; Reject = unusable; Unsure = undecided, being removed in #52; Unsorted = not reviewed.
 - Triage is done with a gamepad, Polish with both gamepad and keyboard+mouse, Publish mainly with keyboard+mouse. In Publish the owner mostly fixes titles, sometimes timing, and changes thresholds about twice a session.
