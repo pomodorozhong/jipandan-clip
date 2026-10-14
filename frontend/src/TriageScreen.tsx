@@ -31,10 +31,11 @@ const decisions: { status: ClassificationStatus; label: string; keyboard: string
  * handling; this screen owns playback, which plays only the clip's span.
  */
 export default function TriageScreen({
-  clip, durationMs, position, remaining, counts, audioSrc, autoplay, active, busy, orderNote,
-  gamepadAction, onGamepadActionHandled, onPlayback, onDecide, onNavigate, onUndo, canUndo,
+  clip, upNext, durationMs, position, remaining, counts, audioSrc, autoplay, active, busy, orderNote,
+  gamepadAction, onGamepadActionHandled, onPlayback, onDecide, onNavigate, onSelect, onUndo, canUndo,
 }: {
   clip: Clip | null;
+  upNext: Clip[];
   durationMs: number;
   position: number;
   remaining: number;
@@ -49,6 +50,7 @@ export default function TriageScreen({
   onPlayback: () => void;
   onDecide: (status: ClassificationStatus) => void;
   onNavigate: (direction: "next" | "previous") => void;
+  onSelect: (clipId: string) => void;
   onUndo: () => void;
   canUndo: boolean;
 }) {
@@ -163,24 +165,61 @@ export default function TriageScreen({
   const decided = kept + counts.rejected + counts.unsure;
 
   const total = remaining + decided;
+  const progressSegments = [
+    { status: "group1" as const, count: counts.group1, color: "#a6d7af" },
+    { status: "group2" as const, count: counts.group2 + counts.exported, color: "#93bde2" },
+    { status: "unsure" as const, count: counts.unsure, color: "#e0a370" },
+    { status: "rejected" as const, count: counts.rejected, color: "#80918a" },
+  ];
+  const progressLabel = `${decided} of ${total} clips decided: ${progressSegments
+    .filter(({ count }) => count > 0)
+    .map(({ status, count }) => `${count} ${statusLabels[status]}`)
+    .join(", ")}`;
 
   return <StageLayout label="Triage" list={
-    <Panel title="Progress" aside={<span className="subtle mono text-xs">{total ? Math.round(decided / total * 100) : 100}%</span>}>
-      <div className="flex flex-col gap-3 p-4 text-sm" role="status">
-        <div className="flex items-baseline justify-between gap-2">
-          <span><strong className="mono text-2xl font-semibold">{decided.toLocaleString()}</strong> <span className="subtle">of {total.toLocaleString()} decided</span></span>
-          <span className="mono font-semibold text-[#f5e7a9]">{remaining.toLocaleString()} left</span>
+    <div className="flex min-w-0 flex-col gap-4">
+      <Panel title="Progress" aside={<span className="subtle mono text-xs">{total ? Math.round(decided / total * 100) : 100}%</span>}>
+        <div className="flex flex-col gap-3 p-4 text-sm" role="status">
+          <div className="flex items-baseline justify-between gap-2">
+            <span><strong className="mono text-2xl font-semibold">{decided.toLocaleString()}</strong> <span className="subtle">of {total.toLocaleString()} decided</span></span>
+            <span className="mono font-semibold text-[#f5e7a9]">{remaining.toLocaleString()} left</span>
+          </div>
+          <div className="flex h-2.5 overflow-hidden rounded-full border line bg-[#101816]" role="img" aria-label={progressLabel}>
+            {progressSegments.map(({ status, count, color }) => <span key={status}
+              style={{ width: `${total ? count / total * 100 : 0}%`, backgroundColor: color }} />)}
+          </div>
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-1">
+            {([["group1", counts.group1], ["group2", counts.group2 + counts.exported], ["unsure", counts.unsure], ["rejected", counts.rejected]] as const)
+              .map(([status, count]) => <div key={status} className="flex items-center gap-2">
+                <span className={`status-dot status-${status}`} aria-hidden="true" />
+                <dt className="flex-1">{statusLabels[status]}</dt><dd className="subtle mono">{count.toLocaleString()}</dd>
+              </div>)}
+          </dl>
+          {orderNote && <p className="subtle text-xs">{orderNote}</p>}
         </div>
-        <dl className="grid grid-cols-2 gap-x-4 gap-y-1">
-          {([["group1", counts.group1], ["group2", counts.group2 + counts.exported], ["unsure", counts.unsure], ["rejected", counts.rejected]] as const)
-            .map(([status, count]) => <div key={status} className="flex items-center gap-2">
-              <span className={`status-dot status-${status}`} aria-hidden="true" />
-              <dt className="flex-1">{statusLabels[status]}</dt><dd className="subtle mono">{count.toLocaleString()}</dd>
-            </div>)}
-        </dl>
-        {orderNote && <p className="subtle text-xs">{orderNote}</p>}
-      </div>
-    </Panel>} main={<div className="flex min-w-0 flex-col gap-3">
+      </Panel>
+      {upNext.length > 0 && <Panel title="Up next" ariaLabel="Up next clips"
+        aside={<span className="subtle text-xs">{orderNote ? "Clip order ↑" : "Likely keep ↓"}</span>}
+        className="overflow-hidden">
+        <div aria-label="Up next clips">
+          {upNext.map((item) => {
+            const current = item.clip_id === clip?.clip_id;
+            const score = item.likely_keep === null ? "—" : Math.round(item.likely_keep);
+            return <button key={item.clip_id} type="button" aria-current={current ? "true" : undefined}
+              onClick={() => onSelect(item.clip_id)}
+              className={`flex w-full items-center gap-2 border-b line px-4 py-2.5 text-left text-sm transition-colors last:border-b-0 ${
+                current ? "bg-[#344b39] shadow-[inset_3px_0_0_#cce7a9]" : "hover:bg-[#283b30]"}`}>
+              <span className="subtle mono shrink-0 text-xs">#{item.clip_id}</span>
+              <span className="min-w-0 flex-1 truncate" title={item.title}>{item.title}</span>
+              <span className="clip-score mono shrink-0" aria-label={item.likely_keep === null ? "Likely keep score pending" : `Likely keep score ${score}`}>
+                {score}
+              </span>
+            </button>;
+          })}
+        </div>
+      </Panel>}
+    </div>
+  } main={<div className="flex min-w-0 flex-col gap-3">
     <audio ref={audioRef} src={audioSrc} preload="auto" playsInline
       onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} />
     {soundBlocked && <p role="alert" className="rounded-lg border border-[#7c6845] bg-[#3c3525] px-4 py-3 text-sm">

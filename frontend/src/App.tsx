@@ -548,6 +548,8 @@ export default function App() {
     ? selectedId : (visible[0]?.clip_id ?? null);
   const selected = session?.candidates.find((clip) => clip.clip_id === effectiveSelectedId) ?? null;
   const selectedPosition = visible.findIndex((clip) => clip.clip_id === effectiveSelectedId);
+  const triageUpNext = mode === "triage" && selectedPosition >= 0
+    ? visible.slice(selectedPosition, selectedPosition + 6) : [];
 
   // Where a clip sits in the current ranking, recorded with each decision in the review log.
   const rankingContext = useCallback((clip: Clip) => {
@@ -1109,7 +1111,7 @@ export default function App() {
       </div>}
       {session.needs_transcription ? <TranscriptionScreen key={session.audio} session={session}
         onReady={(next) => { setSession(next); setFilter("unsorted"); setSelectedId(null); }} />
-      : mode === "triage" ? <TriageScreen clip={selected} durationMs={session.duration_ms ?? 0} position={selectedPosition + 1} remaining={visible.length}
+      : mode === "triage" ? <TriageScreen clip={selected} upNext={triageUpNext} durationMs={session.duration_ms ?? 0} position={selectedPosition + 1} remaining={visible.length}
         counts={session.counts} audioSrc={audioUrl()} autoplay={settings.autoplayClips}
         active={!showExportModal && !showSettings && !showHelp && !showJump && !showMerge}
         busy={busy} canUndo={Boolean(session.can_undo)}
@@ -1119,6 +1121,7 @@ export default function App() {
         onPlayback={() => { if (viewRef.current) viewRef.current.plays += 1; }}
         onDecide={(status) => dispatchReviewAction({ type: "classify", status })}
         onNavigate={(direction) => dispatchReviewAction({ type: "navigate", direction })}
+        onSelect={setSelectedId}
         onUndo={() => dispatchReviewAction({ type: "undo" })} />
       : mode === "publish" ? <StageLayout label="Publish" list={
         <Panel title="Publish" ariaLabel="Ready to publish" className="flex max-h-[calc(100dvh-140px)] flex-col overflow-hidden">
