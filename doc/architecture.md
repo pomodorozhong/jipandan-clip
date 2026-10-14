@@ -62,6 +62,7 @@ flowchart LR
 - **Whisper runs in child processes,** so long jobs can be cancelled without blocking the server. Full transcription writes the SRT; per-clip re-transcription writes title suggestions to the database.
 - **The browser plays audio itself,** streaming the whole recording or a rendered preview MP3 over HTTP. mpv belonged to the retired TUI and is no longer used.
 - **One set of UI pieces.** `frontend/src/ui.tsx` holds the panel, section header, buttons, badges, and the list-plus-main `StageLayout` that Triage, Polish, and Publish share, with their styles in `style.css`. Status labels come from its `statusLabels` (`group1` shows as Needs work, `group2` as Ready). Build new screens from these rather than one-off Tailwind classes.
+- **Triage keeps context without changing its one-clip interaction.** Its left rail combines segmented decision progress with a bounded Up next queue containing the current clip and five Likely keep candidates. The main waveform is view-only and includes padded surrounding audio.
 
 ## Input
 

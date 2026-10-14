@@ -37,7 +37,7 @@ Decisions:
 - The removed-audio shading comes from FFmpeg's retained PCM rather than a re-estimate, so it matches what is exported.
 - Keyboard shortcuts work wherever focus is, except while typing, so a clicked button no longer disables them. See the [focus policy](architecture.md#input).
 - The header is one compact bar; session and export paths are in a tooltip on the recording name.
-- The UI consistency pass follows the [mockup](mockups/step-2-ui/README.md) the owner approved in [#41](https://github.com/pomodorozhong/jipandan-clip/issues/41): one panel, section header, three button weights, a badge set, and a list-plus-main layout shared by all three stages. Triage gains a progress panel and a view-only waveform with padding around the clip.
+- The UI consistency pass follows the [mockup](mockups/step-2-ui/README.md) the owner approved in [#41](https://github.com/pomodorozhong/jipandan-clip/issues/41): one panel, section header, three button weights, a badge set, and a list-plus-main layout shared by all three stages. Triage gains a segmented progress panel, a bounded Up next queue in Likely keep order, and a view-only waveform with padding around the clip.
 - Group 1 and Group 2 are renamed **Needs work** and **Ready** in the UI, since the numbers said nothing about what happens next; stored statuses stay `group1`/`group2` ([#42](https://github.com/pomodorozhong/jipandan-clip/issues/42)).
 - Unsure is dropped: Triage decides Needs work, Ready, or Reject ([#52](https://github.com/pomodorozhong/jipandan-clip/issues/52)).
 
