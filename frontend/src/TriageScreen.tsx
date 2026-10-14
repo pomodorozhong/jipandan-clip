@@ -21,7 +21,6 @@ function formatSeconds(ms: number): string {
 const decisions: { status: ClassificationStatus; label: string; keyboard: string }[] = [
   { status: "group1", label: statusLabels.group1, keyboard: "1" },
   { status: "group2", label: statusLabels.group2, keyboard: "2" },
-  { status: "unsure", label: statusLabels.unsure, keyboard: "3" },
   { status: "rejected", label: "Reject", keyboard: "X" },
 ];
 
@@ -162,13 +161,12 @@ export default function TriageScreen({
   const waveform = useWaveform(clip?.clip_id ?? "", waveformRange, 1000, Boolean(clip));
 
   const kept = counts.group1 + counts.group2 + counts.exported;
-  const decided = kept + counts.rejected + counts.unsure;
+  const decided = kept + counts.rejected;
 
   const total = remaining + decided;
   const progressSegments = [
     { status: "group1" as const, count: counts.group1, color: "#a6d7af" },
     { status: "group2" as const, count: counts.group2 + counts.exported, color: "#93bde2" },
-    { status: "unsure" as const, count: counts.unsure, color: "#e0a370" },
     { status: "rejected" as const, count: counts.rejected, color: "#80918a" },
   ];
   const progressLabel = `${decided} of ${total} clips decided: ${progressSegments
@@ -189,7 +187,7 @@ export default function TriageScreen({
               style={{ width: `${total ? count / total * 100 : 0}%`, backgroundColor: color }} />)}
           </div>
           <dl className="grid grid-cols-2 gap-x-4 gap-y-1">
-            {([["group1", counts.group1], ["group2", counts.group2 + counts.exported], ["unsure", counts.unsure], ["rejected", counts.rejected]] as const)
+            {([["group1", counts.group1], ["group2", counts.group2 + counts.exported], ["rejected", counts.rejected]] as const)
               .map(([status, count]) => <div key={status} className="flex items-center gap-2">
                 <span className={`status-dot status-${status}`} aria-hidden="true" />
                 <dt className="flex-1">{statusLabels[status]}</dt><dd className="subtle mono">{count.toLocaleString()}</dd>
@@ -249,7 +247,7 @@ export default function TriageScreen({
             <span aria-hidden="true">{playing ? "❚❚" : "▶"}</span>
           </Button>
         </div>
-        <div className="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-4" role="group" aria-label="Decision">
+        <div className="mt-5 grid grid-cols-1 gap-2.5 sm:grid-cols-3" role="group" aria-label="Decision">
           {decisions.map((decision) => <button key={decision.status} type="button" disabled={busy}
             onClick={() => onDecide(decision.status)}
             className={`btn btn-decision tone-${decision.status}`}>

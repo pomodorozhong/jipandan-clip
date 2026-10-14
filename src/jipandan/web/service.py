@@ -863,7 +863,7 @@ class SessionService:
         return {**cached[1], "likely_keep": score, "suggested_title": self._title_suggestions.get(candidate.clip_id)}
 
     def _counts(self, session: Session | None) -> dict[str, int]:
-        counts = {name: 0 for name in ("pending", "group1", "group2", "exported", "rejected", "unsure")}
+        counts = {name: 0 for name in ("pending", "group1", "group2", "exported", "rejected")}
         for candidate in session.candidates if session else []:
             counts[candidate.status] += 1
         return counts
@@ -1007,7 +1007,7 @@ class SessionService:
     ) -> dict:
         if all(value is None for value in (status, title, start_ms, end_ms)):
             raise InvalidEdit("No clip change provided")
-        if status is not None and status not in {"pending", "group1", "group2", "rejected", "unsure"}:
+        if status is not None and status not in {"pending", "group1", "group2", "rejected"}:
             raise InvalidEdit("Invalid status")
         if title is not None and not title.strip():
             raise InvalidEdit("Title cannot be empty")

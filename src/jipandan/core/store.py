@@ -129,15 +129,18 @@ class RecordingStore:
         session.revision = 1
 
     def load(self) -> Session:
-        with self._lock:
+        with self._lock, self._transaction():
             meta = self._meta()
             if meta.get("store_version") != STORE_VERSION:
                 raise StoreConflict(f"{self.path.name} uses an unsupported format")
+            rows = self._db.execute("SELECT clip_id, data FROM clip ORDER BY idx, suffix").fetchall()
+            legacy_unsure = {
+                clip_id for clip_id, data in rows if json.loads(data).get("status") == "unsure"
+            }
             candidates = [
-                clip_candidate_from_dict(json.loads(data))
-                for (data,) in self._db.execute("SELECT data FROM clip ORDER BY idx, suffix")
+                clip_candidate_from_dict(json.loads(data)) for _, data in rows
             ]
-            return Session(
+            session = Session(
                 audio=Path(str(meta["audio"])), srt=Path(str(meta["srt"])), clip_dir=Path(str(meta["clip_dir"])),
                 export_dirs=[Path(d) for d in meta.get("export_dirs") or [meta["clip_dir"]]],
                 candidates=candidates, revision=int(meta["revision"]),
@@ -146,6 +149,12 @@ class RecordingStore:
                 clip_features_complete=bool(meta.get("clip_features_complete")),
                 clip_features_version=meta.get("clip_features_version"),
             )
+            if legacy_unsure:
+                session.revision += 1
+                self._write_meta(session, session.revision)
+                self._write_clips(session, legacy_unsure)
+                self._insert_event("legacy_status_reset", None, {"clips": len(legacy_unsure)}, mutation=None)
+            return session
 
     def commit(
         self, draft: Session, before: dict[str, ClipCandidate | None], events: list[dict], *,

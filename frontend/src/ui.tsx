@@ -7,7 +7,7 @@ import { ShortcutBadge } from "./ShortcutBadge";
 
 export const statusLabels: Record<Status, string> = {
   pending: "Unsorted", group1: "Needs work", group2: "Ready",
-  exported: "Exported", rejected: "Rejected", unsure: "Unsure",
+  exported: "Exported", rejected: "Rejected",
 };
 
 export type ButtonVariant = "primary" | "secondary" | "quiet" | "danger";

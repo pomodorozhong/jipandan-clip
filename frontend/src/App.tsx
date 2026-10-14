@@ -1402,7 +1402,7 @@ export default function App() {
                   <select id="clip-status" value={selected.status} disabled={busy}
                     onChange={(event) => dispatchReviewAction({ type: "set-status", status: event.target.value as Status })}
                     className="appearance-none rounded-lg border line bg-[#22312a] py-2 pl-3 pr-9 text-[#e7eee7] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b4e2b6]">
-                    {(["group1", "group2", "unsure", "rejected", "pending"] as Status[]).map((status) =>
+                    {(["group1", "group2", "rejected", "pending"] as Status[]).map((status) =>
                       <option key={status} value={status}>{statusLabels[status]}</option>)}
                     {selected.status === "exported" && <option value="exported">Exported</option>}
                   </select>
@@ -1412,7 +1412,7 @@ export default function App() {
                   </svg>
                 </span>
                 <span className="subtle inline-flex flex-wrap items-center gap-1.5 text-xs">
-                  Choose Needs work <ShortcutBadge keyboard="1" bindingId="group1" />, Ready <ShortcutBadge keyboard="2" bindingId="group2" />, Unsure <ShortcutBadge keyboard="3" bindingId="unsure" />, or Rejected <ShortcutBadge keyboard="X" bindingId="rejected" />
+                  Choose Needs work <ShortcutBadge keyboard="1" bindingId="group1" />, Ready <ShortcutBadge keyboard="2" bindingId="group2" />, or Rejected <ShortcutBadge keyboard="X" bindingId="rejected" />
                 </span>
               </div>
               {selected.last_export_path && <div className={`mb-4 rounded-lg border line px-3 py-2 text-xs ${selected.export_state === "matching" ? "subtle" : "text-[#edbc97]"}`}>

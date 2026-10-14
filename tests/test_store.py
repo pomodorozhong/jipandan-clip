@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -59,6 +60,53 @@ class RecordingStoreTests(unittest.TestCase):
         self.assertEqual(events[1]["undone_by"], events[2]["seq"])
         self.assertEqual(events[1]["to"], "group1")
         self.assertEqual(session.revision, 2)
+
+    def test_legacy_unsure_status_is_reset_to_pending_on_load(self):
+        (data,) = self.store._db.execute("SELECT data FROM clip WHERE clip_id = ?", ("1",)).fetchone()
+        legacy = json.loads(data)
+        legacy["status"] = "unsure"
+        self.store._db.execute("UPDATE clip SET data = ? WHERE clip_id = ?", (json.dumps(legacy), "1"))
+
+        loaded = self.store.load()
+
+        self.assertEqual((loaded.revision, loaded.get_candidate("1").status), (2, "pending"))
+        (stored,) = self.store._db.execute("SELECT data FROM clip WHERE clip_id = ?", ("1",)).fetchone()
+        self.assertEqual(json.loads(stored)["status"], "pending")
+        self.assertEqual(self.store.load().revision, 2)
+        self.assertEqual([event["type"] for event in self.store.events()], ["import", "legacy_status_reset"])
+        self.assertFalse(self.store.can_undo())
+
+    def test_undo_of_legacy_unsure_state_restores_pending(self):
+        def mark_unsure(draft):
+            setattr(draft.get_candidate("1"), "status", "unsure")
+
+        unsure = self.change(
+            self.session, mark_unsure, [{"type": "status", "clip": "1", "to": "unsure"}],
+            label="1", undoable=True,
+        )
+
+        def mark_ready(draft):
+            draft.get_candidate("1").status = "group2"
+
+        ready = self.change(
+            unsure, mark_ready, [{"type": "status", "clip": "1", "from": "unsure", "to": "group2"}],
+            label="1", undoable=True,
+        )
+        seqs, _, restored = self.store.undo_target()
+        self.assertEqual(restored["1"].status, "pending")
+
+        def restore(draft):
+            draft.get_candidate("1").status = restored["1"].status
+
+        undone = self.change(ready, restore, [{"type": "undo", "targets": seqs}], undoes=seqs)
+        seqs, _, restored = self.store.undo_target()
+        self.assertEqual(restored["1"].status, "pending")
+
+        def restore_legacy(draft):
+            draft.get_candidate("1").status = restored["1"].status
+
+        final = self.change(undone, restore_legacy, [{"type": "undo", "targets": seqs}], undoes=seqs)
+        self.assertEqual(final.get_candidate("1").status, "pending")
 
     def test_grouped_changes_undo_together_and_created_clips_are_removed(self):
         def first(draft):

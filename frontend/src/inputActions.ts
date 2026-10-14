@@ -3,7 +3,7 @@ import type { ExportMode, Status } from "./api";
 export type InputSurface = "review" | "waveform" | "export" | "dialog";
 export type InputContext = "review" | "publish" | "active-dialog" | "text-editing" | "composition";
 export type PlaybackTarget = "clip" | "candidate" | "reference";
-export type ClassificationStatus = Extract<Status, "group1" | "group2" | "rejected" | "unsure">;
+export type ClassificationStatus = Extract<Status, "group1" | "group2" | "rejected">;
 export type ShortcutSource = "keyboard" | "pointer" | "gamepad";
 
 export type InputAction =
@@ -32,7 +32,7 @@ export type InputAction =
 
 export type ShortcutId =
   | "previous" | "next" | "replay" | "play-pause"
-  | "group1" | "group2" | "rejected" | "unsure" | "undo" | "duplicate" | "rename"
+  | "group1" | "group2" | "rejected" | "undo" | "duplicate" | "rename"
   | "jump" | "focus-search" | "show-help" | "open-export"
   | "nudge-start-fine-back" | "nudge-start-fine-forward"
   | "nudge-start-coarse-back" | "nudge-start-coarse-forward"
@@ -68,7 +68,6 @@ export const SHORTCUT_DEFINITIONS: readonly ShortcutDefinition[] = [
   { id: "play-pause", label: "Play / pause clip", keyboard: "Shift+Space", contexts: reviewContext, action: { type: "playback", target: "clip", mode: "toggle" } },
   { id: "group1", label: "Mark Needs work", keyboard: "1", contexts: reviewContext, action: { type: "classify", status: "group1" }, defaultGamepadIndex: 1 },
   { id: "group2", label: "Mark Ready", keyboard: "2", contexts: reviewContext, action: { type: "classify", status: "group2" }, defaultGamepadIndex: 2 },
-  { id: "unsure", label: "Mark unsure", keyboard: "3", contexts: reviewContext, action: { type: "classify", status: "unsure" } },
   { id: "rejected", label: "Reject clip", keyboard: "X", contexts: reviewContext, action: { type: "classify", status: "rejected" }, defaultGamepadIndex: 3 },
   { id: "undo", label: "Undo recent change", keyboard: "U", contexts: reviewContext, action: { type: "undo" } },
   { id: "duplicate", label: "Duplicate clip", keyboard: "D", contexts: reviewContext, action: { type: "duplicate" } },
@@ -349,7 +348,6 @@ function resolveReviewAction(input: KeyboardInput, context: InputContext): Input
   if (isCode(input, "KeyK", "ArrowUp")) return actionForShortcut("previous", "keyboard");
   if (!input.shiftKey && isCode(input, "Digit1", "Numpad1")) return actionForShortcut("group1", "keyboard");
   if (!input.shiftKey && isCode(input, "Digit2", "Numpad2")) return actionForShortcut("group2", "keyboard");
-  if (!input.shiftKey && isCode(input, "Digit3", "Numpad3")) return actionForShortcut("unsure", "keyboard");
   if (isCode(input, "KeyX")) return actionForShortcut("rejected", "keyboard");
   if (isCode(input, "KeyU")) return actionForShortcut("undo", "keyboard");
   if (isCode(input, "KeyD")) return actionForShortcut("duplicate", "keyboard");
