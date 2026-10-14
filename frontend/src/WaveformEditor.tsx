@@ -102,7 +102,7 @@ export function useWaveform(clipId: string, range: TimeRange, buckets: number, a
 
 export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, editableEdge,
   originalStartMs, disabled, minSpan, maxSpan, onViewportChange, trimMap, sharedPeak, compact = false, onSeek, canEdit = true, gestureTarget,
-  clockOffsetMs = 0, onResetViewport, pinHandles = false,
+  clockOffsetMs = 0, onResetViewport, pinHandles = false, shadeOutside = false, showClock = true,
   onPreviewRange, onCommitRange, onPreviewEdge, onCommitEdge, onCancel }: {
   label: string;
   range: TimeRange;
@@ -124,6 +124,9 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
   clockOffsetMs?: number;
   onResetViewport?: () => void;
   pinHandles?: boolean;
+  /** Dim the padding outside the clip, for view-only plots without handles. */
+  shadeOutside?: boolean;
+  showClock?: boolean;
   onViewportChange: (start: number, span: number) => TimeRange;
   onPreviewRange: (start: number, end: number) => void;
   onCommitRange: (start: number, end: number) => void;
@@ -368,7 +371,7 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
       }}
       preserveAspectRatio="none" onPointerDown={pointerDown} onPointerMove={pointerMove}
       onPointerUp={pointerUp} onPointerCancel={pointerCancel} onLostPointerCapture={pointerCancel}
-      className={`block ${compact ? "h-24" : "h-36"} w-full cursor-crosshair overscroll-x-none rounded-lg border border-[#46584c] bg-[#101a17] touch-none`}>
+      className={`block ${compact ? "h-24" : "h-36"} w-full ${canEdit || onSeek ? "cursor-crosshair" : "cursor-default"} overscroll-x-none rounded-lg border border-[#46584c] bg-[#101a17] touch-none`}>
       {trimMap && removedRanges(trimMap).map(([start, end]) => <g key={start}>
         <title>{`Removed ${(start / 1000).toFixed(2)}–${(end / 1000).toFixed(2)} s`}</title>
         <rect x={markerX(start)} y="0" width={(end - start) / span * PLOT_WIDTH} height={PLOT_HEIGHT} fill="#e6ad87" fillOpacity=".22" />
@@ -380,6 +383,11 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
       {inRange(startMs) && inRange(endMs) && <rect x={Math.min(startX, endX)} y="0" width={Math.abs(endX - startX)} height={PLOT_HEIGHT} fill="#b7d69d" opacity="0.08" />}
       {points && <path d={points} transform={waveformTransform} vectorEffect="non-scaling-stroke"
         stroke="#a8c9b0" strokeWidth="1.5" fill="none" />}
+      {shadeOutside && <g aria-hidden="true">
+        <rect x="0" y="0" width={clamp(startX, 0, PLOT_WIDTH)} height={PLOT_HEIGHT} fill="#101816" opacity="0.6" />
+        <rect x={clamp(endX, 0, PLOT_WIDTH)} y="0" width={PLOT_WIDTH - clamp(endX, 0, PLOT_WIDTH)} height={PLOT_HEIGHT} fill="#101816" opacity="0.6" />
+        {[startX, endX].map((x) => <line key={x} x1={x} x2={x} y1="0" y2={PLOT_HEIGHT} stroke="#b7d69d" strokeWidth="1.5" opacity="0.7" />)}
+      </g>}
       {originalStartMs !== null && inRange(originalStartMs) && <g>
         <title>Original SRT start</title>
         <line x1={markerX(originalStartMs)} y1="0" x2={markerX(originalStartMs)} y2={PLOT_HEIGHT}
@@ -401,7 +409,7 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
       })}
       {inRange(playheadMs) && <line x1={markerX(playheadMs)} y1="0" x2={markerX(playheadMs)} y2={PLOT_HEIGHT} stroke="#f2f4ef" strokeWidth="2" opacity="0.9" />}
     </svg>
-    <div className="subtle mono mt-1 flex justify-between text-[11px]">
+    {showClock && <div className="subtle mono mt-1 flex justify-between text-[11px]">
       <span>{formatClock(range.start + clockOffsetMs)}</span>
       {onResetViewport ? <span className="flex gap-1">
         <button type="button" aria-label={`Zoom out ${label}`} onClick={() => {
@@ -415,7 +423,7 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
         }} className="rounded px-1 hover:bg-[#304538]">+</button>
       </span> : <span>{formatClock(Math.round((range.start + range.end) / 2) + clockOffsetMs)}</span>}
       <span>{formatClock(range.end + clockOffsetMs)}</span>
-    </div>
+    </div>}
   </div>;
 }
 
@@ -794,15 +802,15 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
     <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
       <div className="flex flex-wrap gap-2">
         <button type="button" onClick={() => dispatchAction({ type: "playback", target: "clip", mode: "replay" })} title="Replay from start (Space)"
-          className="inline-flex items-center gap-2 rounded-lg bg-[#b7d69d] px-3 py-2 text-sm font-medium text-[#1b291f] hover:bg-[#c8e5af]">
+          className="btn btn-secondary">
           <span aria-hidden="true" className="text-base leading-none">↻</span><span>Replay from start</span><ShortcutBadge keyboard="Space" bindingId="replay" />
         </button>
-        <button type="button" onClick={() => dispatchAction({ type: "playback", target: "clip", mode: "toggle" })} className="soft-surface inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm"
+        <button type="button" onClick={() => dispatchAction({ type: "playback", target: "clip", mode: "toggle" })} className="btn btn-secondary"
           aria-label={playing ? "Pause audio" : "Play clip"} title="Play or pause (Shift+Space)">
           <span aria-hidden="true" className="text-xs leading-none">{playing ? "❚❚" : "▶"}</span><span>{playing ? "Pause" : "Play clip"}</span><ShortcutBadge keyboard="Shift+Space" bindingId="play-pause" />
         </button>
-        <button type="button" onClick={() => dispatchAction({ type: "playback", target: "clip", mode: "audition-start" })} className="soft-surface rounded-lg px-3 py-2 text-sm">Hear start</button>
-        <button type="button" onClick={() => dispatchAction({ type: "playback", target: "clip", mode: "audition-end" })} className="soft-surface rounded-lg px-3 py-2 text-sm">Hear end</button>
+        <button type="button" onClick={() => dispatchAction({ type: "playback", target: "clip", mode: "audition-start" })} className="btn btn-quiet">Hear start</button>
+        <button type="button" onClick={() => dispatchAction({ type: "playback", target: "clip", mode: "audition-end" })} className="btn btn-quiet">Hear end</button>
       </div>
       <span className="subtle mono text-xs">Playhead {formatClock(playheadMs)}</span>
     </div>
@@ -861,7 +869,7 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
                   : amount === -100 ? "nudge-end-coarse-back" : amount === -10 ? "nudge-end-fine-back" : amount === 10 ? "nudge-end-fine-forward" : "nudge-end-coarse-forward";
                 return <button key={amount} type="button" onClick={() => dispatchAction({ type: "nudge", edge: which, amount, source: "pointer" })}
                   disabled={controlsDisabled} title={`Nudge ${which} boundary ${amount > 0 ? "+" : ""}${amount} ms (${key})`}
-                  className="mono inline-flex items-center justify-center gap-2 rounded-lg bg-[#304538] px-3 py-2 text-sm hover:bg-[#3b5543] disabled:opacity-50">
+                  className="btn btn-secondary mono">
                   <span>{amount > 0 ? "+" : ""}{amount} ms</span><ShortcutBadge keyboard={key} bindingId={shortcutId} />
                 </button>;
               })}
@@ -869,7 +877,7 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
                 onClick={() => void commitBounds(clip.original_start_ms, endMs)}
                 disabled={controlsDisabled || startMs === clip.original_start_ms || clip.original_start_ms > endMs - MIN_CLIP_MS}
                 title="Restore the start time from the SRT"
-                className="rounded-lg border line px-3 py-2 text-sm hover:bg-[#304538] disabled:opacity-50">
+                className="btn btn-quiet">
                 Use original start
               </button>}
             </div>

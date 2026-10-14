@@ -9,7 +9,7 @@ const saved = { clip_id: "1", index: 1, suffix: 0, title: "Reaction", status: "e
     mode: "trim_edges", start_threshold_db: -40, stop_threshold_db: -50 } } as Clip;
 
 describe("Publish", () => {
-  it("keeps edited exports in the exported list even after they return to Group 1", () => {
+  it("keeps edited exports in the exported list even after they return to Needs work", () => {
     const clips = [{ ...saved, index: 2, clip_id: "2", status: "group1" as const },
       { ...saved, last_export_path: null, status: "group2" as const }];
     expect(publishClips(clips, "exported").map((clip) => clip.clip_id)).toEqual(["2"]);

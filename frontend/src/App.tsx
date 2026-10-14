@@ -3,6 +3,7 @@ import { isExploreClip, orderByLikelyKeep } from "./reviewOrder";
 import TriageScreen from "./TriageScreen";
 import { api, applySessionDelta, audioUrl, bootstrap, sendReviewEvents, uploadAudio, type Clip, type ClipFeaturesJob, type ClipTranscriptionJob, type LeadingSilenceJob, type Session, type SessionDelta, type Status } from "./api";
 import WaveformEditor from "./WaveformEditor";
+import { Button, CountBadge, Panel, StageLayout, StatusBadge, statusLabels } from "./ui";
 import { publishClips, type PublishView } from "./publish";
 import ExportPreview, { type ExportSettings } from "./ExportPreview";
 import ShortcutCheatsheet from "./ShortcutCheatsheet";
@@ -42,7 +43,7 @@ type AllStatusFilter = "all" | Status;
 type AllOrder = "clip-asc" | "clip-desc" | "start-asc" | "start-desc" | "title-asc" | "likely-desc";
 type SaveState = "saved" | "saving" | "failed";
 // Triage: one clip at a time for first-pass decisions. Polish: the list and editor for keepers.
-// Publish: the Group 2 queue with export previews, title, and timing fixes.
+// Publish: the Ready queue with export previews, title, and timing fixes.
 type Mode = "triage" | "polish" | "publish";
 type AppSettings = {
   detectLeadingSilence: boolean;
@@ -90,17 +91,12 @@ function loadSettings(): AppSettings {
 }
 
 const filters: { key: Filter; label: string }[] = [
-  { key: "group1", label: "Group 1" },
-  { key: "group2", label: "Group 2" },
+  { key: "group1", label: statusLabels.group1 },
+  { key: "group2", label: statusLabels.group2 },
   { key: "unsorted", label: "Unsorted" },
   { key: "exported", label: "Exported" },
   { key: "all", label: "All" },
 ];
-
-const labels: Record<Status, string> = {
-  pending: "Unsorted", group1: "Group 1", group2: "Group 2",
-  exported: "Exported", rejected: "Rejected", unsure: "Unsure",
-};
 
 const allOrders: { key: AllOrder; label: string }[] = [
   { key: "clip-asc", label: "Clip number ↑" },
@@ -128,22 +124,6 @@ function visibleClips(
     if (needle && !clip.title.normalize("NFKC").toLocaleLowerCase().includes(needle)) return false;
     return true;
   });
-}
-
-function ActionButton({ children, onClick, disabled, tone = "normal", title, shortcut, shortcutId, buttonRef }: {
-  children: React.ReactNode; onClick: () => void; disabled?: boolean;
-  tone?: "normal" | "accent" | "danger"; title?: string; shortcut?: string; shortcutId?: string;
-  buttonRef?: React.Ref<HTMLButtonElement>;
-}) {
-  const toneClass = tone === "accent"
-    ? "bg-[#b7d69d] text-[#1d2d20] hover:bg-[#d4ecbe]"
-    : tone === "danger"
-      ? "bg-[#5d3938] text-[#ffe2db] hover:bg-[#754542]"
-      : "soft-surface text-[#e7eee7] hover:bg-[#354b3b]";
-  return <button ref={buttonRef} type="button" title={title} disabled={disabled} onClick={onClick}
-    className={`inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${toneClass}`}>
-    <span>{children}</span><ShortcutBadge keyboard={shortcut} bindingId={shortcutId} />
-  </button>;
 }
 
 function Dialog({ title, children, onClose, controllerHandlerRef }: {
@@ -215,7 +195,7 @@ function Dialog({ title, children, onClose, controllerHandlerRef }: {
   return <div className="fixed inset-0 z-30 flex items-center justify-center bg-[#07100bcf] p-4"
     role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section ref={dialogRef} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1}
-      className="surface max-h-[85vh] w-full max-w-lg overflow-auto rounded-2xl p-5 shadow-2xl">
+      className="panel max-h-[85vh] w-full max-w-lg overflow-auto p-5 shadow-2xl">
       <div className="mb-4 flex items-start justify-between gap-4">
         <h2 className="text-lg font-semibold">{title}</h2>
         <button type="button" onClick={onClose} aria-label="Close dialog (Esc)"
@@ -376,7 +356,7 @@ export default function App() {
           setFilter(preferences.filter);
         } else if (session.counts.pending === 0) setFilter("all");
         setSelectedId(preferences.selectedId ?? null);
-        if (preferences.allStatusFilter === "all" || Object.hasOwn(labels, preferences.allStatusFilter ?? "")) {
+        if (preferences.allStatusFilter === "all" || Object.hasOwn(statusLabels, preferences.allStatusFilter ?? "")) {
           setAllStatusFilter(preferences.allStatusFilter!);
         }
         if (allOrders.some((item) => item.key === preferences.allOrder)) {
@@ -544,7 +524,7 @@ export default function App() {
   }, []);
 
   const exploreSeed = session?.srt_fingerprint ?? null;
-  // Triage works through the Unsorted queue in Likely keep order; Publish through Group 2 in clip order.
+  // Triage works through the Unsorted queue in Likely keep order; Publish through Ready in clip order.
   const activeFilter: Filter = mode === "triage" ? "unsorted" : mode === "publish" ? "group2" : filter;
   const activeQuery = mode === "polish" ? query : "";
   const activeOrder: AllOrder = mode === "triage" ? "likely-desc" : mode === "publish" ? "clip-asc" : allOrder;
@@ -568,6 +548,8 @@ export default function App() {
     ? selectedId : (visible[0]?.clip_id ?? null);
   const selected = session?.candidates.find((clip) => clip.clip_id === effectiveSelectedId) ?? null;
   const selectedPosition = visible.findIndex((clip) => clip.clip_id === effectiveSelectedId);
+  const triageUpNext = mode === "triage" && selectedPosition >= 0
+    ? visible.slice(selectedPosition, selectedPosition + 6) : [];
 
   // Where a clip sits in the current ranking, recorded with each decision in the review log.
   const rankingContext = useCallback((clip: Clip) => {
@@ -719,7 +701,7 @@ export default function App() {
       const restored = delta.clips.filter((clip) => before.get(clip.clip_id) !== clip.status);
       const only = restored.length === 1 ? restored[0] : null;
       const touched = [...delta.clips.map((clip) => clip.clip_id), ...delta.removed];
-      showNotice(only ? `Undone: #${only.clip_id} is back in ${labels[only.status]}`
+      showNotice(only ? `Undone: #${only.clip_id} is back in ${statusLabels[only.status]}`
         : touched.length === 1 ? `Undone: change to #${touched[0]}`
           : `Undone: ${touched.length} clips restored`);
       // In Triage, bring a clip that returned to the queue back on screen to decide again.
@@ -1056,16 +1038,16 @@ export default function App() {
         {session?.audio && !session.needs_transcription && <span aria-live="polite" className={saveState === "failed" ? "text-[#ffb3a8]" : saveState === "saving" ? "text-[#ead49b]" : "accent"}>
           {saveState === "saving" ? "Saving…" : saveState === "failed" ? "Save failed" : "Saved"}
         </span>}
-        {session?.audio && !session.needs_transcription && <ActionButton onClick={() => {
+        {session?.audio && !session.needs_transcription && <Button onClick={() => {
           dispatchReviewAction({ type: "undo" });
-        }} disabled={!session.can_undo || busy} title="Undo recent change (U)" shortcut="U" shortcutId="undo">Undo</ActionButton>}
-        {!session?.needs_transcription && <ActionButton onClick={() => dispatchReviewAction({ type: "show-help" })}
-          title="Keyboard shortcuts" shortcut="?" shortcutId="show-help">Shortcuts</ActionButton>}
-        <ActionButton buttonRef={settingsButtonRef} onClick={() => {
+        }} disabled={!session.can_undo || busy} title="Undo recent change (U)" shortcut="U" shortcutId="undo">Undo</Button>}
+        {!session?.needs_transcription && <Button onClick={() => dispatchReviewAction({ type: "show-help" })}
+          title="Keyboard shortcuts" shortcut="?" shortcutId="show-help">Shortcuts</Button>}
+        <Button buttonRef={settingsButtonRef} onClick={() => {
           setShowSettings(true);
           setShowGamepadMapping(false);
           setShowHelp(false); setShowJump(false); setShowMerge(false); setShowExportModal(false);
-        }}>Settings</ActionButton>
+        }}>Settings</Button>
       </div>
     </header>
 
@@ -1125,11 +1107,11 @@ export default function App() {
     </main> : <>
       {hasMergeChanges && <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[#7c6845] bg-[#3c3525] px-4 py-2 text-sm md:px-7">
         <span>The SRT changed since this session was saved. Your reviewed clips are still here.</span>
-        <ActionButton onClick={() => setShowMerge(true)}>Review SRT changes</ActionButton>
+        <Button onClick={() => setShowMerge(true)}>Review SRT changes</Button>
       </div>}
       {session.needs_transcription ? <TranscriptionScreen key={session.audio} session={session}
         onReady={(next) => { setSession(next); setFilter("unsorted"); setSelectedId(null); }} />
-      : mode === "triage" ? <TriageScreen clip={selected} position={selectedPosition + 1} remaining={visible.length}
+      : mode === "triage" ? <TriageScreen clip={selected} upNext={triageUpNext} durationMs={session.duration_ms ?? 0} position={selectedPosition + 1} remaining={visible.length}
         counts={session.counts} audioSrc={audioUrl()} autoplay={settings.autoplayClips}
         active={!showExportModal && !showSettings && !showHelp && !showJump && !showMerge}
         busy={busy} canUndo={Boolean(session.can_undo)}
@@ -1139,23 +1121,23 @@ export default function App() {
         onPlayback={() => { if (viewRef.current) viewRef.current.plays += 1; }}
         onDecide={(status) => dispatchReviewAction({ type: "classify", status })}
         onNavigate={(direction) => dispatchReviewAction({ type: "navigate", direction })}
+        onSelect={setSelectedId}
         onUndo={() => dispatchReviewAction({ type: "undo" })} />
-      : mode === "publish" ? <main className="grid flex-1 grid-cols-1 items-start gap-4 p-4 md:grid-cols-[minmax(200px,25%)_1fr] md:p-5" aria-label="Publish">
-        <section className="surface flex max-h-[calc(100dvh-140px)] flex-col overflow-hidden rounded-2xl" aria-label="Ready to publish">
+      : mode === "publish" ? <StageLayout label="Publish" list={
+        <Panel title="Publish" ariaLabel="Ready to publish" className="flex max-h-[calc(100dvh-140px)] flex-col overflow-hidden">
           <div className="border-b line px-4 py-3">
-            <h2 className="font-semibold">Publish</h2>
-            <div className="mt-2 flex gap-1" role="group" aria-label="Publish list">
-              {(["ready", "exported"] as const).map((view) => <button key={view} type="button"
-                aria-pressed={publishView === view} onClick={() => { setPublishView(view); setSelectedId(null); }}
-                className={`rounded-lg px-3 py-2 text-xs font-semibold ${publishView === view ? "bg-[#b7d69d] text-[#1b291f]" : "hover:bg-[#304439]"}`}>
-                {view === "ready" ? `Ready · ${session.counts.group2}` : `Exported · ${publishClips(session.candidates, "exported").length}`}
+            <div className="seg flex" role="group" aria-label="Publish list">
+              {(["ready", "exported"] as const).map((view) => <button key={view} type="button" className="seg-btn"
+                aria-pressed={publishView === view} onClick={() => { setPublishView(view); setSelectedId(null); }}>
+                {view === "ready" ? "Ready" : "Exported"}
+                <CountBadge>{view === "ready" ? session.counts.group2 : publishClips(session.candidates, "exported").length}</CountBadge>
               </button>)}
             </div>
-            <p className="subtle mt-2 text-xs">{publishView === "ready" ? "Group 2 in clip order" : "Saved files, including clips edited after export"} · J/K to move</p>
+            <p className="subtle mt-2 text-xs">{publishView === "ready" ? "Ready clips in clip order" : "Saved files, including clips edited after export"} · J/K to move</p>
           </div>
-          <div className="panel-scroll min-h-0 flex-1 overflow-auto" role="listbox" aria-label={publishView === "ready" ? "Group 2 clips" : "Exported clips"}>
+          <div className="panel-scroll min-h-0 flex-1 overflow-auto" role="listbox" aria-label={publishView === "ready" ? "Ready clips" : "Exported clips"}>
             {visible.length === 0 ? <p className="subtle px-4 py-6 text-sm">{publishView === "ready"
-              ? "Nothing in Group 2. Mark keepers with 2 in Triage or Polish." : "No clips have been exported yet."}</p>
+              ? "Nothing is Ready yet. Mark keepers with 2 in Triage or Polish." : "No clips have been exported yet."}</p>
               : visible.map((clip) => <button key={clip.clip_id} type="button" role="option"
                 aria-selected={clip.clip_id === effectiveSelectedId} data-selected={clip.clip_id === effectiveSelectedId}
                 tabIndex={clip.clip_id === effectiveSelectedId ? 0 : -1}
@@ -1170,8 +1152,7 @@ export default function App() {
                 <span className="subtle mono shrink-0 text-xs">{formatDuration(clip.end_ms - clip.start_ms)}</span>
               </button>)}
           </div>
-        </section>
-        {selected && session.revision !== null ? <ExportPreview key={selected.clip_id} inline clip={selected}
+        </Panel>} main={selected && session.revision !== null ? <ExportPreview key={selected.clip_id} inline clip={selected}
           recordingDurationMs={session.duration_ms ?? undefined}
           initialSettings={publishSettings} onSettingsChange={setPublishSettings}
           revision={session.revision} open={!showSettings && !showHelp && !showJump && !showMerge}
@@ -1200,31 +1181,27 @@ export default function App() {
             }));
           }}
           onPublished={(next, advance) => {
-            // The exported clip leaves Group 2; continue with the clip that followed it.
+            // The exported clip leaves Ready; continue with the clip that followed it.
             setSession(next);
             setSaveState("saved");
             if (publishView === "ready" || advance) setSelectedId(nextVisibleClipId);
           }} />
-          : <section className="surface flex items-center justify-center rounded-2xl p-8 text-center">
+          : <Panel className="flex items-center justify-center p-8 text-center">
             <p className="subtle">Select a clip to publish.</p>
-          </section>}
-      </main>
-      : <>
-      <main className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden md:grid-cols-[minmax(280px,28%)_1fr]" aria-label="Polish">
-        <section className={`${showDetailMobile ? "hidden md:flex" : "flex"} min-h-0 flex-col overflow-hidden border-r line`} aria-label="Clip list">
-          <div className="shrink-0 border-b line p-4 md:p-5">
-            <div className="mb-3 flex items-baseline justify-between gap-3">
-              <h1 className="text-xl font-semibold">Polish</h1>
-              <span className="subtle text-sm mono">{visible.length} visible / {session.candidates.length} total</span>
-            </div>
-            <p className="subtle mb-3 text-xs">Fix Group 1 titles and timing, then move each keeper to Publish.</p>
+          </Panel>} />
+      : <StageLayout label="Polish" fill list={
+        <Panel title={filters.find((item) => item.key === filter)?.label} ariaLabel="Clip list"
+          aside={<span title={`${visible.length} visible of ${session.candidates.length} total`}><CountBadge>{visible.length}</CountBadge></span>}
+          className={`${showDetailMobile ? "hidden min-[900px]:flex" : "flex"} min-h-0 flex-col overflow-hidden`}>
+          <div className="shrink-0 border-b line p-4">
+            <p className="subtle mb-3 text-xs">Fix titles and timing of clips that need work, then move each keeper to Publish.</p>
             <div className="mb-3 grid grid-cols-5 overflow-hidden rounded-lg border line bg-[#22312a] p-1" role="group" aria-label="Status filter">
               {filters.map((item) => <button key={item.key} type="button" onClick={() => setFilter(item.key)}
                 aria-pressed={filter === item.key}
                 aria-label={`${item.label}, ${item.key === "all" ? session.candidates.length : session.counts[item.key === "unsorted" ? "pending" : item.key]} ${
                   (item.key === "all" ? session.candidates.length : session.counts[item.key === "unsorted" ? "pending" : item.key]) === 1 ? "clip" : "clips"}`}
                 className={`flex min-w-0 flex-col items-center justify-center gap-1 rounded-md px-0.5 py-2 text-[10px] leading-tight sm:text-xs ${filter === item.key ? "bg-[#b7d69d] text-[#1b291f] shadow-sm" : "hover:bg-[#304439] hover:text-white"}`}>
-                <span className="whitespace-nowrap font-semibold">{item.label}</span><span aria-hidden="true" className={`mono text-[11px] font-normal leading-none sm:text-xs ${filter === item.key ? "text-[#435d46]" : "text-[#9eafa3]"}`}>
+                <span className="text-center font-semibold">{item.label}</span><span aria-hidden="true" className={`mono text-[11px] font-normal leading-none sm:text-xs ${filter === item.key ? "text-[#435d46]" : "text-[#9eafa3]"}`}>
                   {item.key === "all" ? session.candidates.length : session.counts[item.key === "unsorted" ? "pending" : item.key]}
                 </span>
               </button>)}
@@ -1237,14 +1214,14 @@ export default function App() {
                   className="w-full rounded-lg border line bg-[#101816] px-3 py-2 pr-10 text-sm" />
                 <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2"><ShortcutBadge keyboard="/" bindingId="focus-search" /></span>
               </div>
-              <ActionButton onClick={() => setShowJump(true)} title="Jump to clip index (G)" shortcut="G" shortcutId="jump">Go to #</ActionButton>
+              <Button onClick={() => setShowJump(true)} title="Jump to clip index (G)" shortcut="G" shortcutId="jump">Go to #</Button>
             </div>
             <div className={`mt-3 grid gap-2 ${filter === "all" ? "grid-cols-2" : "grid-cols-1"}`}>
               {filter === "all" && <label className="subtle min-w-0 text-xs">Filter status
                 <select value={allStatusFilter} onChange={(event) => setAllStatusFilter(event.target.value as AllStatusFilter)}
                   aria-label="Filter clips by status" className="mt-1 block w-full rounded-lg border line bg-[#101816] px-2.5 py-2 text-sm text-[#e7eee7]">
                   <option value="all">All statuses</option>
-                  {Object.entries(labels).map(([status, label]) => <option key={status} value={status}>{label}</option>)}
+                  {Object.entries(statusLabels).map(([status, label]) => <option key={status} value={status}>{label}</option>)}
                 </select>
               </label>}
               <label className="subtle min-w-0 text-xs">Order by
@@ -1255,12 +1232,12 @@ export default function App() {
               </label>
             </div>
             {filter === "group1" && session.counts.group1 > 0 && <div className="mt-3 flex flex-wrap items-center gap-2">
-              <ActionButton onClick={() => void startClipTranscription(
+              <Button onClick={() => void startClipTranscription(
                 session.candidates.filter((clip) => clip.status === "group1").map((clip) => clip.clip_id))}
                 disabled={clipTranscriptionRunning}
-                title="Run Whisper again on each Group 1 clip's own audio and suggest a new title">
-                Re-transcribe Group 1 titles
-              </ActionButton>
+                title="Run Whisper again on each Needs work clip's own audio and suggest a new title">
+                Re-transcribe Needs work titles
+              </Button>
               {group1SuggestionCount > 0 && <span className="subtle text-xs">{group1SuggestionCount} {group1SuggestionCount === 1 ? "suggestion" : "suggestions"} to review</span>}
             </div>}
             {clipTranscriptionJob && clipTranscriptionJob.id !== dismissedClipTranscriptionId && <div role="status" aria-live="polite"
@@ -1309,7 +1286,7 @@ export default function App() {
                   <span className="flex items-baseline gap-2"><span className="subtle mono shrink-0 text-xs">#{clip.clip_id}</span>
                     <span className="truncate text-sm font-medium" title={clip.title}>{clip.title}</span></span>
                   {filter === "all" && <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                    <span className={`clip-tag clip-tag-${clip.status}`}>{labels[clip.status]}</span>
+                    <span className={`clip-tag clip-tag-${clip.status}`}>{statusLabels[clip.status]}</span>
                     {changed && <span className="clip-tag clip-tag-trimmed">Trimmed</span>}
                     {clip.suggested_title && <span className="clip-tag clip-tag-suggestion">New title</span>}
                   </span>}
@@ -1320,59 +1297,42 @@ export default function App() {
               </button>;
             })}
           </div>
-        </section>
-
-        <section className={`${showDetailMobile ? "flex" : "hidden md:flex"} min-h-0 flex-col overflow-hidden`} aria-label="Clip details">
+        </Panel>} main={
+        <Panel ariaLabel="Clip details" className={`${showDetailMobile ? "flex" : "hidden min-[900px]:flex"} min-h-0 flex-col overflow-hidden`}>
           {selected ? <>
-            <div className="shrink-0 border-b line px-4 py-2 md:px-7 md:py-3">
-              <button type="button" onClick={() => setShowDetailMobile(false)} className="accent mb-2 text-sm md:hidden">← Back to clips</button>
-              <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
-                <span className="accent mono text-sm font-semibold tracking-wider">CLIP #{selected.clip_id}</span>
-                <span className="subtle text-sm mono">{selectedPosition + 1} of {visible.length} in view</span>
-              </div>
-              {editingTitle ? <div className="flex gap-2">
-                <input ref={titleRef} value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)}
-                  onKeyDown={(event) => {
-                    const input = keyboardInputFromEvent(event.nativeEvent);
-                    if ((input.code === "Enter" || input.code === "NumpadEnter") && !input.isComposing) {
-                      event.preventDefault(); void saveTitle();
-                    }
-                    if (input.code === "Escape" && !input.isComposing) {
-                      event.preventDefault(); setEditingTitle(false);
-                    }
-                  }} aria-label="Clip title" className="min-w-0 flex-1 rounded-lg border line bg-[#101816] px-3 py-2" />
-                <ActionButton onClick={() => void saveTitle()} disabled={busy || !titleDraft.trim()} tone="accent">Save</ActionButton>
-                <ActionButton onClick={() => setEditingTitle(false)}>Cancel</ActionButton>
-              </div> : <div className="flex flex-wrap items-start gap-3">
-                <div className="min-w-0 flex-1">
-                  {/* Very long transcript titles are clamped so the waveform stays in view (#27). */}
-                  <h2 title={selected.title}
-                    className={`break-words text-2xl font-semibold leading-snug ${titleExpanded ? "" : "line-clamp-2"}`}>{selected.title}</h2>
-                  {selected.title.length > LONG_TITLE_CHARS && <button type="button" onClick={() => setTitleExpanded((open) => !open)}
-                    aria-expanded={titleExpanded} className="subtle mt-1 text-xs underline">
-                    {titleExpanded ? "Show less" : `Show full title (${selected.title.length} characters)`}
-                  </button>}
+            <div className="shrink-0 border-b line px-4 py-3 md:px-6">
+              <button type="button" onClick={() => setShowDetailMobile(false)} className="accent mb-2 text-sm min-[900px]:hidden">← Back to clips</button>
+              <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <span className="eyebrow mono">#{selected.clip_id}</span>
+                  <StatusBadge status={selected.status} />
+                  {(selected.start_ms !== selected.original_start_ms || selected.end_ms !== selected.original_end_ms)
+                    && <span className="clip-tag clip-tag-trimmed">Trimmed</span>}
+                  <span className="subtle mono text-xs">{selectedPosition + 1} of {visible.length}</span>
                 </div>
-                <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                <div className="ml-auto flex flex-wrap items-center gap-1.5">
                   <button type="button" onClick={() => dispatchReviewAction({ type: "navigate", direction: "previous" })} disabled={selectedPosition <= 0}
                     aria-label="Previous clip (physical K key position)" title="Previous clip (physical K key position)"
-                    className="soft-surface inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium hover:bg-[#354b3b]">
+                    className="btn btn-quiet">
                     <span aria-hidden="true">←</span><ShortcutBadge keyboard="K" bindingId="previous" />
                   </button>
                   <button type="button" onClick={() => dispatchReviewAction({ type: "navigate", direction: "next" })} disabled={selectedPosition >= visible.length - 1}
                     aria-label="Next clip (physical J key position)" title="Next clip (physical J key position)"
-                    className="soft-surface inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium hover:bg-[#354b3b]">
+                    className="btn btn-quiet">
                     <span aria-hidden="true">→</span><ShortcutBadge keyboard="J" bindingId="next" />
                   </button>
-                  <ActionButton onClick={() => dispatchReviewAction({ type: "rename" })} disabled={busy}
-                    title="Edit clip title (R)" shortcut="R" shortcutId="rename">Edit title</ActionButton>
-                  <ActionButton onClick={() => dispatchReviewAction({ type: "classify", status: "group2" })}
+                  <Button onClick={() => dispatchReviewAction({ type: "rename" })} disabled={busy || editingTitle}
+                    title="Edit clip title (R)" shortcut="R" shortcutId="rename">Edit title</Button>
+                  <Button onClick={() => dispatchReviewAction({ type: "classify", status: "rejected" })}
+                    disabled={busy || editingTitle || selected.status === "rejected"}
+                    title="Reject this clip (X)" shortcut="X" shortcutId="rejected">Reject</Button>
+                  <Button onClick={() => dispatchReviewAction({ type: "classify", status: "group2" })}
                     disabled={busy || editingTitle || selected.status === "group2"}
-                    title="Mark Group 2 and move it into Publish (2)" shortcut="2" shortcutId="group2" tone="accent">Ready for Publish</ActionButton>
+                    title="Mark Ready and move it into Publish (2)" shortcut="2" shortcutId="group2" variant="primary">Ready for Publish</Button>
                   <div ref={clipMenuRef} className="relative">
                     <button type="button" onClick={() => setShowClipMenu((open) => !open)}
                       aria-label="More clip actions" aria-expanded={showClipMenu} aria-haspopup="menu" title="More clip actions"
-                      className="soft-surface rounded-lg px-3 py-2 text-sm font-medium hover:bg-[#354b3b]">…</button>
+                      className="btn btn-quiet btn-icon">…</button>
                     {showClipMenu && <div role="menu" aria-label="More clip actions"
                       className="surface absolute right-0 top-full z-20 mt-1 min-w-40 rounded-lg p-1 shadow-xl">
                       <button type="button" role="menuitem" disabled={busy} onClick={() => {
@@ -1395,6 +1355,30 @@ export default function App() {
                     </div>}
                   </div>
                 </div>
+              </div>
+              {editingTitle ? <div className="flex gap-2">
+                <input ref={titleRef} value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    const input = keyboardInputFromEvent(event.nativeEvent);
+                    if ((input.code === "Enter" || input.code === "NumpadEnter") && !input.isComposing) {
+                      event.preventDefault(); void saveTitle();
+                    }
+                    if (input.code === "Escape" && !input.isComposing) {
+                      event.preventDefault(); setEditingTitle(false);
+                    }
+                  }} aria-label="Clip title" className="min-w-0 flex-1 rounded-lg border line bg-[#101816] px-3 py-2" />
+                <Button onClick={() => void saveTitle()} disabled={busy || !titleDraft.trim()} variant="primary">Save</Button>
+                <Button onClick={() => setEditingTitle(false)}>Cancel</Button>
+              </div> : <div className="flex flex-wrap items-start gap-3">
+                <div className="min-w-0 flex-1">
+                  {/* Very long transcript titles are clamped so the waveform stays in view (#27). */}
+                  <h2 title={selected.title}
+                    className={`break-words text-2xl font-semibold leading-snug ${titleExpanded ? "" : "line-clamp-2"}`}>{selected.title}</h2>
+                  {selected.title.length > LONG_TITLE_CHARS && <button type="button" onClick={() => setTitleExpanded((open) => !open)}
+                    aria-expanded={titleExpanded} className="subtle mt-1 text-xs underline">
+                    {titleExpanded ? "Show less" : `Show full title (${selected.title.length} characters)`}
+                  </button>}
+                </div>
               </div>}
               {selected.suggested_title && !editingTitle && <div role="region" aria-label="Suggested title"
                 className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-[#4f8396] bg-[#203640] px-3 py-2">
@@ -1403,9 +1387,9 @@ export default function App() {
                   <span className="break-words text-base">{selected.suggested_title}</span>
                 </span>
                 <span className="flex shrink-0 gap-1.5">
-                  <ActionButton tone="accent" disabled={busy} onClick={() => patchSelected({ title: selected.suggested_title })}>Use this</ActionButton>
-                  <ActionButton disabled={busy} onClick={() => { setTitleDraft(selected.suggested_title ?? ""); setEditingTitle(true); }}>Edit</ActionButton>
-                  <ActionButton disabled={busy} onClick={() => dismissTitleSuggestion(selected.clip_id)}>Dismiss</ActionButton>
+                  <Button variant="primary" disabled={busy} onClick={() => patchSelected({ title: selected.suggested_title })}>Use this</Button>
+                  <Button disabled={busy} onClick={() => { setTitleDraft(selected.suggested_title ?? ""); setEditingTitle(true); }}>Edit</Button>
+                  <Button disabled={busy} onClick={() => dismissTitleSuggestion(selected.clip_id)}>Dismiss</Button>
                 </span>
               </div>}
               {clipTranscriptionRunning && clipTranscriptionJob?.clip_ids.includes(selected.clip_id) && !selected.suggested_title &&
@@ -1419,7 +1403,7 @@ export default function App() {
                     onChange={(event) => dispatchReviewAction({ type: "set-status", status: event.target.value as Status })}
                     className="appearance-none rounded-lg border line bg-[#22312a] py-2 pl-3 pr-9 text-[#e7eee7] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b4e2b6]">
                     {(["group1", "group2", "unsure", "rejected", "pending"] as Status[]).map((status) =>
-                      <option key={status} value={status}>{labels[status]}</option>)}
+                      <option key={status} value={status}>{statusLabels[status]}</option>)}
                     {selected.status === "exported" && <option value="exported">Exported</option>}
                   </select>
                   <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2"
@@ -1428,16 +1412,16 @@ export default function App() {
                   </svg>
                 </span>
                 <span className="subtle inline-flex flex-wrap items-center gap-1.5 text-xs">
-                  Choose Group 1 <ShortcutBadge keyboard="1" bindingId="group1" />, Group 2 <ShortcutBadge keyboard="2" bindingId="group2" />, Unsure <ShortcutBadge keyboard="3" bindingId="unsure" />, or Rejected <ShortcutBadge keyboard="X" bindingId="rejected" />
+                  Choose Needs work <ShortcutBadge keyboard="1" bindingId="group1" />, Ready <ShortcutBadge keyboard="2" bindingId="group2" />, Unsure <ShortcutBadge keyboard="3" bindingId="unsure" />, or Rejected <ShortcutBadge keyboard="X" bindingId="rejected" />
                 </span>
               </div>
               {selected.last_export_path && <div className={`mb-4 rounded-lg border line px-3 py-2 text-xs ${selected.export_state === "matching" ? "subtle" : "text-[#edbc97]"}`}>
                 <p>{selected.export_state === "matching" ? "Exported · matches current edits."
                   : selected.export_state === "changed" ? "Exported · changed. The saved file needs re-exporting."
                     : "Exported · unverified. Re-export to record a snapshot."}</p>
-                <ActionButton onClick={() => { setPublishView("exported"); setMode("publish"); setSelectedId(selected.clip_id); }}>
+                <Button onClick={() => { setPublishView("exported"); setMode("publish"); setSelectedId(selected.clip_id); }}>
                   View saved file and re-export
-                </ActionButton>
+                </Button>
               </div>}
               <WaveformEditor key={selected.clip_id} clip={selected}
                 durationMs={session.duration_ms ?? selected.end_ms} audioSrc={audioUrl()} busy={busy}
@@ -1459,9 +1443,7 @@ export default function App() {
                 }} />
             </div>
           </> : <div className="subtle flex flex-1 items-center justify-center p-6 text-center">Select a clip to review its details.</div>}
-        </section>
-      </main>
-      </>}
+        </Panel>} />}
       {selected && session.revision !== null && <ExportPreview key={selected.clip_id} clip={selected}
         revision={session.revision} open={showExportModal} nextClipId={nextVisibleClipId}
         exportContext={rankingContext(selected)}
@@ -1561,8 +1543,8 @@ export default function App() {
       </div>}
       {session.merge_preview.text_change_unverified && <p className="mb-4 text-sm text-[#ead49b]">The SRT file is newer than this older session. Text may have changed, but the original text was not saved for comparison.</p>}
       {session.merge_preview.unknown_original_text_clip_ids.length > 0 && !session.merge_preview.text_change_unverified && <p className="subtle mb-4 text-xs">This older session did not store original SRT text, so text changes cannot be detected for every saved clip.</p>}
-      <div className="flex justify-end gap-2"><ActionButton onClick={() => setShowMerge(false)}>Cancel</ActionButton>
-        <ActionButton tone="accent" onClick={() => void applyMerge()} disabled={busy}>Apply selected changes</ActionButton></div>
+      <div className="flex justify-end gap-2"><Button onClick={() => setShowMerge(false)}>Cancel</Button>
+        <Button variant="primary" onClick={() => void applyMerge()} disabled={busy}>Apply selected changes</Button></div>
     </Dialog>}
 
     {showHelp && <Dialog title="Keyboard shortcuts" controllerHandlerRef={dialogControllerHandlerRef} onClose={() => setShowHelp(false)}>

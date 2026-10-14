@@ -43,3 +43,33 @@ input:focus-visible, button:focus-visible { outline: 2px solid #b4e2b6; outline-
 .clip-score { min-width: 1.9rem; border-radius: .4rem; background: #1f2b26; padding: .1rem .35rem; text-align: center; font-size: .72rem; color: #b7d69d; }
 .panel-scroll { scrollbar-color: #54705c transparent; scrollbar-width: thin; }
 .mono { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+
+/* Shared pieces from the approved step 2 mockup (doc/mockups/step-2-ui). */
+.panel { background: #192420; border: 1px solid #34423b; border-radius: 16px; min-width: 0; }
+.panel-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 12px 18px; border-bottom: 1px solid #34423b; }
+.eyebrow { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .15em; text-transform: uppercase; color: #9eafa3; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; box-sizing: border-box; padding: 0 14px; border-radius: 10px; border: 1px solid transparent; font-size: 14px; font-weight: 600; white-space: nowrap; transition: background-color .12s; }
+.btn-primary { background: #b7d69d; color: #1b291f; }
+.btn-primary:not(:disabled):hover { background: #c8e5af; }
+.btn-secondary { background: #22312a; color: #edf2ee; border-color: #34423b; }
+.btn-secondary:not(:disabled):hover { background: #2c3f35; }
+.btn-quiet { background: transparent; color: #b5c4b9; }
+.btn-quiet:not(:disabled):hover { background: #22312a; color: #edf2ee; }
+.btn-danger { background: #5d3938; color: #ffe2db; }
+.btn-danger:not(:disabled):hover { background: #754542; }
+.btn-icon { width: 40px; padding: 0; }
+.btn-decision { min-height: 64px; border-radius: 12px; font-size: 15px; }
+.count-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 20px; box-sizing: border-box; padding: 0 7px; border-radius: 999px; background: #101816; color: #b5c4b9; font-size: 12px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.tone-group1 { background: #254d38; border-color: #498c61; color: #c1f3cd; }
+.tone-group1:not(:disabled):hover { background: #2d5d43; }
+.tone-group2 { background: #284762; border-color: #4c80a8; color: #c4e7ff; }
+.tone-group2:not(:disabled):hover { background: #305676; }
+.tone-unsure { background: #573b26; border-color: #a5683c; color: #f6cfa8; }
+.tone-unsure:not(:disabled):hover { background: #68472e; }
+.tone-rejected { background: #36413e; border-color: #66756e; color: #d6e0da; }
+.tone-rejected:not(:disabled):hover { background: #424f4b; }
+.seg { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid #34423b; border-radius: 12px; background: #17211d; }
+.seg-btn { display: inline-flex; flex: 1; align-items: center; justify-content: center; gap: 8px; min-height: 36px; padding: 0 14px; border: 0; border-radius: 9px; background: transparent; color: #d6e0da; font-weight: 600; white-space: nowrap; }
+.seg-btn:hover { background: #22312a; }
+.seg-btn[aria-pressed="true"] { background: #b7d69d; color: #1b291f; }
+.seg-btn[aria-pressed="true"] .count-badge { background: #1b291f; color: #d4ecbe; }
