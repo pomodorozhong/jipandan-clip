@@ -219,9 +219,7 @@ describe("keyboard action routing", () => {
     expect(resolveKeyboardAction("review", input({ key: "2", code: "Digit2" }), "review")).toEqual({
       type: "classify", status: "group2",
     });
-    expect(resolveKeyboardAction("review", input({ key: "3", code: "Digit3" }), "review")).toEqual({
-      type: "classify", status: "unsure",
-    });
+    expect(resolveKeyboardAction("review", input({ key: "3", code: "Digit3" }), "review")).toBeNull();
     expect(resolveKeyboardAction("review", input({ key: "x", code: "KeyX" }), "review")).toEqual({
       type: "classify", status: "rejected",
     });

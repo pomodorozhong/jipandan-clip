@@ -7,7 +7,7 @@ const clip = (clip_id: string, index: number, suffix = 0, status: Clip["status"]
 
 const session = {
   revision: 4, can_undo: false, candidates: [clip("1", 1), clip("2", 2), clip("2-2", 2, 2), clip("3", 3)],
-  counts: { pending: 4, group1: 0, group2: 0, exported: 0, rejected: 0, unsure: 0 },
+  counts: { pending: 4, group1: 0, group2: 0, exported: 0, rejected: 0 },
 } as unknown as Session;
 
 describe("applySessionDelta", () => {

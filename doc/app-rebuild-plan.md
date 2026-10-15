@@ -4,7 +4,7 @@
 
 Turn the browser GUI into a better long-term app for clipping 4–7 h gaming streams into short soundboard MP3s. Review is split into three stages that match how the owner works:
 
-- **Triage**: one unsorted clip at a time, gamepad-first, for fast first-pass decisions (Needs work, Ready, Unsure, Reject).
+- **Triage**: one unsorted clip at a time, gamepad-first, for fast first-pass decisions (Needs work, Ready, Reject).
 - **Polish**: the clip list and waveform editor for fixing titles and timing of keepers (Needs work).
 - **Publish**: works through Ready in clip order and exports each clip.
 
@@ -39,7 +39,7 @@ Decisions:
 - The header is one compact bar; session and export paths are in a tooltip on the recording name.
 - The UI consistency pass follows the [mockup](mockups/step-2-ui/README.md) the owner approved in [#41](https://github.com/pomodorozhong/jipandan-clip/issues/41): one panel, section header, three button weights, a badge set, and a list-plus-main layout shared by all three stages. Triage gains a segmented progress panel, a bounded Up next queue in Likely keep order, and a view-only waveform with padding around the clip.
 - Group 1 and Group 2 are renamed **Needs work** and **Ready** in the UI, since the numbers said nothing about what happens next; stored statuses stay `group1`/`group2` ([#42](https://github.com/pomodorozhong/jipandan-clip/issues/42)).
-- Unsure is dropped: Triage decides Needs work, Ready, or Reject ([#52](https://github.com/pomodorozhong/jipandan-clip/issues/52)).
+- Triage decides Needs work, Ready, or Reject; existing Unsure clips return to Unsorted when opened ([#52](https://github.com/pomodorozhong/jipandan-clip/issues/52)).
 
 ### Step 3: candidate generation
 
@@ -59,5 +59,5 @@ Why the app logs review activity ([#36](https://github.com/pomodorozhong/jipanda
 
 ## Owner workflow assumptions
 
-- Needs work (stored as `group1`) = keep, but title or timing still needs fixing; Ready (`group2`) = ready to export; Reject = unusable; Unsure = undecided, being removed in #52; Unsorted = not reviewed.
+- Needs work (stored as `group1`) = keep, but title or timing still needs fixing; Ready (`group2`) = ready to export; Reject = unusable; Unsorted = not reviewed.
 - Triage is done with a gamepad, Polish with both gamepad and keyboard+mouse, Publish mainly with keyboard+mouse. In Publish the owner mostly fixes titles, sometimes timing, and changes thresholds about twice a session.

@@ -13,6 +13,7 @@ import numpy as np
 from fastapi.testclient import TestClient
 
 from jipandan.core.clip_features import ClipFeatures
+from jipandan.core.models import Session
 from jipandan.core.waveform_envelope import WaveformEnvelopeCache
 from jipandan.core.whisper import write_segment_scores
 from jipandan.web.api import create_app
@@ -82,6 +83,7 @@ class WebApiTests(unittest.TestCase):
     def test_open_edit_undo_and_reload(self):
         state = self.open()
         self.assertEqual(state["revision"], 1)
+        self.assertNotIn("unsure", state["counts"])
         marked = self.client.patch(
             "/api/clips/1", json={"expected_revision": 1, "status": "group1"},
             headers=self.headers,
@@ -478,13 +480,27 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(rejected.json()["counts"]["rejected"], 2)
         unsure = self.client.patch("/api/clips/1", json={"expected_revision": 2, "status": "unsure"},
                                    headers=self.headers)
-        self.assertEqual(unsure.status_code, 200, unsure.text)
-        self.assertEqual((unsure.json()["counts"]["unsure"], unsure.json()["counts"]["rejected"]), (1, 1))
-        self.client.post("/api/session/undo", json={"expected_revision": 3}, headers=self.headers)
-        undone = self.client.post(
-            "/api/session/undo", json={"expected_revision": 4}, headers=self.headers,
-        )
+        self.assertEqual(unsure.status_code, 422)
+        self.assertEqual(self.service.snapshot()["revision"], 2)
+        undone = self.client.post("/api/session/undo", json={"expected_revision": 2}, headers=self.headers)
         self.assertEqual(undone.json()["counts"]["pending"], 2)
+        self.assertNotIn("unsure", undone.json()["counts"])
+
+    def test_open_resets_legacy_unsure_clips_to_unsorted(self):
+        legacy_store = RecordingStore(store_path(self.audio))
+        legacy_store.create(Session.from_srt(self.audio, self.srt, self.root / "clips"))
+        (data,) = legacy_store._db.execute("SELECT data FROM clip WHERE clip_id = ?", ("1",)).fetchone()
+        legacy = json.loads(data)
+        legacy["status"] = "unsure"
+        legacy_store._db.execute("UPDATE clip SET data = ? WHERE clip_id = ?", (json.dumps(legacy), "1"))
+        legacy_store.close()
+
+        opened = self.open()
+
+        self.assertEqual(opened["revision"], 2)
+        self.assertEqual(opened["candidates"][0]["status"], "pending")
+        self.assertNotIn("unsure", opened["counts"])
+        self.assertEqual(self.stored().get_candidate("1").status, "pending")
 
     def test_millisecond_trim_survives_reload_and_rejects_invalid_duration(self):
         self.open()

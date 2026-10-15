@@ -14,8 +14,7 @@ from jipandan.core.srt import (
 )
 from jipandan.core.paths import default_export_dir
 
-# "unsure" records a deliberate "can't decide", distinct from a clip nobody reviewed yet.
-ClipStatus = Literal["pending", "group1", "group2", "exported", "rejected", "unsure"]
+ClipStatus = Literal["pending", "group1", "group2", "exported", "rejected"]
 
 # When an operation collapses a clip to zero duration (start == end), the end is
 # pushed out by this many seconds so the clip remains usable.
@@ -111,10 +110,11 @@ def _carried_scores(prior: ClipCandidate, fresh: ClipCandidate) -> dict[str, flo
 
 
 def clip_candidate_from_dict(item: dict) -> ClipCandidate:
-    """Build a candidate from stored JSON, ignoring unknown keys."""
-    return ClipCandidate(
-        **{key: value for key, value in item.items() if key in _CLIP_CANDIDATE_FIELD_NAMES}
-    )
+    """Build a candidate from stored JSON, ignoring unknown keys and normalizing legacy status."""
+    values = {key: value for key, value in item.items() if key in _CLIP_CANDIDATE_FIELD_NAMES}
+    if values.get("status") == "unsure":
+        values["status"] = "pending"
+    return ClipCandidate(**values)
 
 
 @dataclass
