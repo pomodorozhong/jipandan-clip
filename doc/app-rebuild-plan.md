@@ -45,6 +45,13 @@ Decisions:
 
 Generate soundboard-oriented candidates from voice activity detection and word timings instead of raw SRT lines, and evaluate them against the owner's kept clips.
 
+Clip timing findings (2026-10-16, 1,380 retimed keeps on three recordings; details in [#58](https://github.com/pomodorozhong/jipandan-clip/issues/58)):
+
+- Most final edges sit in pauses; only 8–22% cut through a word. Retiming is mostly choosing which pause ends the reaction, not fixing misaligned timestamps.
+- Whisper word starts are good start points (71% within 0.25 s), but Whisper word ends trail off (35%). Silero VAD speech ends are the best end points (64%), at about 12 per minute and about 1% of stream length to compute on the CPU.
+- Together they put both edges within 0.25 s on 48% of retimed clips (chance 7%), as choices offered in Polish. Moving SRT edges to the nearest point automatically does not help (21% vs 22% for the SRT as is).
+- Breeze-ASR-25, a Taiwanese Mandarin fine-tune of Whisper, is not worth a second transcription pass. Its word ends are better than Whisper's but worse than VAD's, it takes 1.5–2 times as long as Whisper, and it left keep/skip ranking unchanged.
+
 ## Ranking direction
 
 Triage orders clips by a "Likely keep" score. The app ships fixed built-in weights rather than training per user. The event log, plus 5% exploration picks, collects unbiased review data for retraining the weights centrally.

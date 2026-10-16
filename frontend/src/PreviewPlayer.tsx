@@ -245,7 +245,7 @@ const PreviewPlayer = forwardRef<PreviewPlayerHandle, Props>(function PreviewPla
     seek,
   }));
 
-  return <div ref={cardRef} className={`relative grid min-w-0 gap-x-4 rounded-xl border p-3 sm:grid-cols-[200px_minmax(0,1fr)] ${reference
+  return <div ref={cardRef} className={`relative grid min-w-0 gap-x-4 rounded-xl border p-3 sm:grid-cols-[240px_minmax(0,1fr)] ${reference
     ? "border-[#618a9c] bg-[#1c2b32]" : "border-[#8eb36c] bg-[#203225]"}`}>
     {alert && <div role="alert" className="mb-3 ml-1 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border sm:col-span-2 border-[#e58a7a] bg-[#3b211d] px-3 py-2 text-sm font-medium text-[#ffd6cc]">
       <span aria-hidden="true" className="text-base leading-none">⚠</span>{alert}
@@ -259,7 +259,7 @@ const PreviewPlayer = forwardRef<PreviewPlayerHandle, Props>(function PreviewPla
           type: "playback", target: reference ? "reference" : "candidate", mode: "toggle",
         })}
           aria-label={`${playing ? "Pause" : "Play"} ${reference ? "As is reference" : "export candidate"}`}
-          className={`inline-flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-semibold disabled:opacity-45 ${reference
+          className={`inline-flex min-w-0 flex-auto items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-semibold disabled:opacity-45 ${reference
             ? "bg-[#b8dbe6] text-[#1d3038]" : "bg-[#c9e5a6] text-[#1d3020]"}`}>
           <span aria-hidden="true">{playing ? "Ⅱ" : "▶"}</span><span>{playing ? "Pause" : "Play"}</span>
           <ShortcutBadge keyboard={playShortcut} bindingId={playShortcutId} />
@@ -268,7 +268,7 @@ const PreviewPlayer = forwardRef<PreviewPlayerHandle, Props>(function PreviewPla
           type: "playback", target: reference ? "reference" : "candidate", mode: "replay",
         })}
           aria-label={`Replay ${reference ? "As is reference" : "export candidate"}`}
-          className={`inline-flex min-w-0 flex-1 items-center justify-center gap-1 rounded-lg px-2 py-2 text-xs font-semibold disabled:opacity-45 ${reference
+          className={`inline-flex min-w-0 flex-auto items-center justify-center gap-1 rounded-lg px-2 py-2 text-xs font-semibold disabled:opacity-45 ${reference
             ? "bg-[#344c55]" : "bg-[#38563c]"}`}>
           <span>Replay</span>
           <ShortcutBadge keyboard={replayShortcut} bindingId={replayShortcutId} />
