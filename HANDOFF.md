@@ -4,13 +4,12 @@
 
 ### feat/top-bar
 
-- Task: #43 Rework the top bar (not started). Created locally from `main` at the 2026-10-16 wrap-up to hold this `HANDOFF.md` update, since `main` takes no direct commits.
+- Task: #43 Rework the top bar (not started). Created from `main` at the 2026-10-16 wrap-up to hold this `HANDOFF.md` update, since `main` takes no direct commits.
 - PR: none.
 - Code checkpoint: `5299381` (`main` after #59).
-- State: no work yet; branch exists only on this computer and is not linked to #43.
+- State: no work yet; branch is linked to #43 and pushed, so other computers can fetch it.
 - Verification: none yet.
 - Next action: read #43 and the step 2 mockup (`doc/mockups/step-2-ui/`), then propose a plan to the owner.
-- Pending: **P-03** Link this branch to #43 and push it (`gh issue develop` creates the branch on GitHub). Why: pushing needs approval. Blocks: other computers seeing this `HANDOFF.md`.
 
 ## Ranked work
 
