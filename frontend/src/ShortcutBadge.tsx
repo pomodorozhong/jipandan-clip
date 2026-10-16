@@ -29,9 +29,10 @@ export function resolveShortcutBadge({ mode, inputType, unboundBehavior, keyboar
   const bound = gamepadIndex !== null && gamepadIndex !== undefined;
   const showXbox = mode === "xbox" || (mode === "auto" && inputType === "xbox");
   if (showXbox && bound) return { kind: "xbox", index: gamepadIndex };
-  if (keyboard && (!mapped || bound || unboundBehavior === "keyboard")) {
-    return { kind: "keyboard", label: keyboard };
-  }
+  if (!keyboard) return null;
+  // The unbound preference only matters while Xbox badges are showing;
+  // keyboard badges never depend on whether a controller button is bound.
+  if (!showXbox || !mapped || unboundBehavior === "keyboard") return { kind: "keyboard", label: keyboard };
   return null;
 }
 

@@ -25,4 +25,16 @@ describe("shortcut badge selection", () => {
       mode: "xbox", inputType: "keyboard", unboundBehavior: "keyboard", keyboard: "J", gamepadIndex: null, mapped: true,
     })).toEqual({ kind: "keyboard", label: "J" });
   });
+
+  it("shows keyboard badges for actions without a controller button when keyboard badges are showing", () => {
+    expect(resolveShortcutBadge({
+      mode: "keyboard", inputType: "keyboard", unboundBehavior: "hide", keyboard: "U", gamepadIndex: null, mapped: true,
+    })).toEqual({ kind: "keyboard", label: "U" });
+    expect(resolveShortcutBadge({
+      mode: "auto", inputType: "keyboard", unboundBehavior: "hide", keyboard: "U", gamepadIndex: null, mapped: true,
+    })).toEqual({ kind: "keyboard", label: "U" });
+    expect(resolveShortcutBadge({
+      mode: "auto", inputType: "xbox", unboundBehavior: "hide", keyboard: "U", gamepadIndex: null, mapped: true,
+    })).toBeNull();
+  });
 });
