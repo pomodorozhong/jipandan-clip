@@ -27,11 +27,11 @@ const decisions: { status: ClassificationStatus; label: string; keyboard: string
 /**
  * One clip at a time for fast first-pass decisions, built for the gamepad.
  * Decisions, navigation, and undo arrive through the app's shared input
- * handling; this screen owns playback, which plays only the clip's span.
+ * handling (Undo itself is in the top bar); this screen owns playback, which plays only the clip's span.
  */
 export default function TriageScreen({
   clip, upNext, durationMs, position, remaining, counts, audioSrc, autoplay, active, busy, orderNote,
-  gamepadAction, onGamepadActionHandled, onPlayback, onDecide, onNavigate, onSelect, onUndo, canUndo,
+  gamepadAction, onGamepadActionHandled, onPlayback, onDecide, onNavigate, onSelect,
 }: {
   clip: Clip | null;
   upNext: Clip[];
@@ -50,8 +50,6 @@ export default function TriageScreen({
   onDecide: (status: ClassificationStatus) => void;
   onNavigate: (direction: "next" | "previous") => void;
   onSelect: (clipId: string) => void;
-  onUndo: () => void;
-  canUndo: boolean;
 }) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const stopAtRef = useRef<number | null>(null);
@@ -258,12 +256,9 @@ export default function TriageScreen({
           <Button variant="quiet" onClick={() => onNavigate("previous")} shortcut="K" shortcutId="previous">
             <span aria-hidden="true">←</span>Back
           </Button>
-          <div className="flex gap-2">
-            <Button variant="quiet" onClick={onUndo} disabled={!canUndo || busy} shortcut="U" shortcutId="undo">Undo</Button>
-            <Button variant="quiet" onClick={() => onNavigate("next")} title="Leave this clip unsorted and move on" shortcut="J" shortcutId="next">
-              Pass<span aria-hidden="true">→</span>
-            </Button>
-          </div>
+          <Button variant="quiet" onClick={() => onNavigate("next")} title="Leave this clip unsorted and move on" shortcut="J" shortcutId="next">
+            Pass<span aria-hidden="true">→</span>
+          </Button>
         </div>
       </div>
     </Panel> : <Panel className="p-8 text-center">
