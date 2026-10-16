@@ -2,14 +2,15 @@
 
 ## In progress
 
-### fix/shortcut-badges
+### feat/top-bar
 
-- Task: #57 Keyboard shortcut badges disappear. This branch also carries the docs commits that move continuity notes to `HANDOFF.md` and record the 2026-10-16 clip timing findings, so they ship with this PR instead of being pushed alone.
-- PR: opened from this branch, closing #57; awaiting review and merge.
-- Code checkpoint: `d17e056` on top of `origin/main` at `0c2ba5f`.
-- State: fixed; PR awaiting review and merge. Cause: `resolveShortcutBadge` applied the "Unbound shortcut badges: Hide" preference while keyboard badges were showing, so every action without a controller button lost its key badge (Undo, play/pause, Shortcuts, Edit title, Go to #, search, export dialog keys). A second commit stops the Publish player's ⇧Space badge being squeezed and clipped: badges no longer shrink, the player's control column is 240 px, and Play/Replay size to their content.
-- Verification: `npx vitest run` (126 passed, including a new test) and `npx tsc --noEmit` in `frontend/`. In the app with a generated demo recording: Triage, Polish and Publish badges were missing before the fix and show after it. Publish player buttons measured to fit in both Play and Pause states at 1024 px and 700 px wide. Python tests not run (no backend change). Xbox badge mode not checked in the app; covered by unit tests.
-- Next action: after the PR merges, remove this subsection.
+- Task: #43 Rework the top bar (not started). Created locally from `main` at the 2026-10-16 wrap-up to hold this `HANDOFF.md` update, since `main` takes no direct commits.
+- PR: none.
+- Code checkpoint: `5299381` (`main` after #59).
+- State: no work yet; branch exists only on this computer and is not linked to #43.
+- Verification: none yet.
+- Next action: read #43 and the step 2 mockup (`doc/mockups/step-2-ui/`), then propose a plan to the owner.
+- Pending: **P-03** Link this branch to #43 and push it (`gh issue develop` creates the branch on GitHub). Why: pushing needs approval. Blocks: other computers seeing this `HANDOFF.md`.
 
 ## Ranked work
 
