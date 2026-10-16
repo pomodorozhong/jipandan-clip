@@ -2,28 +2,26 @@
 
 ## In progress
 
-### docs/handoff-file
+### fix/shortcut-badges
 
-- Task: move continuity notes from `.agents/` to `HANDOFF.md`, refresh the ranking after #56, and record the 2026-10-16 clip timing findings (no issue; docs only). Replaces the unpushed `docs/update-next-steps`, whose other commits were superseded.
-- PR: none, and none planned just for these docs.
-- Code checkpoint: no source changes; docs commits on top of `origin/main` at `0c2ba5f`.
-- State: unpushed, awaiting the owner's local review.
-- Verification: none needed (docs only).
-- Next action: push once P-01 is approved.
-- Pending: **P-01** Push `docs/handoff-file`. Scope: this docs-only branch (`HANDOFF.md` replacing `.agents/`, the `AGENTS.md` handoff template, and the timing findings in `doc/app-rebuild-plan.md`). Why: the owner reviews branches locally before anything is pushed. Blocks: other computers and branches seeing the new ranking and `HANDOFF.md`.
+- Task: #57 Keyboard shortcut badges disappear. This branch also carries the docs commits that move continuity notes to `HANDOFF.md` and record the 2026-10-16 clip timing findings, so they ship with this PR instead of being pushed alone.
+- PR: opened from this branch, closing #57; awaiting review and merge.
+- Code checkpoint: `d17e056` on top of `origin/main` at `0c2ba5f`.
+- State: fixed; PR awaiting review and merge. Cause: `resolveShortcutBadge` applied the "Unbound shortcut badges: Hide" preference while keyboard badges were showing, so every action without a controller button lost its key badge (Undo, play/pause, Shortcuts, Edit title, Go to #, search, export dialog keys). A second commit stops the Publish player's ⇧Space badge being squeezed and clipped: badges no longer shrink, the player's control column is 240 px, and Play/Replay size to their content.
+- Verification: `npx vitest run` (126 passed, including a new test) and `npx tsc --noEmit` in `frontend/`. In the app with a generated demo recording: Triage, Polish and Publish badges were missing before the fix and show after it. Publish player buttons measured to fit in both Play and Pause states at 1024 px and 700 px wide. Python tests not run (no backend change). Xbox badge mode not checked in the app; covered by unit tests.
+- Next action: after the PR merges, remove this subsection.
 
 ## Ranked work
 
-1. #57 Investigate missing keyboard shortcut badges (reported after #55; cause unconfirmed)
-2. #43 Rework the top bar
-3. #45 Restructure Settings
-4. #46 Finish the step 2 owner review (alongside #43 and #45; also checks #22, #25, #27, #28)
-5. #49 Decide how to evaluate generated candidates (needs-decision; can be answered before #46 ends)
-6. #29 Virtualize the clip list (partly done in #36)
-7. #26 Show export-directory errors inside Settings (fits with #45)
-8. #58 Snap clip edges in Polish to Whisper word starts and VAD speech ends (unblocked; start with the VAD + Whisper concurrency test)
-9. #47 Generate candidates from voice activity and word timings (blocked by #49, after #46; shares #58's stored timings)
-10. #50 Create new sessions from generated candidates (blocked by #47)
+1. #43 Rework the top bar
+2. #45 Restructure Settings
+3. #46 Finish the step 2 owner review (alongside #43 and #45; also checks #22, #25, #27, #28)
+4. #49 Decide how to evaluate generated candidates (needs-decision; can be answered before #46 ends)
+5. #29 Virtualize the clip list (partly done in #36)
+6. #26 Show export-directory errors inside Settings (fits with #45)
+7. #58 Snap clip edges in Polish to Whisper word starts and VAD speech ends (unblocked; start with the VAD + Whisper concurrency test)
+8. #47 Generate candidates from voice activity and word timings (blocked by #49, after #46; shares #58's stored timings)
+9. #50 Create new sessions from generated candidates (blocked by #47)
 
 ## Pending
 
