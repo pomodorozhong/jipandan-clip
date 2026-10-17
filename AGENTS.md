@@ -18,6 +18,7 @@ Jipandan turns long gaming-stream recordings into short soundboard MP3 clips. Se
 ### During work
 
 - Create each work branch from its primary issue: `gh issue develop <N> --name <type>/<summary> --base <default branch> --checkout` (or `--worktree <path>`). This creates the branch on GitHub at once, so it needs the same authorization as a push; without it, create the branch locally and link it when pushing is approved. If the work has no issue yet, create the branch locally, add an issue draft to its subsection's pending requests, and link the branch once the issue is filed. The PR may close other issues too; list each with `Closes #N`.
+- Link a branch to an issue only when its PR will fully resolve that issue: when the PR merges, GitHub closes every issue linked to its branch, even if the body says `Related to #N`. A branch that only advances an issue, or only carries a handoff, is created locally and stays unlinked.
 - Open PRs with the `handoff` skill's PR procedure: the user approves a detailed plan before any work, and approves the finished branch before anything is pushed.
 - Edit only the current branch's subsection, plus `Ranked work` and `Pending` when they actually change. Keep subsections in alphabetical order. Remove subsections whose PR has merged or closed.
 - The branch subsection records: task and issue, PR, code checkpoint, observed state, verification run and results, one concrete next action, and when useful: checks not run, approaches to avoid, and pending IDs with what they block. Describe unmerged work as awaiting review or merge.
