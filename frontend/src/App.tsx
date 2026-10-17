@@ -9,7 +9,7 @@ import ExportPreview, { type ExportSettings } from "./ExportPreview";
 import ShortcutCheatsheet from "./ShortcutCheatsheet";
 import TranscriptionScreen from "./TranscriptionScreen";
 import SettingsScreen from "./SettingsScreen";
-import GamepadControls from "./GamepadControls";
+import GamepadStatusLine from "./GamepadStatus";
 import GamepadMappingScreen from "./GamepadMappingScreen";
 import { ShortcutBadge, ShortcutDisplayProvider, type BadgeMode, type DisplayInputType, type UnboundBadgeBehavior } from "./ShortcutBadge";
 import {
@@ -154,8 +154,8 @@ function visibleClips(
   });
 }
 
-function Dialog({ title, children, onClose, controllerHandlerRef }: {
-  title: string; children: React.ReactNode; onClose: () => void;
+function Dialog({ title, children, onClose, controllerHandlerRef, wide = false }: {
+  title: string; children: React.ReactNode; onClose: () => void; wide?: boolean;
   controllerHandlerRef: React.MutableRefObject<((action: InputAction) => void) | null>;
 }) {
   const dialogRef = useRef<HTMLElement>(null);
@@ -223,7 +223,7 @@ function Dialog({ title, children, onClose, controllerHandlerRef }: {
   return <div className="fixed inset-0 z-30 flex items-center justify-center bg-[#07100bcf] p-4"
     role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section ref={dialogRef} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1}
-      className="panel max-h-[85vh] w-full max-w-lg overflow-auto p-5 shadow-2xl">
+      className={`panel max-h-[85vh] w-full ${wide ? "max-w-[640px]" : "max-w-lg"} overflow-auto p-5 shadow-2xl`}>
       <div className="mb-4 flex items-start justify-between gap-4">
         <h2 className="text-lg font-semibold">{title}</h2>
         <button type="button" onClick={onClose} aria-label="Close dialog (Esc)"
@@ -283,6 +283,7 @@ export default function App() {
   const [showDetailMobile, setShowDetailMobile] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsAtController, setSettingsAtController] = useState(false);
   const [showStorageConfirm, setShowStorageConfirm] = useState(false);
   const [showGamepadMapping, setShowGamepadMapping] = useState(false);
   const [clipDirDraft, setClipDirDraft] = useState("");
@@ -1093,6 +1094,7 @@ export default function App() {
             title="Keyboard shortcuts (?)" ariaLabel="Keyboard shortcuts (?)"><HelpIcon /></Button>}
           <Button variant="quiet" className="btn-icon" buttonRef={settingsButtonRef} title="Settings" ariaLabel="Settings" onClick={() => {
             setShowSettings(true);
+            setSettingsAtController(false);
             setShowGamepadMapping(false);
             setShowHelp(false); setShowJump(false); setShowMerge(false); setShowExportModal(false);
           }}><SettingsIcon /></Button>
@@ -1517,7 +1519,7 @@ export default function App() {
         }} />}
     </>}
 
-    {showSettings && <Dialog title={showGamepadMapping ? "Gamepad mapping" : "Settings"}
+    {showSettings && <Dialog title={showGamepadMapping ? "Gamepad mapping" : "Settings"} wide
       controllerHandlerRef={dialogControllerHandlerRef}
       onClose={showGamepadMapping ? closeGamepadMapping : closeSettings}>
       {showGamepadMapping
@@ -1539,6 +1541,7 @@ export default function App() {
             gamepadRepeatDelayMs={settings.gamepadRepeatDelayMs}
             gamepadMappingButtonRef={gamepadMappingButtonRef}
             onOpenGamepadMapping={openGamepadMapping}
+            focusController={settingsAtController}
             onDetectLeadingSilenceChange={(enabled) => setSettings((current) => ({ ...current, detectLeadingSilence: enabled }))}
             onShowOriginalStartChange={(enabled) => setSettings((current) => ({ ...current, showOriginalStart: enabled }))}
             snapEdges={settings.snapEdges}
@@ -1602,7 +1605,12 @@ export default function App() {
     {showHelp && <Dialog title="Keyboard shortcuts" controllerHandlerRef={dialogControllerHandlerRef} onClose={() => setShowHelp(false)}>
       <ShortcutCheatsheet config={gamepadBindingConfig} />
       <p className="subtle mt-5 text-xs">Review shortcuts pause while you type. Letter and number shortcuts follow their physical US-QWERTY key positions, so a non-QWERTY layout may show different printed characters. Enter and ⌘ Enter work in the export preview when focus is outside an editable field.</p>
-      <GamepadControls status={gamepadStatus} />
+      <GamepadStatusLine status={gamepadStatus} onOpenSettings={() => {
+        setShowHelp(false);
+        setSettingsAtController(true);
+        setShowGamepadMapping(false);
+        setShowSettings(true);
+      }} />
     </Dialog>}
   </div>
   </ShortcutDisplayProvider>;

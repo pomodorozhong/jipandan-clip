@@ -1,5 +1,5 @@
-import type { Ref } from "react";
-import GamepadControls from "./GamepadControls";
+import { useEffect, useId, useRef, type ReactNode, type Ref } from "react";
+import { GamepadStatusBadge, gamepadStatusMessage } from "./GamepadStatus";
 import {
   GAMEPAD_REPEAT_DELAY_MAX_MS,
   GAMEPAD_REPEAT_DELAY_MIN_MS,
@@ -7,12 +7,74 @@ import {
   type GamepadStatus,
 } from "./gamepad";
 import type { BadgeMode, UnboundBadgeBehavior } from "./ShortcutBadge";
+import { Button } from "./ui";
+
+const ROW_BASE = "grid items-center gap-x-6 gap-y-2.5 border-b border-[#2a3731] py-3.5 last:border-b-0";
+// Checkboxes always sit beside their text; wider controls drop below it on narrow screens.
+const CHECK_ROW = `${ROW_BASE} grid-cols-[minmax(0,1fr)_auto]`;
+const ROW = `${ROW_BASE} grid-cols-1 justify-items-start sm:grid-cols-[minmax(0,1fr)_auto] sm:justify-items-stretch`;
+const FIELD = "min-h-9 rounded-lg border line bg-[#101816] px-2.5 text-[13px]";
+
+function SettingsSection({ title, tag, description, sectionRef, children }: {
+  title: string;
+  tag?: string;
+  description?: ReactNode;
+  sectionRef?: Ref<HTMLElement>;
+  children: ReactNode;
+}) {
+  const headingId = useId();
+  return <section ref={sectionRef} aria-labelledby={headingId}
+    className="mt-5 rounded-xl border line bg-[#121b18] px-[18px] pt-4 pb-1 first:mt-0">
+    <div className="flex min-h-6 items-center justify-between gap-3 border-b line pb-3">
+      <h3 id={headingId} className="text-[15px] font-semibold">{title}</h3>
+      {tag && <span className="clip-tag border-[#4c80a8] bg-[#284762] text-[#c4e7ff]">{tag}</span>}
+    </div>
+    {description && <p className="subtle mt-2.5 text-[13px]">{description}</p>}
+    <div>{children}</div>
+  </section>;
+}
+
+function RowText({ title, description, htmlFor, extra }: {
+  title: string; description: ReactNode; htmlFor?: string; extra?: ReactNode;
+}) {
+  const Title = htmlFor ? "label" : "span";
+  return <span className="min-w-0">
+    <span className="flex flex-wrap items-center gap-2">
+      <Title htmlFor={htmlFor} className="block text-sm font-semibold">{title}</Title>{extra}
+    </span>
+    <span className="subtle mt-0.5 block text-[13px]">{description}</span>
+  </span>;
+}
+
+function CheckboxRow({ title, description, checked, onChange }: {
+  title: string; description: ReactNode; checked: boolean; onChange: (checked: boolean) => void;
+}) {
+  return <label className={`${CHECK_ROW} cursor-pointer`}>
+    <RowText title={title} description={description} />
+    <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)}
+      className="size-[18px] accent-[#b7d69d]" />
+  </label>;
+}
+
+function ControlRow({ title, description, extra, children }: {
+  title: string; description: ReactNode; extra?: ReactNode; children: (id: string) => ReactNode;
+}) {
+  const id = useId();
+  return <div className={ROW}>
+    <RowText title={title} description={description} htmlFor={id} extra={extra} />
+    {children(id)}
+  </div>;
+}
+
+function Footnote({ children }: { children: ReactNode }) {
+  return <p className="subtle mt-3 mb-3.5 text-xs">{children}</p>;
+}
 
 export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, storageMessage, onClipDirChange,
   onChooseClipDir, onResetClipDir, onApplyClipDir,
   detectLeadingSilence, showOriginalStart, exploreRanking, onExploreRankingChange,
   autoplayClips, onAutoplayClipsChange,
-  gamepadStatus, gamepadMappingButtonRef, onOpenGamepadMapping,
+  gamepadStatus, gamepadMappingButtonRef, onOpenGamepadMapping, focusController = false,
   onDetectLeadingSilenceChange, onShowOriginalStartChange, badgeMode, unboundBadgeBehavior,
   onBadgeModeChange, onUnboundBadgeBehaviorChange, gamepadRepeatDelayMs,
   onGamepadRepeatDelayChange, snapEdges, onSnapEdgesChange }: {
@@ -33,6 +95,8 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
   gamepadStatus: GamepadStatus;
   gamepadMappingButtonRef?: Ref<HTMLButtonElement>;
   onOpenGamepadMapping: () => void;
+  // Opened from the controller line in another dialog: start at the Controller section.
+  focusController?: boolean;
   onDetectLeadingSilenceChange: (enabled: boolean) => void;
   onShowOriginalStartChange: (enabled: boolean) => void;
   snapEdges: boolean;
@@ -44,124 +108,98 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
   gamepadRepeatDelayMs: number;
   onGamepadRepeatDelayChange: (delayMs: number) => void;
 }) {
+  const controllerRef = useRef<HTMLElement>(null);
+  const clipDirId = useId();
+  const storageDisabled = !storageEnabled || storageBusy;
+
+  useEffect(() => {
+    if (!focusController) return;
+    // Wait a frame so the closing dialog's focus restore doesn't win.
+    const frame = requestAnimationFrame(() => {
+      const section = controllerRef.current;
+      section?.scrollIntoView({ block: "start" });
+      section?.querySelector<HTMLElement>("button")?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusController]);
+
   return <div>
-    <p className="subtle mb-5 text-sm">Interface settings are saved in this browser. Storage settings are saved with the active session.</p>
-    <section>
-      <h3 className="mb-4 text-base font-semibold">Storage</h3>
-      <p className="subtle mb-4 text-sm">{storageEnabled
-        ? "Choose where new audio exports from this session are saved. Existing exported files stay in their current folder."
-        : "Open an audio session to choose its export directory."}</p>
-      <label className="block text-sm">
-        <span className="font-medium">Export directory</span>
-        <input type="text" value={clipDir} disabled={!storageEnabled || storageBusy}
-          onChange={(event) => onClipDirChange(event.target.value)}
-          placeholder="/path/to/exports"
-          aria-label="Export directory"
-          className="mt-1 block w-full rounded-lg border line bg-[#101816] px-3 py-2 font-mono text-xs" />
-        <span className="subtle mt-1 block text-xs">Absolute paths and paths beginning with <code>~</code> are supported.</span>
-      </label>
-      <div className="mt-3 flex flex-wrap items-center gap-3">
-        <button type="button" disabled={!storageEnabled || storageBusy} onClick={onChooseClipDir}
-          className="soft-surface rounded-lg px-4 py-2 text-sm font-medium hover:bg-[#354b3b] disabled:cursor-not-allowed disabled:opacity-50">
-          Choose folder…
-        </button>
-        <button type="button" disabled={!storageEnabled || storageBusy} onClick={onResetClipDir}
-          className="soft-surface rounded-lg px-4 py-2 text-sm font-medium hover:bg-[#354b3b] disabled:cursor-not-allowed disabled:opacity-50">
-          Reset to default
-        </button>
+    <SettingsSection title="Playback and review">
+      <CheckboxRow title="Play each clip when it is selected" checked={autoplayClips} onChange={onAutoplayClipsChange}
+        description="Hear every clip you land on without pressing Space, so each decision is based on listening." />
+      <CheckboxRow title="Mix in random clips when ordering by Likely keep" checked={exploreRanking}
+        onChange={onExploreRankingChange}
+        description="About 1 in 20 clips is placed at a random position instead of by score. These reveal good clips the score ranks too low; they are not marked, so judge them like any other clip." />
+      <Footnote>Your decisions, which clips you viewed and played, and where each clip ranked are recorded in the session's <code>.jipandan.db</code> file beside the recording, to improve the Likely keep score.</Footnote>
+    </SettingsSection>
+
+    <SettingsSection title="Clip timing">
+      <CheckboxRow title="Detect leading silence" checked={detectLeadingSilence} onChange={onDetectLeadingSilenceChange}
+        description="Analyze clips that still use their SRT start in the background and move them to the first sustained audio activity. You can restore the SRT start from the nudging screen." />
+      <CheckboxRow title="Show original start time on waveform" checked={showOriginalStart}
+        onChange={onShowOriginalStartChange}
+        description="Draw the SRT start as a separate marker in the waveform views." />
+      <CheckboxRow title="Snap clip edges" checked={snapEdges} onChange={onSnapEdgesChange}
+        description="In Polish, show word starts and speech ends on the waveforms and snap dragged edges to them. Turn off to hide them and place edges freely." />
+    </SettingsSection>
+
+    <SettingsSection title="Controller" sectionRef={controllerRef}>
+      <div className={ROW}>
+        <RowText title="Status" description={gamepadStatusMessage(gamepadStatus)}
+          extra={<GamepadStatusBadge status={gamepadStatus} />} />
+        <Button buttonRef={gamepadMappingButtonRef} onClick={onOpenGamepadMapping}>Configure mapping</Button>
       </div>
-      <div className="mt-3 flex flex-wrap items-center gap-3">
-        <button type="button" disabled={!storageEnabled || storageBusy || !clipDir.trim()} onClick={onApplyClipDir}
-          className="rounded-lg bg-[#b7d69d] px-4 py-2 text-sm font-semibold text-[#1d2d20] disabled:cursor-not-allowed disabled:opacity-50">
-          {storageBusy ? "Saving…" : "Apply export directory"}
-        </button>
-        {storageMessage && <span role="status" className="accent text-xs">{storageMessage}</span>}
-      </div>
-    </section>
-    <section>
-      <h3 className="mb-4 text-base font-semibold">Clip timing</h3>
-      <label className="flex cursor-pointer items-start gap-3 border-b line pb-4">
-        <input type="checkbox" checked={detectLeadingSilence}
-          onChange={(event) => onDetectLeadingSilenceChange(event.target.checked)} className="mt-1" />
-        <span>
-          <strong className="block text-sm">Detect leading silence</strong>
-          <span className="subtle mt-1 block text-sm">Analyze clips that still use their SRT start in the background and move them to the first sustained audio activity. You can restore the SRT start from the nudging screen.</span>
-        </span>
-      </label>
-      <label className="flex cursor-pointer items-start gap-3 pt-4">
-        <input type="checkbox" checked={showOriginalStart}
-          onChange={(event) => onShowOriginalStartChange(event.target.checked)} className="mt-1" />
-        <span>
-          <strong className="block text-sm">Show original start time on waveform</strong>
-          <span className="subtle mt-1 block text-sm">Draw the SRT start as a separate marker in the waveform views.</span>
-        </span>
-      </label>
-      <label className="flex cursor-pointer items-start gap-3 border-t line mt-4 pt-4">
-        <input type="checkbox" checked={snapEdges}
-          onChange={(event) => onSnapEdgesChange(event.target.checked)} className="mt-1" />
-        <span>
-          <strong className="block text-sm">Snap clip edges</strong>
-          <span className="subtle mt-1 block text-sm">In Polish, show word starts and speech ends on the waveforms and snap dragged edges to them. Turn off to hide them and place edges freely.</span>
-        </span>
-      </label>
-    </section>
-    <section className="mt-6 border-t line pt-5">
-      <h3 className="mb-4 text-base font-semibold">Review data</h3>
-      <p className="subtle mb-4 text-sm">Your decisions, which clips you viewed and played, and where each clip ranked are recorded in the session's <code>.jipandan.db</code> file beside the recording, to improve the Likely keep score.</p>
-      <label className="flex cursor-pointer items-start gap-3">
-        <input type="checkbox" checked={exploreRanking}
-          onChange={(event) => onExploreRankingChange(event.target.checked)} className="mt-1" />
-        <span>
-          <strong className="block text-sm">Mix in random clips when ordering by Likely keep</strong>
-          <span className="subtle mt-1 block text-sm">About 1 in 20 clips is placed at a random position instead of by score. These reveal good clips the score ranks too low; they are not marked, so judge them like any other clip.</span>
-        </span>
-      </label>
-      <label className="mt-4 flex cursor-pointer items-start gap-3 border-t line pt-4">
-        <input type="checkbox" checked={autoplayClips}
-          onChange={(event) => onAutoplayClipsChange(event.target.checked)} className="mt-1" />
-        <span>
-          <strong className="block text-sm">Play each clip when it is selected</strong>
-          <span className="subtle mt-1 block text-sm">Hear every clip you land on without pressing Space, so each decision is based on listening.</span>
-        </span>
-      </label>
-    </section>
-    <section className="mt-6 border-t line pt-5">
-      <h3 className="mb-4 text-base font-semibold">Controller input</h3>
-      <label className="block text-sm">
-        <span className="flex items-center justify-between gap-3 font-medium">
-          <span>Debounce time</span>
-          <output className="mono subtle" aria-live="polite">{gamepadRepeatDelayMs} ms</output>
-        </span>
-        <input type="range" min={GAMEPAD_REPEAT_DELAY_MIN_MS} max={GAMEPAD_REPEAT_DELAY_MAX_MS}
-          step={GAMEPAD_REPEAT_DELAY_STEP_MS} value={gamepadRepeatDelayMs}
-          onChange={(event) => onGamepadRepeatDelayChange(Number(event.target.value))}
-          className="mt-3 w-full accent-[#b7d69d]" />
-        <span className="subtle mt-1 block text-xs">Delay before a held navigation or stick control repeats. Lower values respond faster; higher values filter accidental holds.</span>
-      </label>
-    </section>
-    <section className="mt-6 border-t line pt-5">
-      <h3 className="mb-4 text-base font-semibold">Shortcut badges</h3>
-      <label className="mb-4 block text-sm">
-        <span className="font-medium">Badge display</span>
-        <select value={badgeMode} onChange={(event) => onBadgeModeChange(event.target.value as BadgeMode)}
-          className="mt-1 block w-full rounded-lg border line bg-[#101816] px-3 py-2">
+      <ControlRow title="Debounce time"
+        description="Delay before a held navigation or stick control repeats. Lower values respond faster; higher values filter accidental holds.">
+        {(id) => <span className="flex items-center gap-3">
+          <input id={id} type="range" min={GAMEPAD_REPEAT_DELAY_MIN_MS} max={GAMEPAD_REPEAT_DELAY_MAX_MS}
+            step={GAMEPAD_REPEAT_DELAY_STEP_MS} value={gamepadRepeatDelayMs}
+            onChange={(event) => onGamepadRepeatDelayChange(Number(event.target.value))}
+            className="w-36 accent-[#b7d69d]" />
+          <output htmlFor={id} className="mono subtle min-w-14 text-right text-[13px]" aria-live="polite">{gamepadRepeatDelayMs} ms</output>
+        </span>}
+      </ControlRow>
+      <ControlRow title="Badge display"
+        description="Auto starts with Xbox badges when a standard controller is connected, then follows the last meaningful input.">
+        {(id) => <select id={id} value={badgeMode} onChange={(event) => onBadgeModeChange(event.target.value as BadgeMode)}
+          className={`${FIELD} w-52`}>
           <option value="auto">Auto — last used input</option>
           <option value="keyboard">Keyboard</option>
           <option value="xbox">Xbox controller</option>
-        </select>
-        <span className="subtle mt-1 block text-xs">Auto starts with Xbox badges when a standard controller is connected, then follows the last meaningful input.</span>
-      </label>
-      <label className="block text-sm">
-        <span className="font-medium">Unbound shortcut badges</span>
-        <select value={unboundBadgeBehavior} onChange={(event) => onUnboundBadgeBehaviorChange(event.target.value as UnboundBadgeBehavior)}
-          className="mt-1 block w-full rounded-lg border line bg-[#101816] px-3 py-2">
+        </select>}
+      </ControlRow>
+      <ControlRow title="Unbound shortcut badges"
+        description="New actions remain unbound until you capture a controller button.">
+        {(id) => <select id={id} value={unboundBadgeBehavior}
+          onChange={(event) => onUnboundBadgeBehaviorChange(event.target.value as UnboundBadgeBehavior)}
+          className={`${FIELD} w-52`}>
           <option value="hide">Hide the badge</option>
           <option value="keyboard">Fall back to keyboard shortcut</option>
-        </select>
-        <span className="subtle mt-1 block text-xs">New actions remain unbound until you capture a controller button.</span>
-      </label>
-    </section>
-    <GamepadControls status={gamepadStatus}
-      mappingButtonRef={gamepadMappingButtonRef} onOpenMapping={onOpenGamepadMapping} />
+        </select>}
+      </ControlRow>
+      <Footnote>Controller actions pause while typing or this tab is inactive; dialogs use D-pad/left-stick focus, A confirm, and B back. Saving blocks mutating actions while navigation remains available. After reconnecting or changing context, release a held control before pressing it again.</Footnote>
+    </SettingsSection>
+
+    <SettingsSection title="Storage" tag="This session" description={storageEnabled
+      ? "Choose where new audio exports from this session are saved. Existing exported files stay in their current folder."
+      : "Open an audio session to choose its export directory."}>
+      <div className="grid gap-2 py-3.5">
+        <RowText title="Export directory" htmlFor={clipDirId}
+          description={<span id={`${clipDirId}-hint`}>Absolute paths and paths beginning with <code>~</code> are supported.</span>} />
+        <input id={clipDirId} type="text" value={clipDir} disabled={storageDisabled}
+          onChange={(event) => onClipDirChange(event.target.value)}
+          placeholder="/path/to/exports" aria-describedby={`${clipDirId}-hint`}
+          className={`${FIELD} block w-full font-mono text-xs disabled:opacity-50`} />
+        <div className="mt-1 flex flex-wrap items-center gap-2.5">
+          <Button disabled={storageDisabled} onClick={onChooseClipDir}>Choose folder…</Button>
+          <Button disabled={storageDisabled} onClick={onResetClipDir}>Reset to default</Button>
+          <span className="flex-1" />
+          <Button variant="primary" disabled={storageDisabled || !clipDir.trim()} onClick={onApplyClipDir}>
+            {storageBusy ? "Saving…" : "Apply export directory"}
+          </Button>
+        </div>
+        {storageMessage && <span role="status" className="accent text-xs">{storageMessage}</span>}
+      </div>
+    </SettingsSection>
   </div>;
 }
