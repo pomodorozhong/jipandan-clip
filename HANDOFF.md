@@ -2,15 +2,14 @@
 
 ## In progress
 
-### build/resync-frontend-lockfile
+### docs/finish-step-2-review
 
-- Task: fix a bug on `main`: `cd frontend && npm ci` fails with EUSAGE because `package-lock.json` is missing entries for packages `package.json` requires, so a fresh checkout can't install frontend dependencies or start `jipandan-web`. No issue; the PR describes the bug.
-- PR: #66 into `main`, open and awaiting review. `main` (with #65) was merged into the branch to resolve a `HANDOFF.md` conflict.
-- Code checkpoint: `48987b6` (`build(web): resync the frontend lockfile with package.json`), with `main` at `8431437` merged in; pushed.
-- State: regenerated with `npm install --package-lock-only`. It adds `@types/babel__generator`, `@types/babel__template`, `@types/babel__traverse`, and the optional WASM runtime packages of `@tailwindcss/oxide-wasm32-wasi`; no locked version changes.
-- Verification: `npm ci` succeeds on a clean `node_modules`; typecheck clean; frontend suite (134) passes; build succeeds.
-- Checks not run: Python suite (no Python changes).
-- Next action: the owner reviews and merges #66; remove this subsection after it merges.
+- Task: #46 Finish the step 2 owner review. This branch is linked to #46 and pushed.
+- PR: none.
+- Code checkpoint: `main` at `6790dcf`; this branch holds only the handoff update.
+- State: step 2's code has merged, including Settings (#64), the mapping focus fix (#65) and the lockfile resync (#66). What's left is the owner's checklist on #46, done in the real app, and then marking step 2 done in `doc/app-rebuild-plan.md`.
+- Verification: none needed for the handoff update.
+- Next action: the owner works through the #46 checklist; then update #22, #25, #27 and #28 from the results and mark step 2 done in the plan.
 
 ## Ranked work
 
