@@ -33,7 +33,7 @@ from jipandan.core.clip_features import (
 from jipandan.core.ffmpeg import ExportOptions, probe_duration_seconds, publish_prebuilt_clip
 from jipandan.core.leading_silence import detect_leading_silence_start
 from jipandan.core.paths import AppPaths, default_export_dir, get_app_paths, resolve_export_dir
-from jipandan.core.snap_points import load_snap_points, snap_points_path
+from jipandan.core.snap_points import KINDS as SNAP_KINDS, load_snap_points, snap_points_path
 from jipandan.core.srt import parse_srt, segment_scores_path
 from jipandan.core.whisper import describe_transcribe_call
 from jipandan.core.models import ClipCandidate, MIN_CLIP_DURATION_SECONDS, Session
@@ -421,6 +421,13 @@ class SessionService:
                 raise InvalidEdit("Waveform resolution is out of range")
             audio = session.audio
         return self._waveforms.get(audio, start_ms, end_ms, buckets)
+
+    def snap_points(self) -> dict[str, list[int]]:
+        """Return the recording's clip edge snap points by kind; sessions made before #58 have none."""
+        with self._lock:
+            self._ready()
+            store = self.store
+            return {kind: store.snap_points(kind) if store is not None else [] for kind in SNAP_KINDS}
 
     def leading_silence_detection_status(self) -> dict | None:
         with self._lock:

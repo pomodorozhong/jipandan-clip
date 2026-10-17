@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, type Clip, type TrimMap, type WaveformWindow } from "./api";
+import { api, type Clip, type SnapPoints, type TrimMap, type WaveformWindow } from "./api";
+import { adjacentSnap, nearestSnap, snapsInRange, snapTargets } from "./snapPoints";
 import { removedRanges } from "./trimMap";
 import {
   deactivateTextEditingTarget,
@@ -33,6 +34,12 @@ const NUB_WIDTH = 18;
 const NUB_HEIGHT = 33;
 const NUB_TOP = 4;
 const MARKER_LINE_HIT_WIDTH = 3;
+// A dragged edge snaps to a point this many screen pixels away; Option bypasses it.
+const SNAP_DISTANCE_PX = 8;
+// Keyboard and controller jumps ignore snap points further away than this, such as across a long silence.
+const MAX_SNAP_JUMP_MS = 5000;
+const START_COLOR = "#f2cf86";
+const END_COLOR = "#e7a6ca";
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
@@ -102,7 +109,7 @@ export function useWaveform(clipId: string, range: TimeRange, buckets: number, a
 
 export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadMs, editableEdge,
   originalStartMs, disabled, minSpan, maxSpan, onViewportChange, trimMap, sharedPeak, compact = false, onSeek, canEdit = true, gestureTarget,
-  clockOffsetMs = 0, onResetViewport, pinHandles = false, shadeOutside = false, showClock = true,
+  clockOffsetMs = 0, onResetViewport, pinHandles = false, shadeOutside = false, showClock = true, snapTargets: snaps,
   onPreviewRange, onCommitRange, onPreviewEdge, onCommitEdge, onCancel }: {
   label: string;
   range: TimeRange;
@@ -127,6 +134,8 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
   /** Dim the padding outside the clip, for view-only plots without handles. */
   shadeOutside?: boolean;
   showClock?: boolean;
+  /** Points each edge snaps to while dragged, drawn as ticks. */
+  snapTargets?: { start?: readonly number[]; end?: readonly number[] };
   onViewportChange: (start: number, span: number) => TimeRange;
   onPreviewRange: (start: number, end: number) => void;
   onCommitRange: (start: number, end: number) => void;
@@ -266,6 +275,14 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
     };
   }
 
+  /** Pull a dragged edge onto a nearby snap point unless Option is held. */
+  function snapped(edge: Edge, time: number, bypass: boolean): number {
+    const targets = snaps?.[edge];
+    if (bypass || !targets?.length) return time;
+    const width = Math.max(1, svgRef.current!.getBoundingClientRect().width);
+    return nearestSnap(targets, time, SNAP_DISTANCE_PX / width * span) ?? time;
+  }
+
   function hitsNub(edge: Edge, point: { x: number; y: number }): boolean {
     const time = edge === "start" ? startMs : endMs;
     if (!inRange(time) && !pinHandles) return false;
@@ -308,13 +325,14 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
     if (edge) {
       event.currentTarget.setPointerCapture(event.pointerId);
       dragging.current = { kind: "edge", edge };
-      onPreviewEdge(edge, point.time);
+      onPreviewEdge(edge, snapped(edge, point.time, event.altKey));
       return;
     }
     if (hitsMarkerLine(point)) return;
     event.currentTarget.setPointerCapture(event.pointerId);
-    dragging.current = { kind: "range", start: point.time, clientX: event.clientX };
-    onPreviewRange(point.time, endMs);
+    const start = snapped("start", point.time, event.altKey);
+    dragging.current = { kind: "range", start, clientX: event.clientX };
+    onPreviewRange(start, endMs);
   }
 
   function pointerMove(event: React.PointerEvent<SVGSVGElement>) {
@@ -326,8 +344,8 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
       return;
     }
     const point = position(event.clientX, event.clientY);
-    if (drag.kind === "edge") onPreviewEdge(drag.edge, point.time);
-    else onPreviewRange(drag.start, point.time);
+    if (drag.kind === "edge") onPreviewEdge(drag.edge, snapped(drag.edge, point.time, event.altKey));
+    else onPreviewRange(drag.start, snapped("end", point.time, event.altKey));
   }
 
   function pointerUp(event: React.PointerEvent<SVGSVGElement>) {
@@ -339,15 +357,16 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
     }
     if (drag.kind === "pan") return;
     const time = position(event.clientX, event.clientY).time;
-    if (drag.kind === "edge") onCommitEdge(drag.edge, time);
+    if (drag.kind === "edge") onCommitEdge(drag.edge, snapped(drag.edge, time, event.altKey));
     else {
       if (onSeek && Math.abs(event.clientX - drag.clientX) < 4) {
         onCancel();
         onSeek(time);
         return;
       }
-      onPreviewRange(drag.start, time);
-      onCommitRange(drag.start, time);
+      const end = snapped("end", time, event.altKey);
+      onPreviewRange(drag.start, end);
+      onCommitRange(drag.start, end);
     }
   }
 
@@ -383,6 +402,20 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
       {inRange(startMs) && inRange(endMs) && <rect x={Math.min(startX, endX)} y="0" width={Math.abs(endX - startX)} height={PLOT_HEIGHT} fill="#b7d69d" opacity="0.08" />}
       {points && <path d={points} transform={waveformTransform} vectorEffect="non-scaling-stroke"
         stroke="#a8c9b0" strokeWidth="1.5" fill="none" />}
+      {(["start", "end"] as Edge[]).map((kind) => snaps?.[kind] && <g key={kind} aria-hidden="true">
+        {snapsInRange(snaps[kind]!, range.start, range.end).map((time) => {
+          const x = markerX(time);
+          const color = kind === "start" ? START_COLOR : END_COLOR;
+          // A full-height guide shows where the edge will land; a solid tab on
+          // the start points' bottom or the end points' top tells the two apart.
+          return <g key={time}>
+            <line x1={x} x2={x} y1="0" y2={PLOT_HEIGHT} stroke={color} strokeWidth="1.5"
+              strokeDasharray={kind === "end" ? "5 4" : undefined} opacity="0.55" vectorEffect="non-scaling-stroke" />
+            <line x1={x} x2={x} y1={kind === "start" ? PLOT_HEIGHT - 12 : 0} y2={kind === "start" ? PLOT_HEIGHT : 12}
+              stroke={color} strokeWidth="5" vectorEffect="non-scaling-stroke" />
+          </g>;
+        })}
+      </g>)}
       {shadeOutside && <g aria-hidden="true">
         <rect x="0" y="0" width={clamp(startX, 0, PLOT_WIDTH)} height={PLOT_HEIGHT} fill="#101816" opacity="0.6" />
         <rect x={clamp(endX, 0, PLOT_WIDTH)} y="0" width={PLOT_WIDTH - clamp(endX, 0, PLOT_WIDTH)} height={PLOT_HEIGHT} fill="#101816" opacity="0.6" />
@@ -399,9 +432,11 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
         const time = edge === "start" ? startMs : endMs;
         if (!inRange(time) && !pinHandles) return null;
         const x = markerX(time);
-        const color = edge === "start" ? "#f2cf86" : "#e7a6ca";
+        const color = edge === "start" ? START_COLOR : END_COLOR;
         return <g key={edge} aria-label={`${edge === "start" ? "Start" : "End"} boundary handle`}>
           <title>{`${edge === "start" ? "Start" : "End"} ${formatClock(time + clockOffsetMs)}${inRange(time) ? "" : " · outside this view; drag to move"}`}</title>
+          {snaps?.[edge]?.includes(time) && <line x1={x} y1="0" x2={x} y2={PLOT_HEIGHT} stroke={color}
+            strokeWidth="9" opacity="0.35" vectorEffect="non-scaling-stroke" />}
           <line x1={x} y1="0" x2={x} y2={PLOT_HEIGHT} stroke={color} strokeWidth="3" />
           <rect x={clamp(x - nubWidth / 2, 0, PLOT_WIDTH - nubWidth)} y={nubTop(edge)}
             width={nubWidth} height={NUB_HEIGHT} rx="4" fill={color} />
@@ -428,7 +463,7 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
 }
 
 export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamepadAction, onGamepadActionHandled,
-  shortcutsPaused, active = true, detectLeadingSilence, showOriginalStart, onSave, onPlayback, autoplay = false }: {
+  shortcutsPaused, active = true, detectLeadingSilence, showOriginalStart, onSave, onPlayback, autoplay = false, snapPoints = null, snapping = true }: {
   clip: Clip;
   durationMs: number;
   audioSrc: string;
@@ -444,6 +479,10 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
   onPlayback?: () => void;
   /** Play the clip once from its start when it is first shown. */
   autoplay?: boolean;
+  /** Word starts and speech ends that boundaries snap to; null while loading or unavailable. */
+  snapPoints?: SnapPoints | null;
+  /** Off hides every snap control; the Settings option. */
+  snapping?: boolean;
 }) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const savingRef = useRef(false);
@@ -633,6 +672,30 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
     }, KEYBOARD_NUDGE_DEBOUNCE_MS);
   }
 
+  /** Where the boundary sits relative to its snap points, so jumps are predictable. */
+  function snapStatus(which: Edge): string {
+    const targets = snapTargets(snapPoints, which);
+    const position = which === "start" ? startMs : endMs;
+    const name = which === "start" ? "word start" : "speech end";
+    const reachable = (target: number | null) =>
+      target === null || Math.abs(target - position) > MAX_SNAP_JUMP_MS ? "none within 5 s" : signed(target - position);
+    const on = nearestSnap(targets, position, 0) !== null;
+    const neighbours = `${name} ${reachable(adjacentSnap(targets, position, -1))} · next ${reachable(adjacentSnap(targets, position, 1))}`;
+    return on ? `On a ${name} · previous ${neighbours}` : `Previous ${neighbours}`;
+  }
+
+  /** Move a boundary to its previous or next snap point, debounced like keyboard nudges. */
+  function jumpToSnap(which: Edge, direction: -1 | 1) {
+    const current = pendingKeyboardBounds.current ?? { startMs, endMs };
+    const position = which === "start" ? current.startMs : current.endMs;
+    const target = adjacentSnap(snapTargets(snapPoints, which), position, direction);
+    if (target === null || Math.abs(target - position) > MAX_SNAP_JUMP_MS) {
+      setSelectedBoundary(which);
+      return;
+    }
+    nudge(which, target - position, true);
+  }
+
   useEffect(() => () => {
     if (keyboardNudgeTimer.current !== null) window.clearTimeout(keyboardNudgeTimer.current);
     const pending = pendingKeyboardBounds.current;
@@ -697,6 +760,7 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
   }
 
   const controlsDisabled = busy || saving;
+  const hasSnapPoints = Boolean(snapPoints && (snapPoints.word_start.length || snapPoints.speech_end.length));
   const waveformContext = getInputContext({ activeDialog: shortcutsPaused || !active });
 
   function dispatchAction(action: InputAction) {
@@ -719,6 +783,10 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
       setSelectedBoundary(action.edge);
     } else if (action.type === "nudge-selected") {
       nudge(selectedBoundary, action.amount, true);
+    } else if (action.type === "snap") {
+      jumpToSnap(action.edge, action.direction);
+    } else if (action.type === "snap-selected") {
+      jumpToSnap(selectedBoundary, action.direction);
     }
   }
 
@@ -726,6 +794,7 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
   useEffect(() => {
     if (!gamepadAction || gamepadAction.clipId !== clip.clip_id || handledGamepadAction.current === gamepadAction.id ||
         !(gamepadAction.action.type === "nudge" || gamepadAction.action.type === "nudge-selected" ||
+          gamepadAction.action.type === "snap" || gamepadAction.action.type === "snap-selected" ||
           (gamepadAction.action.type === "playback" && gamepadAction.action.target === "clip"))) return;
     handledGamepadAction.current = gamepadAction.id;
     dispatchAction(gamepadAction.action);
@@ -830,10 +899,13 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
           : <WaveformPlot label="Overview waveform; drag a boundary nub to fine-tune it, or drag the waveform background to select a new range"
             range={overviewRange} waveform={overview.window} startMs={startMs} endMs={endMs}
             playheadMs={playheadMs} originalStartMs={showOriginalStart ? clip.original_start_ms : null}
+            snapTargets={{ start: snapTargets(snapPoints, "start"), end: snapTargets(snapPoints, "end") }}
             disabled={controlsDisabled} minSpan={MIN_OVERVIEW_SPAN_MS} maxSpan={maxOverviewSpan}
             onViewportChange={viewportSetter(setOverviewRange)} onPreviewRange={previewRange} onCommitRange={commitRange}
             onPreviewEdge={previewEdge} onCommitEdge={commitEdge} onCancel={cancelPreview} />}
-      <p className="subtle mt-1 text-xs">Drag the amber or pink nub to adjust one boundary. Drag the waveform background from the new start to the new end; the vertical marker lines are not draggable. Swipe sideways with two fingers to pan, and pinch to zoom.</p>
+      <p className="subtle mt-1 text-xs">Drag a nub or the background to set the edges. {!snapping ? "" : hasSnapPoints
+        ? "Starts snap to amber word starts, ends to pink speech ends; hold Option to place freely. "
+        : "No snap points: this recording wasn't transcribed in the app. "}Swipe to pan, pinch to zoom.</p>
     </div>
 
     <div className="rounded-xl border border-[#405748] bg-[#1b2b23] p-3">
@@ -856,11 +928,13 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
                 : <WaveformPlot label={`Fine ${which} boundary waveform; drag its boundary nub to fine-tune, or drag the waveform background to select a new range`}
                   range={range} waveform={detail.window} startMs={startMs} endMs={endMs}
                   playheadMs={playheadMs} editableEdge={which}
+                  snapTargets={{ [which]: snapTargets(snapPoints, which) }}
                   originalStartMs={showOriginalStart ? clip.original_start_ms : null}
                   disabled={controlsDisabled} minSpan={MIN_FINE_SPAN_MS} maxSpan={maxFineSpan}
                   onViewportChange={viewportSetter(which === "start" ? setStartDetailRange : setEndDetailRange)}
                   onPreviewRange={previewRange} onCommitRange={commitRange}
                   onPreviewEdge={previewEdge} onCommitEdge={commitEdge} onCancel={cancelPreview} />}
+            {hasSnapPoints && <p className="subtle mt-1 text-xs" role="status">{snapStatus(which)}</p>}
             <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label={`Nudge ${which} boundary`}>
               {[-100, -10, 10, 100].map((amount) => {
                 const key = `${Math.abs(amount) === 100 ? "⇧" : ""}${amount < 0 ? keyPair[0] : keyPair[1]}`;
@@ -871,6 +945,18 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
                   disabled={controlsDisabled} title={`Nudge ${which} boundary ${amount > 0 ? "+" : ""}${amount} ms (${key})`}
                   className="btn btn-secondary mono">
                   <span>{amount > 0 ? "+" : ""}{amount} ms</span><ShortcutBadge keyboard={key} bindingId={shortcutId} />
+                </button>;
+              })}
+              {snapping && ([-1, 1] as const).map((direction) => {
+                const shortcutId = which === "start"
+                  ? direction < 0 ? "snap-start-back" : "snap-start-forward"
+                  : direction < 0 ? "snap-end-back" : "snap-end-forward";
+                const key = `⌥ ${direction < 0 ? keyPair[0] : keyPair[1]}`;
+                const target = which === "start" ? "word start" : "speech end";
+                return <button key={`snap${direction}`} type="button" onClick={() => dispatchAction({ type: "snap", edge: which, direction })}
+                  disabled={controlsDisabled || !hasSnapPoints} title={`Move ${which} to the ${direction < 0 ? "previous" : "next"} ${target} (${key})`}
+                  className="btn btn-secondary">
+                  <span>{direction < 0 ? `◂ ${target}` : `${target} ▸`}</span><ShortcutBadge keyboard={key} bindingId={shortcutId} />
                 </button>;
               })}
               {which === "start" && detectLeadingSilence && <button type="button"

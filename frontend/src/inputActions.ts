@@ -14,6 +14,8 @@ export type InputAction =
   | { type: "nudge"; edge: "start" | "end"; amount: number; source: ShortcutSource }
   | { type: "select-boundary"; edge: "start" | "end" }
   | { type: "nudge-selected"; amount: number; source: "gamepad" }
+  | { type: "snap"; edge: "start" | "end"; direction: -1 | 1 }
+  | { type: "snap-selected"; direction: -1 | 1 }
   | { type: "undo" }
   | { type: "duplicate" }
   | { type: "rename" }
@@ -41,6 +43,8 @@ export type ShortcutId =
   | "trim-select-start" | "trim-select-end"
   | "trim-nudge-fine-back" | "trim-nudge-fine-forward"
   | "trim-nudge-coarse-back" | "trim-nudge-coarse-forward"
+  | "snap-start-back" | "snap-start-forward" | "snap-end-back" | "snap-end-forward"
+  | "trim-snap-back" | "trim-snap-forward"
   | "dialog-close" | "candidate-replay" | "candidate-play-pause"
   | "reference-replay" | "reference-play-pause" | "export-mode-as-is"
   | "export-mode-trim-edges" | "export-mode-trim-all" | "export" | "export-next"
@@ -90,6 +94,12 @@ export const SHORTCUT_DEFINITIONS: readonly ShortcutDefinition[] = [
   { id: "trim-nudge-fine-forward", label: "Nudge selected boundary +10 ms", contexts: reviewContext, action: { type: "nudge-selected", amount: 10, source: "gamepad" } },
   { id: "trim-nudge-coarse-back", label: "Nudge selected boundary −100 ms", contexts: reviewContext, action: { type: "nudge-selected", amount: -100, source: "gamepad" } },
   { id: "trim-nudge-coarse-forward", label: "Nudge selected boundary +100 ms", contexts: reviewContext, action: { type: "nudge-selected", amount: 100, source: "gamepad" } },
+  { id: "snap-start-back", label: "Move start to previous word start", keyboard: "⌥ ,", contexts: reviewContext, action: { type: "snap", edge: "start", direction: -1 } },
+  { id: "snap-start-forward", label: "Move start to next word start", keyboard: "⌥ .", contexts: reviewContext, action: { type: "snap", edge: "start", direction: 1 } },
+  { id: "snap-end-back", label: "Move end to previous speech end", keyboard: "⌥ [", contexts: reviewContext, action: { type: "snap", edge: "end", direction: -1 } },
+  { id: "snap-end-forward", label: "Move end to next speech end", keyboard: "⌥ ]", contexts: reviewContext, action: { type: "snap", edge: "end", direction: 1 } },
+  { id: "trim-snap-back", label: "Move selected boundary to previous snap point", contexts: reviewContext, action: { type: "snap-selected", direction: -1 } },
+  { id: "trim-snap-forward", label: "Move selected boundary to next snap point", contexts: reviewContext, action: { type: "snap-selected", direction: 1 } },
   { id: "dialog-close", label: "Close dialog", keyboard: "Esc", contexts: dialogContext, action: { type: "dialog-close" } },
   { id: "candidate-replay", label: "Replay export candidate", keyboard: "Space", contexts: dialogContext, action: { type: "playback", target: "candidate", mode: "replay" } },
   { id: "candidate-play-pause", label: "Play / pause export candidate", keyboard: "Shift+Space", contexts: dialogContext, action: { type: "playback", target: "candidate", mode: "toggle" } },
@@ -263,6 +273,8 @@ export function actionRepeatPolicy(action: InputAction): RepeatPolicy {
     case "navigate":
     case "nudge":
     case "nudge-selected":
+    case "snap":
+    case "snap-selected":
     case "focus-move":
       return "repeat";
     default:
@@ -291,6 +303,8 @@ export function isActionAvailable(action: InputAction, availability: InputAvaila
     case "nudge":
     case "select-boundary":
     case "nudge-selected":
+    case "snap":
+    case "snap-selected":
     case "rename":
     case "open-export":
       return Boolean(availability.hasSelection);
@@ -360,14 +374,21 @@ function resolveReviewAction(input: KeyboardInput, context: InputContext): Input
 }
 
 function resolveWaveformAction(input: KeyboardInput, context: InputContext): InputAction | null {
-  if (context !== "review" || input.targetEditable || input.altKey || input.ctrlKey || input.metaKey) return null;
-  if (input.code === "Space") {
+  if (context !== "review" || input.targetEditable || input.ctrlKey || input.metaKey) return null;
+  if (input.code === "Space" && !input.altKey) {
     return actionForShortcut(input.shiftKey ? "play-pause" : "replay", "keyboard");
   }
   const edge = input.code === "BracketLeft" || input.code === "BracketRight" ? "end"
     : input.code === "Comma" || input.code === "Period" ? "start" : null;
   if (!edge) return null;
   const direction = input.code === "Comma" || input.code === "BracketLeft" ? -1 : 1;
+  // Option moves the boundary to the next snap point instead of nudging it.
+  if (input.altKey) {
+    if (input.shiftKey) return null;
+    return actionForShortcut(edge === "start"
+      ? direction < 0 ? "snap-start-back" : "snap-start-forward"
+      : direction < 0 ? "snap-end-back" : "snap-end-forward", "keyboard");
+  }
   const amount = direction * (input.shiftKey ? 100 : 10);
   const id: ShortcutId = edge === "start"
     ? amount === -100 ? "nudge-start-coarse-back" : amount === -10 ? "nudge-start-fine-back" : amount === 10 ? "nudge-start-fine-forward" : "nudge-start-coarse-forward"
@@ -432,6 +453,8 @@ function blocksWhileBusy(action: InputAction): boolean {
     case "set-status":
     case "nudge":
     case "nudge-selected":
+    case "snap":
+    case "snap-selected":
     case "undo":
     case "duplicate":
     case "rename":

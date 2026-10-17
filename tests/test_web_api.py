@@ -522,6 +522,11 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(invalid.status_code, 422)
         self.assertEqual(self.service.snapshot()["revision"], 2)
 
+    def test_sessions_without_snap_points_return_none(self):
+        self.assertEqual(self.client.get("/api/session/snap-points").status_code, 409)
+        self.open()
+        self.assertEqual(self.client.get("/api/session/snap-points").json(), {WORD_START: [], SPEECH_END: []})
+
     def test_waveform_windows_are_bounded_and_cached_by_source_identity(self):
         self.open()
         envelope = WaveformEnvelopeCache(
@@ -861,6 +866,8 @@ class WebApiTests(unittest.TestCase):
                 self.assertEqual(store.snap_points(SPEECH_END), [2100])
             finally:
                 store.close()
+            self.assertEqual(self.client.get("/api/session/snap-points").json(),
+                             {WORD_START: [1000, 3000], SPEECH_END: [2100]})
             self.assertEqual(self.client.post(
                 "/api/transcriptions", json=settings, headers=self.headers,
             ).status_code, 409)
