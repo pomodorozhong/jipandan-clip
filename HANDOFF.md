@@ -2,16 +2,15 @@
 
 ## In progress
 
-### feat/restructure-settings
+### build/resync-frontend-lockfile
 
-- Task: #45 Restructure Settings, linked to this branch. The owner approved the plan and a canvas mockup (section cards, no "This browser" tags, 640 px dialog, one-line controller status in Help).
-- PR: none yet. A draft description is awaiting the owner's approval; the GitHub branch exists from the issue link but holds only `main`'s tip until the push.
-- Code checkpoint: `15d533d` (`feat(web): restructure Settings into section cards`), on `main` at `3dd5303`; not pushed.
-- State: Settings shows four cards: Playback and review, Clip timing, Controller, and Storage. Only Storage is tagged "This session". Rows share one layout; wide controls stack under their text below 640 px. The gamepad box is folded into the Controller card (`GamepadControls.tsx` became `GamepadStatus.tsx`). Help shows a one-line controller status whose button opens Settings at Controller.
-- Verification: typecheck clean; frontend suite (134) and Python suite (72) pass. Checked in the app on the 0511 demo at 1280 px and 375 px: layout, a checkbox saving to the browser, mapping open and close, and Help's Controller settings link focusing "Configure mapping".
-- Checks not run: Storage with no session open (wording logic unchanged); applying an export directory; a real controller.
-- Known issue, not from this branch: focus doesn't return to "Configure mapping" after leaving the mapping screen; `main` does the same. A separate fix session is working on it.
-- Next action: after the owner approves the PR description, push and open the PR closing #45.
+- Task: fix a bug on `main`: `cd frontend && npm ci` fails with EUSAGE because `package-lock.json` is missing entries for packages `package.json` requires, so a fresh checkout can't install frontend dependencies or start `jipandan-web`. No issue; the PR describes the bug.
+- PR: awaiting the owner's approval to push and open a PR into `main`.
+- Code checkpoint: `48987b6` (`build(web): resync the frontend lockfile with package.json`), on `main` at `94704c0`; not pushed.
+- State: regenerated with `npm install --package-lock-only`. It adds `@types/babel__generator`, `@types/babel__template`, `@types/babel__traverse`, and the optional WASM runtime packages of `@tailwindcss/oxide-wasm32-wasi`; no locked version changes.
+- Verification: `npm ci` succeeds on a clean `node_modules`; typecheck clean; frontend suite (134) passes; build succeeds.
+- Checks not run: Python suite (no Python changes).
+- Next action: after the owner approves, push and open the PR.
 
 ## Ranked work
 
