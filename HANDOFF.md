@@ -2,23 +2,26 @@
 
 ## In progress
 
-### docs/polish-snapping
+### feat/restructure-settings
 
-- Task: follow-up docs for #58 after PR #61 merged: the README describes Polish snapping and its Settings option, and this file drops the merged `feat/snap-points` subsection. No issue; #58 is closed by #61.
-- PR: opened as a small docs PR into `main` (approved as P-07).
-- Verification: docs only; no checks needed.
-- Next action: the owner reviews and merges the docs PR; remove this subsection before it merges.
+- Task: #45 Restructure Settings, linked to this branch. The owner approved the plan and a canvas mockup (section cards, no "This browser" tags, 640 px dialog, one-line controller status in Help).
+- PR: none yet. A draft description is awaiting the owner's approval; the GitHub branch exists from the issue link but holds only `main`'s tip until the push.
+- Code checkpoint: `15d533d` (`feat(web): restructure Settings into section cards`), on `main` at `3dd5303`; not pushed.
+- State: Settings shows four cards: Playback and review, Clip timing, Controller, and Storage. Only Storage is tagged "This session". Rows share one layout; wide controls stack under their text below 640 px. The gamepad box is folded into the Controller card (`GamepadControls.tsx` became `GamepadStatus.tsx`). Help shows a one-line controller status whose button opens Settings at Controller.
+- Verification: typecheck clean; frontend suite (134) and Python suite (72) pass. Checked in the app on the 0511 demo at 1280 px and 375 px: layout, a checkbox saving to the browser, mapping open and close, and Help's Controller settings link focusing "Configure mapping".
+- Checks not run: Storage with no session open (wording logic unchanged); applying an export directory; a real controller.
+- Known issue, not from this branch: focus doesn't return to "Configure mapping" after leaving the mapping screen; `main` does the same. A separate fix session is working on it.
+- Next action: after the owner approves the PR description, push and open the PR closing #45.
 
 ## Ranked work
 
-1. #45 Restructure Settings
-2. #46 Finish the step 2 owner review (alongside #45; also checks #22, #25, #27, #28)
-3. #49 Decide how to evaluate generated candidates (needs-decision; can be answered before #46 ends)
+1. #46 Finish the step 2 owner review (also checks #22, #25, #27, #28)
+2. #49 Decide how to evaluate generated candidates (needs-decision; can be answered before #46 ends)
+3. #26 Show export-directory errors inside Settings (goes in the new Storage card from #45)
 4. #29 Virtualize the clip list (partly done in #36)
-5. #26 Show export-directory errors inside Settings (fits with #45)
-6. #47 Generate candidates from voice activity and word timings (blocked by #49, after #46; can use the snap points stored by #58)
-7. #50 Create new sessions from generated candidates (blocked by #47)
-8. Publish preview trim overlay mapping failure (issue draft P-05; a bug on `main`, gets its own `fix/` branch)
+5. #47 Generate candidates from voice activity and word timings (blocked by #49, after #46; can use the snap points stored by #58)
+6. #50 Create new sessions from generated candidates (blocked by #47)
+7. Publish preview trim overlay mapping failure (issue draft P-05; a bug on `main`, gets its own `fix/` branch)
 
 ## Pending
 
