@@ -12,13 +12,15 @@ function keyPress(label: string): KeyboardInput {
   let key = label;
   let shiftKey = false;
   let metaKey = false;
+  let altKey = false;
   if (key.startsWith("Shift+")) { shiftKey = true; key = key.slice("Shift+".length); }
   if (key.startsWith("⌘ ")) { metaKey = true; key = key.slice("⌘ ".length); }
+  if (key.startsWith("⌥ ")) { altKey = true; key = key.slice("⌥ ".length); }
   if (key === "?") { shiftKey = true; key = "/"; }
   const code = namedCodes[key] ?? (/^[A-Z]$/.test(key) ? `Key${key}` : /^[0-9]$/.test(key) ? `Digit${key}` : null);
   if (!code) throw new Error(`No key code for cheatsheet label ${label}`);
   return {
-    key, code, repeat: false, shiftKey, altKey: false, ctrlKey: false, metaKey, isComposing: false,
+    key, code, repeat: false, shiftKey, altKey, ctrlKey: false, metaKey, isComposing: false,
     targetEditable: false, targetTextEditing: false, targetInteractive: false,
   };
 }

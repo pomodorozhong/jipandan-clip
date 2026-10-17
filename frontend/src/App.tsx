@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isExploreClip, orderByLikelyKeep } from "./reviewOrder";
 import TriageScreen from "./TriageScreen";
-import { api, applySessionDelta, audioUrl, bootstrap, sendReviewEvents, uploadAudio, type Clip, type ClipFeaturesJob, type ClipTranscriptionJob, type LeadingSilenceJob, type Session, type SessionDelta, type Status } from "./api";
+import { api, applySessionDelta, audioUrl, bootstrap, sendReviewEvents, uploadAudio, type Clip, type ClipFeaturesJob, type ClipTranscriptionJob, type LeadingSilenceJob, type Session, type SessionDelta, type SnapPoints, type Status } from "./api";
 import WaveformEditor from "./WaveformEditor";
 import { Button, CountBadge, Panel, StageLayout, StatusBadge, statusLabels } from "./ui";
 import { publishClips, type PublishView } from "./publish";
@@ -48,6 +48,7 @@ type Mode = "triage" | "polish" | "publish";
 type AppSettings = {
   detectLeadingSilence: boolean;
   showOriginalStart: boolean;
+  snapEdges: boolean;
   badgeMode: BadgeMode;
   unboundBadgeBehavior: UnboundBadgeBehavior;
   gamepadRepeatDelayMs: number;
@@ -71,6 +72,7 @@ function loadSettings(): AppSettings {
       return {
         detectLeadingSilence: typeof parsed.detectLeadingSilence === "boolean" ? parsed.detectLeadingSilence : true,
         showOriginalStart: typeof parsed.showOriginalStart === "boolean" ? parsed.showOriginalStart : false,
+        snapEdges: typeof parsed.snapEdges === "boolean" ? parsed.snapEdges : true,
         badgeMode: parsed.badgeMode === "keyboard" || parsed.badgeMode === "xbox" ? parsed.badgeMode : "auto",
         unboundBadgeBehavior: parsed.unboundBadgeBehavior === "keyboard" ? "keyboard" : "hide",
         gamepadRepeatDelayMs: normalizeGamepadRepeatDelay(parsed.gamepadRepeatDelayMs),
@@ -82,6 +84,7 @@ function loadSettings(): AppSettings {
   return {
     detectLeadingSilence: true,
     showOriginalStart: false,
+    snapEdges: true,
     badgeMode: "auto",
     unboundBadgeBehavior: "hide",
     gamepadRepeatDelayMs: GAMEPAD_REPEAT_DELAY_MS,
@@ -241,6 +244,18 @@ export default function App() {
   const [mode, setMode] = useState<Mode>("triage");
   const [publishView, setPublishView] = useState<PublishView>("ready");
   const [publishSettings, setPublishSettings] = useState<ExportSettings>({ mode: "trim_edges", startDb: "-40", stopDb: "-50" });
+  // Clip edge snap points are measured once per recording, so load them once per session.
+  const [snapPoints, setSnapPoints] = useState<SnapPoints | null>(null);
+  const sessionPath = session?.session_path ?? null;
+  useEffect(() => {
+    setSnapPoints(null);
+    if (!sessionPath) return;
+    const controller = new AbortController();
+    void api<SnapPoints>("/session/snap-points", "GET", undefined, controller.signal)
+      .then(setSnapPoints)
+      .catch(() => {});
+    return () => controller.abort();
+  }, [sessionPath]);
   // Short confirmation for actions with no other visible result, such as undo.
   const [notice, setNotice] = useState<{ id: number; text: string } | null>(null);
   const showNotice = useCallback((text: string) => setNotice({ id: Date.now(), text }), []);
@@ -794,6 +809,7 @@ export default function App() {
       if (action.type === "focus-move" || action.type === "dialog-confirm" || action.type === "dialog-back" || action.type === "dialog-close") {
         dialogControllerHandlerRef.current?.(action);
       } else if ((action.type === "playback" || action.type === "nudge" || action.type === "nudge-selected" || action.type === "select-boundary" ||
+          action.type === "snap" || action.type === "snap-selected" ||
           action.type === "export" || action.type === "export-mode" || action.type === "reveal-export") &&
           (effectiveSelectedId || reviewContext === "active-dialog")) {
         gamepadActionIdRef.current += 1;
@@ -1465,6 +1481,8 @@ export default function App() {
                 active={!showExportModal && !showSettings}
                 onPlayback={() => { if (viewRef.current) viewRef.current.plays += 1; }}
                 autoplay={settings.autoplayClips}
+                snapping={settings.snapEdges}
+                snapPoints={settings.snapEdges ? snapPoints : null}
                 onSave={async (startMs, endMs) => {
                   if (session.revision === null) return false;
                   const next = await mutate(() => api<SessionDelta>(`/clips/${encodeURIComponent(selected.clip_id)}?delta=true`, "PATCH", {
@@ -1523,6 +1541,8 @@ export default function App() {
             onOpenGamepadMapping={openGamepadMapping}
             onDetectLeadingSilenceChange={(enabled) => setSettings((current) => ({ ...current, detectLeadingSilence: enabled }))}
             onShowOriginalStartChange={(enabled) => setSettings((current) => ({ ...current, showOriginalStart: enabled }))}
+            snapEdges={settings.snapEdges}
+            onSnapEdgesChange={(enabled) => setSettings((current) => ({ ...current, snapEdges: enabled }))}
             badgeMode={settings.badgeMode}
             unboundBadgeBehavior={settings.unboundBadgeBehavior}
             onBadgeModeChange={(badgeMode) => setSettings((current) => ({ ...current, badgeMode }))}

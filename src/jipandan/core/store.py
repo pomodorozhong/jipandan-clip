@@ -46,6 +46,8 @@ CREATE TABLE IF NOT EXISTS event (
 );
 CREATE INDEX IF NOT EXISTS event_undo ON event (undoable, undone_by, seq);
 CREATE TABLE IF NOT EXISTS suggestion (clip_id TEXT PRIMARY KEY, title TEXT NOT NULL);
+-- Clip edge snap points (word starts, speech ends) measured once per recording.
+CREATE TABLE IF NOT EXISTS snap_point (kind TEXT NOT NULL, ms INTEGER NOT NULL, PRIMARY KEY (kind, ms)) WITHOUT ROWID;
 """
 
 _META_FIELDS = (
@@ -118,15 +120,25 @@ class RecordingStore:
         with self._lock:
             return self._db.execute("SELECT 1 FROM meta WHERE key = 'revision'").fetchone() is not None
 
-    def create(self, session: Session) -> None:
-        """Store a freshly imported session as revision 1."""
+    def create(self, session: Session, snap_points: dict[str, list[int]] | None = None) -> None:
+        """Store a freshly imported session as revision 1, with its snap points by kind."""
         with self._lock, self._transaction():
             if self._db.execute("SELECT 1 FROM meta WHERE key = 'revision'").fetchone():
                 raise StoreConflict(f"{self.path.name} already holds a recording")
             self._write_meta(session, 1)
             self._write_clips(session, None)
+            self._db.executemany(
+                "INSERT OR IGNORE INTO snap_point (kind, ms) VALUES (?, ?)",
+                [(kind, ms) for kind, points in (snap_points or {}).items() for ms in points],
+            )
             self._insert_event("import", None, {"clips": len(session.candidates)}, mutation=None)
         session.revision = 1
+
+    def snap_points(self, kind: str) -> list[int]:
+        """Return the recording's snap points of ``kind`` in milliseconds, in order."""
+        with self._lock:
+            return [ms for (ms,) in self._db.execute(
+                "SELECT ms FROM snap_point WHERE kind = ? ORDER BY ms", (kind,))]
 
     def load(self) -> Session:
         with self._lock, self._transaction():

@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from jipandan.core.clip_features import ClipFeatures
 from jipandan.core.models import Session
+from jipandan.core.snap_points import SPEECH_END, WORD_START, write_snap_points
 from jipandan.core.waveform_envelope import WaveformEnvelopeCache
 from jipandan.core.whisper import write_segment_scores
 from jipandan.web.api import create_app
@@ -521,6 +522,11 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(invalid.status_code, 422)
         self.assertEqual(self.service.snapshot()["revision"], 2)
 
+    def test_sessions_without_snap_points_return_none(self):
+        self.assertEqual(self.client.get("/api/session/snap-points").status_code, 409)
+        self.open()
+        self.assertEqual(self.client.get("/api/session/snap-points").json(), {WORD_START: [], SPEECH_END: []})
+
     def test_waveform_windows_are_bounded_and_cached_by_source_identity(self):
         self.open()
         envelope = WaveformEnvelopeCache(
@@ -840,6 +846,7 @@ class WebApiTests(unittest.TestCase):
         def succeed(_manager, job):
             job.output.write_text(SRT, encoding="utf-8")
             write_segment_scores(job.output, [{"no_speech_prob": 0.1}, {"no_speech_prob": 0.8}])
+            write_snap_points(job.output, {WORD_START: [1000, 3000], SPEECH_END: [2100]})
             return 0
 
         with patch("jipandan.web.transcription.TranscriptionJobs._run_process", succeed):
@@ -853,6 +860,14 @@ class WebApiTests(unittest.TestCase):
             published = self.client.get("/api/session").json()["candidates"]
             self.assertEqual([clip["no_speech_prob"] for clip in published], [0.1, 0.8])
             self.assertEqual([clip["likely_keep"] for clip in published], [100.0, 0.0])
+            store = RecordingStore(store_path(self.audio))
+            try:
+                self.assertEqual(store.snap_points(WORD_START), [1000, 3000])
+                self.assertEqual(store.snap_points(SPEECH_END), [2100])
+            finally:
+                store.close()
+            self.assertEqual(self.client.get("/api/session/snap-points").json(),
+                             {WORD_START: [1000, 3000], SPEECH_END: [2100]})
             self.assertEqual(self.client.post(
                 "/api/transcriptions", json=settings, headers=self.headers,
             ).status_code, 409)

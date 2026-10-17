@@ -24,6 +24,12 @@ export interface Clip {
   suggested_title: string | null;
 }
 
+/** Clip edge snap points by kind, in milliseconds; empty for sessions made before snapping existed. */
+export interface SnapPoints {
+  word_start: number[];
+  speech_end: number[];
+}
+
 export interface MergePreview {
   added: number[];
   removed: number[];

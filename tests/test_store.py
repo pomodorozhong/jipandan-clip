@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from jipandan.core.models import Session
+from jipandan.core.snap_points import SPEECH_END, WORD_START
 from jipandan.core.store import RecordingStore, StoreConflict, store_path
 
 
@@ -26,6 +27,21 @@ class RecordingStoreTests(unittest.TestCase):
     def tearDown(self):
         self.store.close()
         self.directory.cleanup()
+
+    def test_snap_points_are_stored_with_a_new_session(self):
+        self.assertEqual(self.store.snap_points(WORD_START), [])
+        other = RecordingStore(self.root / "other.jipandan.db")
+        try:
+            other.create(self.session, {WORD_START: [3000, 1000, 1000], SPEECH_END: [2500]})
+            self.assertEqual(other.snap_points(WORD_START), [1000, 3000])
+            self.assertEqual(other.snap_points(SPEECH_END), [2500])
+        finally:
+            other.close()
+        reopened = RecordingStore(self.root / "other.jipandan.db")
+        try:
+            self.assertEqual(reopened.snap_points(SPEECH_END), [2500])
+        finally:
+            reopened.close()
 
     def change(self, session, mutate, events, **options):
         import copy

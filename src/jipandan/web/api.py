@@ -284,6 +284,10 @@ def create_app(
     ):
         return app.state.service.waveform(clip_id, start_ms, end_ms, buckets)
 
+    @app.get("/api/session/snap-points")
+    def snap_points():
+        return app.state.service.snap_points()
+
     @app.get("/api/session/leading-silence-detection")
     def leading_silence_detection_status():
         return app.state.service.leading_silence_detection_status()

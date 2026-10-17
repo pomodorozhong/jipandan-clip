@@ -28,6 +28,13 @@ const nudgeRows: readonly CheatsheetRow[] = [
   { id: "nudge-end-coarse-forward", label: "End +100 ms" },
 ];
 
+const snapRows: readonly CheatsheetRow[] = [
+  { id: "snap-start-back", label: "Start to previous word" },
+  { id: "snap-start-forward", label: "Start to next word" },
+  { id: "snap-end-back", label: "End to previous speech end" },
+  { id: "snap-end-forward", label: "End to next speech end" },
+];
+
 // Controller-only boundary controls; the cheatsheet lists them only when bound.
 const selectedBoundaryRows: readonly CheatsheetRow[] = [
   { id: "trim-select-start", label: "Select start boundary" },
@@ -69,7 +76,10 @@ export const CHEATSHEET_SECTIONS: readonly CheatsheetSection[] = [
       { id: "group2", label: "Ready for Publish" },
       { id: "rejected", label: "Reject" },
       ...nudgeRows,
+      ...snapRows,
       ...selectedBoundaryRows,
+      { id: "trim-snap-back", label: "Selected boundary to previous snap" },
+      { id: "trim-snap-forward", label: "Selected boundary to next snap" },
       { id: "open-export", label: "Preview export" },
       { id: "duplicate", label: "Duplicate" },
       { id: "focus-search", label: "Search titles" },

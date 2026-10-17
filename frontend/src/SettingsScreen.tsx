@@ -15,7 +15,7 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
   gamepadStatus, gamepadMappingButtonRef, onOpenGamepadMapping,
   onDetectLeadingSilenceChange, onShowOriginalStartChange, badgeMode, unboundBadgeBehavior,
   onBadgeModeChange, onUnboundBadgeBehaviorChange, gamepadRepeatDelayMs,
-  onGamepadRepeatDelayChange }: {
+  onGamepadRepeatDelayChange, snapEdges, onSnapEdgesChange }: {
   clipDir: string;
   storageEnabled: boolean;
   storageBusy: boolean;
@@ -35,6 +35,8 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
   onOpenGamepadMapping: () => void;
   onDetectLeadingSilenceChange: (enabled: boolean) => void;
   onShowOriginalStartChange: (enabled: boolean) => void;
+  snapEdges: boolean;
+  onSnapEdgesChange: (enabled: boolean) => void;
   badgeMode: BadgeMode;
   unboundBadgeBehavior: UnboundBadgeBehavior;
   onBadgeModeChange: (mode: BadgeMode) => void;
@@ -92,6 +94,14 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
         <span>
           <strong className="block text-sm">Show original start time on waveform</strong>
           <span className="subtle mt-1 block text-sm">Draw the SRT start as a separate marker in the waveform views.</span>
+        </span>
+      </label>
+      <label className="flex cursor-pointer items-start gap-3 border-t line mt-4 pt-4">
+        <input type="checkbox" checked={snapEdges}
+          onChange={(event) => onSnapEdgesChange(event.target.checked)} className="mt-1" />
+        <span>
+          <strong className="block text-sm">Snap clip edges</strong>
+          <span className="subtle mt-1 block text-sm">In Polish, show word starts and speech ends on the waveforms and snap dragged edges to them. Turn off to hide them and place edges freely.</span>
         </span>
       </label>
     </section>

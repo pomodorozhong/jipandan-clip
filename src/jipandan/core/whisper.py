@@ -7,7 +7,15 @@ import math
 import sys
 import tempfile
 import threading
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
+
+from jipandan.core.snap_points import (
+    SPEECH_END,
+    WORD_START,
+    word_starts_ms,
+    write_snap_points,
+)
 
 from jipandan.core.srt import (
     SEGMENT_SCORES_VERSION,
@@ -97,9 +105,14 @@ def transcribe_to_text(
         entropy_thold=entropy_thold,
     )
     print(f"Whisper model repository: {model_repo}", file=sys.stderr, flush=True)
+    # Voice activity runs on the CPU while Whisper uses the GPU, so the two overlap.
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="jipandan-vad")
+    speech_ends = executor.submit(_speech_ends_ms, input_audio) if output_format == "srt" else None
+    executor.shutdown(wait=False)
     result = mlx_whisper.transcribe(
         str(input_audio),
         path_or_hf_repo=model_repo,
+        word_timestamps=output_format == "srt",
         **transcribe_kwargs,
     )
     segments = result.get("segments", [])
@@ -215,6 +228,25 @@ def transcribe_to_text(
             temporary_path.unlink(missing_ok=True)
     if output_format == "srt":
         write_segment_scores(output_text, segments)
+        _write_snap_points(output_text, segments, speech_ends)
+
+
+def _speech_ends_ms(audio: Path) -> list[int]:
+    from jipandan.core.vad import speech_ends_ms
+
+    return speech_ends_ms(audio)
+
+
+def _write_snap_points(srt_path: Path, segments: list[dict], speech_ends: Future | None) -> None:
+    """Save word starts and speech ends; a failed voice-activity pass leaves speech ends out."""
+    points = {WORD_START: word_starts_ms(segments)}
+    if speech_ends is not None:
+        try:
+            points[SPEECH_END] = speech_ends.result()
+        except Exception as exc:
+            print(f"Voice activity detection failed; speech ends not saved: {exc}",
+                  file=sys.stderr, flush=True)
+    write_snap_points(srt_path, points)
 
 
 def _finite_or_none(value: object) -> float | None:
