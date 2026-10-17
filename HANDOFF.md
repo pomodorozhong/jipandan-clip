@@ -2,16 +2,15 @@
 
 ## In progress
 
-### feat/restructure-settings
+### fix/gamepad-mapping-focus-return
 
-- Task: #45 Restructure Settings, linked to this branch. The owner approved the plan and a canvas mockup (section cards, no "This browser" tags, 640 px dialog, one-line controller status in Help).
-- PR: none yet. A draft description is awaiting the owner's approval; the GitHub branch exists from the issue link but holds only `main`'s tip until the push.
-- Code checkpoint: `15d533d` (`feat(web): restructure Settings into section cards`), on `main` at `3dd5303`; not pushed.
-- State: Settings shows four cards: Playback and review, Clip timing, Controller, and Storage. Only Storage is tagged "This session". Rows share one layout; wide controls stack under their text below 640 px. The gamepad box is folded into the Controller card (`GamepadControls.tsx` became `GamepadStatus.tsx`). Help shows a one-line controller status whose button opens Settings at Controller.
-- Verification: typecheck clean; frontend suite (134) and Python suite (72) pass. Checked in the app on the 0511 demo at 1280 px and 375 px: layout, a checkbox saving to the browser, mapping open and close, and Help's Controller settings link focusing "Configure mapping".
-- Checks not run: Storage with no session open (wording logic unchanged); applying an export directory; a real controller.
-- Known issue, not from this branch: focus doesn't return to "Configure mapping" after leaving the mapping screen; `main` does the same. A separate fix session is working on it.
-- Next action: after the owner approves the PR description, push and open the PR closing #45.
+- Task: fix a bug on `main`: leaving the gamepad mapping screen with "← Back to Settings" or Esc can leave focus on `<body>` instead of "Configure mapping". No issue; the PR describes the bug.
+- PR: awaiting the owner's approval to push and open a PR into `main`.
+- Code checkpoint: `191726b` (`fix(web): return focus to the mapping button after leaving gamepad mapping`), on `main` at `94704c0`; not pushed.
+- State: the return focus ran in a `requestAnimationFrame` callback, and so did the Dialog's fallback focus. Browsers don't run those callbacks while the page is hidden, so neither focused anything. `closeGamepadMapping` now sets a flag, and an effect focuses the button once Settings is back.
+- Verification: typecheck clean; frontend suite (134) passes; build succeeds. In the app on the 0511 demo, focus returned to "Configure mapping" after Back and after Esc, both normally and with `requestAnimationFrame` stubbed to never fire. The unfixed build ended on `<body>` with the stub. Keyboard: Enter opens the mapping screen, Tab stays in the dialog, and Esc closes Settings onto the Settings button.
+- Checks not run: a real controller; the Dialog's controller handler is unchanged.
+- Next action: after the owner approves, push and open the PR.
 
 ## Ranked work
 
