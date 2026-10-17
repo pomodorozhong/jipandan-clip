@@ -2,15 +2,15 @@
 
 ## In progress
 
-### fix/gamepad-mapping-focus-return
+### build/resync-frontend-lockfile
 
-- Task: fix a bug on `main`: leaving the gamepad mapping screen with "← Back to Settings" or Esc can leave focus on `<body>` instead of "Configure mapping". No issue; the PR describes the bug.
-- PR: awaiting the owner's approval to push and open a PR into `main`.
-- Code checkpoint: `191726b` (`fix(web): return focus to the mapping button after leaving gamepad mapping`), on `main` at `94704c0`; not pushed.
-- State: the return focus ran in a `requestAnimationFrame` callback, and so did the Dialog's fallback focus. Browsers don't run those callbacks while the page is hidden, so neither focused anything. `closeGamepadMapping` now sets a flag, and an effect focuses the button once Settings is back.
-- Verification: typecheck clean; frontend suite (134) passes; build succeeds. In the app on the 0511 demo, focus returned to "Configure mapping" after Back and after Esc, both normally and with `requestAnimationFrame` stubbed to never fire. The unfixed build ended on `<body>` with the stub. Keyboard: Enter opens the mapping screen, Tab stays in the dialog, and Esc closes Settings onto the Settings button.
-- Checks not run: a real controller; the Dialog's controller handler is unchanged.
-- Next action: after the owner approves, push and open the PR.
+- Task: fix a bug on `main`: `cd frontend && npm ci` fails with EUSAGE because `package-lock.json` is missing entries for packages `package.json` requires, so a fresh checkout can't install frontend dependencies or start `jipandan-web`. No issue; the PR describes the bug.
+- PR: #66 into `main`, open and awaiting review. `main` (with #65) was merged into the branch to resolve a `HANDOFF.md` conflict.
+- Code checkpoint: `48987b6` (`build(web): resync the frontend lockfile with package.json`), with `main` at `8431437` merged in; pushed.
+- State: regenerated with `npm install --package-lock-only`. It adds `@types/babel__generator`, `@types/babel__template`, `@types/babel__traverse`, and the optional WASM runtime packages of `@tailwindcss/oxide-wasm32-wasi`; no locked version changes.
+- Verification: `npm ci` succeeds on a clean `node_modules`; typecheck clean; frontend suite (134) passes; build succeeds.
+- Checks not run: Python suite (no Python changes).
+- Next action: the owner reviews and merges #66; remove this subsection after it merges.
 
 ## Ranked work
 
