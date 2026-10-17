@@ -12,7 +12,7 @@ Jipandan turns long gaming-stream recordings into short soundboard MP3 clips. Se
 - Read `HANDOFF.md` and find the subsection named after the current branch (`git branch --show-current`). No subsection means nothing is in progress on this branch.
 - To pick new work, start from the default branch's `Ranked work`. To resume an issue from another computer, find its branch with `gh issue develop --list <N>`, fetch it, and read that branch's `HANDOFF.md`. Preserve local changes when switching checkouts.
 - Compare the subsection's code checkpoint with `git log`; list commits made after it, skipping the branch's own `docs:` commits that only touch `HANDOFF.md` or the docs folder, and re-check verification the rest may have made stale. Run the project's documented checks before building on the previous session's work.
-- Verify issue and PR status when GitHub is available. If the PR has merged or closed, apply the `commit` skill's branch-safety rules before new commits or pushes.
+- Verify issue and PR status when GitHub is available. If the PR has merged or closed, apply the `commit` skill's branch-safety rules before new commits or pushes. A subsection whose PR has merged or closed is stale: remove it in your next `docs:` commit, moving anything unresolved to the issue or to `Pending`.
 - A pending entry records a request, not approval. Handle only the approvals the chosen action needs, and continue other authorized work.
 
 ### During work
@@ -24,10 +24,6 @@ Jipandan turns long gaming-stream recordings into short soundboard MP3 clips. Se
 - Keep it current rather than a log. History and decisions belong on the issue; lasting knowledge belongs in the docs folder. Never write secrets or local paths containing personal IDs.
 - Commit `HANDOFF.md` only before a push and at wrap-up, as a `docs:` commit on the work branch. Never commit it on the default branch; with no work branch, commit it on the next task's branch, created as above.
 - On a rebase conflict in `HANDOFF.md`, keep the incoming version of this branch's subsection and the base's version of everything else.
-
-### Before merge
-
-- When the user accepts the work, remove this branch's subsection, update `Ranked work`, and commit and push that before the PR merges, within the user's authorization.
 
 ### End of a session
 
