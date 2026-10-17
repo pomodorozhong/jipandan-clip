@@ -311,6 +311,7 @@ export default function App() {
   const titleRef = useRef<HTMLInputElement>(null);
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
   const gamepadMappingButtonRef = useRef<HTMLButtonElement>(null);
+  const restoreGamepadMappingFocus = useRef(false);
   const clipMenuRef = useRef<HTMLDivElement>(null);
   const detailScrollRef = useRef<HTMLDivElement>(null);
   const clipListRef = useRef<HTMLDivElement>(null);
@@ -1032,9 +1033,17 @@ export default function App() {
   }, []);
 
   const closeGamepadMapping = useCallback(() => {
+    restoreGamepadMappingFocus.current = true;
     setShowGamepadMapping(false);
-    requestAnimationFrame(() => gamepadMappingButtonRef.current?.focus());
   }, []);
+
+  // Focus from an effect rather than an animation frame: frames never run while
+  // the page is hidden, which left focus on <body> after leaving the mapping.
+  useEffect(() => {
+    if (showGamepadMapping || !restoreGamepadMappingFocus.current) return;
+    restoreGamepadMappingFocus.current = false;
+    gamepadMappingButtonRef.current?.focus();
+  }, [showGamepadMapping]);
 
   const closeSettings = useCallback(() => {
     setShowStorageConfirm(false);
