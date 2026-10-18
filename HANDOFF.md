@@ -2,14 +2,14 @@
 
 ## In progress
 
-### docs/finish-step-2-review
+### docs/link-only-resolving-branches
 
-- Task: #46 Finish the step 2 owner review. This branch is linked to #46 and pushed.
-- PR: none.
-- Code checkpoint: `main` at `6790dcf`; this branch holds only the handoff update.
-- State: step 2's code has merged, including Settings (#64), the mapping focus fix (#65) and the lockfile resync (#66). What's left is the owner's checklist on #46, done in the real app, and then marking step 2 done in `doc/app-rebuild-plan.md`.
-- Verification: none needed for the handoff update.
-- Next action: the owner works through the #46 checklist; then update #22, #25, #27 and #28 from the results and mark step 2 done in the plan.
+- Task: sync `AGENTS.md` with the current `handoff` skill. Stop handoff-only and partial branches from closing their issue: PR #67 came from a branch linked to #46 with `gh issue develop`, so merging it closed #46 even though its body said `Related to #46`; #46 has been reopened. Then replace the handoff block with the skill's shorter template, which moves the detailed rules into the skill's working rules and sends PRs through the `open-pr` skill. No issue; the PR describes it.
+- PR: none; the branch is pushed up to `ad7670c`, and the newer commit awaits the owner's approval before it is pushed.
+- Code checkpoint: `main` at `2f94def`, plus this branch's two `docs:` commits.
+- State: `AGENTS.md`'s handoff block matches the skill's `assets/agents-handoff.md`, and "Branches and pull requests" points at the `open-pr` skill. This branch also removes the merged `docs/finish-step-2-review` subsection.
+- Verification: the marked block is identical to the skill template; nothing else in `AGENTS.md` changed besides the `open-pr` reference. No app checks, since the change is docs-only.
+- Next action: push the branch and open the PR with the `open-pr` skill. Keep this branch unlinked.
 
 ## Ranked work
 
