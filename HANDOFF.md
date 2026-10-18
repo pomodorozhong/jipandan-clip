@@ -4,12 +4,12 @@
 
 ### docs/link-only-resolving-branches
 
-- Task: stop handoff-only and partial branches from closing their issue. PR #67 came from a branch linked to #46 with `gh issue develop`, so merging it closed #46 even though its body said `Related to #46`; #46 has been reopened. No issue; the PR describes it.
-- PR: none; awaiting the owner's local review before anything is pushed.
-- Code checkpoint: `main` at `2f94def`, plus this branch's `docs:` commit.
-- State: `AGENTS.md`'s handoff block is synced with the `handoff` skill template, which now says to link a branch only when its PR fully resolves the issue. This also removes the merged `docs/finish-step-2-review` subsection.
-- Verification: the `AGENTS.md` block matches the skill's `assets/agents-handoff.md`.
-- Next action: the owner reviews the branch; then push it and open the PR with the handoff PR procedure. Keep this branch unlinked.
+- Task: sync `AGENTS.md` with the current `handoff` skill. Stop handoff-only and partial branches from closing their issue: PR #67 came from a branch linked to #46 with `gh issue develop`, so merging it closed #46 even though its body said `Related to #46`; #46 has been reopened. Then replace the handoff block with the skill's shorter template, which moves the detailed rules into the skill's working rules and sends PRs through the `open-pr` skill. No issue; the PR describes it.
+- PR: none; the branch is pushed up to `ad7670c`, and the newer commit awaits the owner's approval before it is pushed.
+- Code checkpoint: `main` at `2f94def`, plus this branch's two `docs:` commits.
+- State: `AGENTS.md`'s handoff block matches the skill's `assets/agents-handoff.md`, and "Branches and pull requests" points at the `open-pr` skill. This branch also removes the merged `docs/finish-step-2-review` subsection.
+- Verification: the marked block is identical to the skill template; nothing else in `AGENTS.md` changed besides the `open-pr` reference. No app checks, since the change is docs-only.
+- Next action: push the branch and open the PR with the `open-pr` skill. Keep this branch unlinked.
 
 ## Ranked work
 
