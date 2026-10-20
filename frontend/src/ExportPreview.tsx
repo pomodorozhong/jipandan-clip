@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, audioUrl, previewUrl, type Clip, type ExportMode, type PreviewJob, type Session, type WaveformWindow } from "./api";
 import PreviewPlayer, { type PreviewPlayerHandle } from "./PreviewPlayer";
 import { ShortcutBadge } from "./ShortcutBadge";
+import { SectionHeader } from "./ui";
 import type { GamepadActionRequest } from "./gamepad";
 import { exportMatchesSettings } from "./publish";
 import { renderedRangeToSource } from "./trimMap";
@@ -50,7 +51,7 @@ export type ExportSettings = { mode: ExportMode; startDb: string; stopDb: string
  * ``onNudge`` adds timing fixes so a clip never has to go back to Polish.
  */
 export default function ExportPreview({ clip, revision, open, nextClipId, onClose, onPublished,
-  gamepadAction, onGamepadActionHandled, controllerHandlerRef, inline = false, onNudge, nudgeDisabled = false,
+  gamepadAction, onGamepadActionHandled, controllerHandlerRef, inline = false, heading, headingDetail, onNudge, nudgeDisabled = false,
   exportContext, initialSettings, onSettingsChange, onTrim, recordingDurationMs }: {
   clip: Clip; revision: number; open: boolean; onClose: () => void;
   nextClipId: string | null;
@@ -59,6 +60,9 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
   onGamepadActionHandled?: (id: number) => void;
   controllerHandlerRef: React.MutableRefObject<((action: InputAction) => void) | null>;
   inline?: boolean;
+  /** Inline only: the panel header strip, matching the other stages' clip panels. */
+  heading?: string;
+  headingDetail?: string;
   onNudge?: (edge: "start" | "end", amountMs: number) => void;
   nudgeDisabled?: boolean;
   onTrim?: (start: number, end: number) => void;
@@ -541,15 +545,16 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
         <div className="flex flex-wrap gap-2 sm:col-start-2 sm:row-start-1">
           {outputPath && <button type="button" onClick={() => dispatchAction({ type: "reveal-export" })}
             className="btn btn-quiet">Reveal file</button>}
+          {/* Publish moves on after every export from Ready, so it needs only one export button. */}
           <button type="button" onClick={() => dispatchAction({ type: "export", advance: false })} disabled={!candidateReady || exporting || requesting}
-            className="btn btn-secondary">
-            {clip.last_export_path ? "Re-export" : "Export"} <ShortcutBadge keyboard="Enter" bindingId="export" /></button>
-          <button type="button" onClick={() => dispatchAction({ type: "export", advance: true })} disabled={!candidateReady || exporting || requesting || !nextClipId}
+            className={`btn ${inline ? "btn-primary" : "btn-secondary"}`}>
+            {inline && exporting ? "Exporting…" : clip.last_export_path ? "Re-export" : "Export"} <ShortcutBadge keyboard="Enter" bindingId="export" /></button>
+          {!inline && <button type="button" onClick={() => dispatchAction({ type: "export", advance: true })} disabled={!candidateReady || exporting || requesting || !nextClipId}
             title={nextClipId ? "Export and open the next clip (Command+Enter)" : "No next clip in this view"}
             className="btn btn-primary">
             {exporting ? "Exporting…" : "Export & Next"}
             <ShortcutBadge keyboard="⌘ Enter" bindingId="export-next" />
-          </button>
+          </button>}
         </div>
       </footer>
   </>;
@@ -557,10 +562,11 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
   if (inline) {
     return <section ref={dialogRef} aria-label={`Export clip ${clip.clip_id}`}
       className="panel flex w-full flex-col self-start">
-      <header className="border-b line px-4 py-3 sm:px-5">
-        <p className="eyebrow mono">Publish · Clip #{clip.clip_id}</p>
-        <h2 className="mt-1 break-words text-xl font-semibold">{clip.title}</h2>
-      </header>
+      <SectionHeader title={heading ?? `Clip #${clip.clip_id}`}
+        aside={headingDetail && <span className="subtle mono text-xs">{headingDetail}</span>} />
+      <div className="border-b line px-4 py-3 sm:px-5">
+        <h2 className="break-words text-xl font-semibold">{clip.title}</h2>
+      </div>
       {settingsPanel}
       {comparePanel}
       {footerPanel}

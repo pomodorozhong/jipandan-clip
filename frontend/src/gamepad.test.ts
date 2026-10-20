@@ -5,6 +5,7 @@ import {
   createGamepadAdapter,
   defaultGamepadBindingConfig,
   findGamepadBindingConflict,
+  groupGamepadBindings,
   GAMEPAD_REPEAT_DELAY_MS,
   initialGamepadStatus,
   loadGamepadBindingConfig,
@@ -386,5 +387,21 @@ describe("gamepad adapter", () => {
     press(gamepad, 14, true);
     adapter.poll(3);
     expect(actions).toEqual([{ type: "navigate", direction: "next" }]);
+  });
+});
+
+describe("groupGamepadBindings", () => {
+  it("lists every binding exactly once", () => {
+    const bindings = bindingsForGamepadConfig(defaultGamepadBindingConfig());
+    const grouped = groupGamepadBindings(bindings).flatMap((group) => group.bindings.map((binding) => binding.id));
+    expect([...grouped].sort()).toEqual(bindings.map((binding) => binding.id).sort());
+    expect(groupGamepadBindings(bindings).some((group) => group.id === "other")).toBe(false);
+  });
+
+  it("puts unknown bindings in a final Other group", () => {
+    const [first] = bindingsForGamepadConfig(defaultGamepadBindingConfig());
+    const stray = { ...first, id: "stray" } as unknown as GamepadButtonBinding;
+    const groups = groupGamepadBindings([first, stray]);
+    expect(groups.at(-1)).toMatchObject({ id: "other", bindings: [stray] });
   });
 });

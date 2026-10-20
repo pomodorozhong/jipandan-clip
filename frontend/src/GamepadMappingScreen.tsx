@@ -4,6 +4,7 @@ import {
   defaultGamepadBindingConfig,
   findGamepadBindingConflict,
   gamepadControlLabel,
+  groupGamepadBindings,
   readGamepadPressedControls,
   type GamepadBindingConfig,
   type GamepadBindingId,
@@ -46,6 +47,10 @@ export default function GamepadMappingScreen({ initialConfig, status, onSave, on
   const [message, setMessage] = useState("");
   const backButtonRef = useRef<HTMLButtonElement>(null);
   const bindings = useMemo(() => bindingsForGamepadConfig(draft), [draft]);
+  const groups = useMemo(() => groupGamepadBindings(bindings), [bindings]);
+  // Groups with bound controls start open; the rest stay folded until needed.
+  const [openGroups, setOpenGroups] = useState<ReadonlySet<string>>(() => new Set(groups
+    .filter((group) => group.bindings.some((binding) => binding.index !== null)).map((group) => group.id)));
   const activeController = status.activeController;
   const canCapture = Boolean(activeController && status.pageActive);
 
@@ -54,6 +59,14 @@ export default function GamepadMappingScreen({ initialConfig, status, onSave, on
   }, []);
 
   useEffect(() => () => onCaptureChange(false), [onCaptureChange]);
+
+  useEffect(() => {
+    if (!conflict) return;
+    const group = groups.find((item) => item.bindings.some((binding) => binding.id === conflict.conflicting));
+    if (group && !openGroups.has(group.id)) setOpenGroups((current) => new Set(current).add(group.id));
+    requestAnimationFrame(() => document.getElementById("gamepad-binding-conflict")
+      ?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
+  }, [conflict, groups, openGroups]);
 
   const capture = useCallback((id: GamepadBindingId, index: number) => {
     onCaptureChange(false);
@@ -102,6 +115,20 @@ export default function GamepadMappingScreen({ initialConfig, status, onSave, on
       if (frameId !== null) window.cancelAnimationFrame(frameId);
     };
   }, [activeController?.id, activeController?.index, activeController?.mapping, capture, capturingId, status]);
+
+  const conflictGroup = conflict
+    ? groups.find((group) => group.bindings.some((binding) => binding.id === conflict.conflicting)) : undefined;
+  // Shown under the group being edited; the action already using the control is highlighted in its own group.
+  const conflictAlert = conflict && <div id="gamepad-binding-conflict" role="alert"
+    className="mx-4 mb-4 mt-1 rounded-lg border border-[#a47745] bg-[#3c3525] p-3 text-sm">
+    <p><strong>{gamepadControlLabel(conflict.index)}</strong> is already assigned to <strong>{actionLabel(bindings, conflict.conflicting)}</strong>
+      {conflictGroup && conflictGroup.bindings.every((binding) => binding.id !== conflict.target) && <> in {conflictGroup.title}</>}, which works on the same screens.</p>
+    <p className="subtle mt-1 text-xs">Swap the two actions, or choose another control. A control can be reused for actions on different screens.</p>
+    <div className="mt-3 flex flex-wrap justify-end gap-2">
+      <button type="button" onClick={() => setConflict(null)} className="rounded-lg border line px-3 py-2 text-sm">Choose another</button>
+      <button type="button" onClick={swapConflict} className="rounded-lg bg-[#b7d69d] px-3 py-2 text-sm font-semibold text-[#1d2d20]">Swap bindings</button>
+    </div>
+  </div>;
 
   function beginCapture(id: GamepadBindingId) {
     onCaptureChange(true);
@@ -157,43 +184,71 @@ export default function GamepadMappingScreen({ initialConfig, status, onSave, on
     <section className="mt-5" aria-labelledby="gamepad-mapping-heading">
       <div className="flex items-baseline justify-between gap-3">
         <h3 id="gamepad-mapping-heading" className="text-base font-semibold">Shortcut bindings</h3>
-        <span className="subtle text-xs">Standard controls</span>
+        <span className="subtle text-xs">Click a control to change it</span>
       </div>
       <div className="mt-3 grid gap-2">
-        {bindings.map((binding) => <div key={binding.id} className="flex items-center justify-between gap-3 rounded-lg border line px-3 py-2">
-          <div className="min-w-0">
-            <div className="text-sm font-medium">{binding.actionLabel}</div>
-            <div className="subtle mt-1 flex flex-wrap items-center gap-2 text-xs">
-              {binding.index === null ? <span>Unbound</span> : <XboxButtonIcon index={binding.index} label={binding.control} />}
-              <span>· {binding.contexts.includes("active-dialog") ? "dialog / Publish" : "review"}</span>
-              {binding.keyboard && <span>· keyboard {binding.keyboard}</span>}
+        {groups.map((group) => {
+          const bound = group.bindings.filter((binding) => binding.index !== null).length;
+          return <details key={group.id} open={openGroups.has(group.id)}
+            onToggle={(event) => {
+              const isOpen = event.currentTarget.open;
+              setOpenGroups((current) => {
+                if (current.has(group.id) === isOpen) return current;
+                const next = new Set(current);
+                if (isOpen) next.add(group.id); else next.delete(group.id);
+                return next;
+              });
+            }}
+            className="group rounded-xl border line">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-xl px-4 py-3 hover:bg-[#22312a]">
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold">{group.title}</span>
+                {group.description && <span className="subtle block text-xs">{group.description}</span>}
+              </span>
+              <span className="subtle flex shrink-0 items-center gap-2 text-xs">
+                {bound} of {group.bindings.length} bound
+                <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2"
+                  className="size-4 transition-transform group-open:rotate-180"><path d="m4 6 4 4 4-4" strokeLinecap="round" strokeLinejoin="round" /></svg>
+              </span>
+            </summary>
+            <div className="grid gap-x-4 border-t line px-4 py-1 md:grid-cols-2">
+              {group.bindings.map((binding) => <div key={binding.id} id={`gamepad-binding-${binding.id}`}
+                className={`-mx-2 flex min-h-12 items-center justify-between gap-3 rounded-lg border-b border-[#29362f] px-2 py-2 last:border-b-0 md:[&:nth-last-child(2):nth-child(odd)]:border-b-0 ${
+                  conflict?.conflicting === binding.id ? "bg-[#3c3525] ring-1 ring-[#a47745]" : capturingId === binding.id ? "text-white" : ""}`}>
+                <div className="min-w-0">
+                  <div className="text-sm">{binding.actionLabel}</div>
+                  {binding.keyboard && <div className="subtle text-[11px]">Keyboard {binding.keyboard}</div>}
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {/* Keep the assigned control readable while capture is unavailable. */}
+                  <button type="button" disabled={!canCapture || (capturingId !== null && capturingId !== binding.id)}
+                    style={!canCapture ? { opacity: .85 } : undefined}
+                    onClick={() => capturingId === binding.id ? cancelCapture() : beginCapture(binding.id)}
+                    aria-label={capturingId === binding.id ? `Cancel capture for ${binding.actionLabel}`
+                      : `Capture a control for ${binding.actionLabel}, currently ${binding.control}`}
+                    title={canCapture ? undefined : "Connect and focus a controller to capture"}
+                    className={`inline-flex min-w-28 items-center justify-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium enabled:hover:bg-[#354b3b] ${
+                      capturingId === binding.id ? "border-[#b7d69d] bg-[#24372b]" : "line"}`}>
+                    {capturingId === binding.id ? "Press a control…"
+                      : binding.index === null ? <span className="subtle">Unbound</span>
+                      : <><XboxButtonIcon index={binding.index} label={binding.control} /><span aria-hidden="true">{binding.control}</span></>}
+                  </button>
+                  {binding.index !== null && <button type="button" disabled={capturingId !== null}
+                    onClick={() => { setDraft((current) => ({ ...current, [binding.id]: null })); setMessage(`${binding.actionLabel} is now unbound.`); }}
+                    aria-label={`Clear ${binding.actionLabel}`} title="Clear"
+                    className="subtle rounded-lg px-2 py-1.5 text-sm leading-none hover:bg-[#354b3b] hover:text-white">×</button>}
+                </div>
+              </div>)}
             </div>
-          </div>
-          <div className="flex shrink-0 flex-wrap justify-end gap-2">
-            {binding.index !== null && <button type="button" disabled={capturingId !== null}
-              onClick={() => { setDraft((current) => ({ ...current, [binding.id]: null })); setMessage(`${binding.actionLabel} is now unbound.`); }}
-              className="rounded-lg border line px-3 py-2 text-sm font-medium hover:bg-[#354b3b]">Clear</button>}
-            <button type="button" disabled={!canCapture || (capturingId !== null && capturingId !== binding.id)}
-              onClick={() => capturingId === binding.id ? cancelCapture() : beginCapture(binding.id)}
-              className="rounded-lg border line px-3 py-2 text-sm font-medium hover:bg-[#354b3b]">
-              {capturingId === binding.id ? "Cancel capture" : "Capture control"}
-            </button>
-          </div>
-        </div>)}
+            {conflict && group.bindings.some((binding) => binding.id === conflict.target) && conflictAlert}
+          </details>;
+        })}
       </div>
     </section>
 
     {capturingId && <p role="status" aria-live="polite" className="mt-4 rounded-lg border border-[#55744b] bg-[#24372b] p-3 text-sm">
       Release every control, then press a button for <strong>{actionLabel(bindings, capturingId)}</strong>.
     </p>}
-    {conflict && <div role="alert" className="mt-4 rounded-lg border border-[#a47745] bg-[#3c3525] p-3 text-sm">
-      <p><strong>{gamepadControlLabel(conflict.index)}</strong> is already assigned to {actionLabel(bindings, conflict.conflicting)} in an overlapping context.</p>
-      <p className="subtle mt-1 text-xs">Swap the two actions, or reject this capture and choose another control. Reuse across separate contexts is allowed.</p>
-      <div className="mt-3 flex flex-wrap justify-end gap-2">
-        <button type="button" onClick={() => setConflict(null)} className="rounded-lg border line px-3 py-2 text-sm">Choose another</button>
-        <button type="button" onClick={swapConflict} className="rounded-lg bg-[#b7d69d] px-3 py-2 text-sm font-semibold text-[#1d2d20]">Swap bindings</button>
-      </div>
-    </div>}
     {message && !capturingId && !conflict && <p role="status" aria-live="polite" className="subtle mt-4 text-sm">{message}</p>}
 
     <div className="mt-6 flex flex-wrap items-center justify-between gap-2">
