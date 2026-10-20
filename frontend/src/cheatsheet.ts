@@ -108,7 +108,6 @@ export const CHEATSHEET_SECTIONS: readonly CheatsheetSection[] = [
       ...nudgeRows,
       ...selectedBoundaryRows,
       { id: "export", label: "Export" },
-      { id: "export-next", label: "Export & Next" },
       { id: "reveal-export", label: "Reveal file" },
       { id: "jump", label: "Go to #" },
       { id: "undo", label: "Undo" },
@@ -118,7 +117,7 @@ export const CHEATSHEET_SECTIONS: readonly CheatsheetSection[] = [
   {
     id: "dialogs",
     title: "Dialogs",
-    note: "Preview export in Polish uses the Publish keys for playback, export mode, and export.",
+    note: "Preview export in Polish uses the Publish keys for playback, export mode, and export; ⌘ Enter exports and opens the next clip.",
     resolvers: [{ surface: "dialog", context: "active-dialog" }],
     rows: [{ id: "dialog-close", label: "Close dialog" }],
   },

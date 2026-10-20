@@ -541,15 +541,16 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
         <div className="flex flex-wrap gap-2 sm:col-start-2 sm:row-start-1">
           {outputPath && <button type="button" onClick={() => dispatchAction({ type: "reveal-export" })}
             className="btn btn-quiet">Reveal file</button>}
+          {/* Publish moves on after every export from Ready, so it needs only one export button. */}
           <button type="button" onClick={() => dispatchAction({ type: "export", advance: false })} disabled={!candidateReady || exporting || requesting}
-            className="btn btn-secondary">
-            {clip.last_export_path ? "Re-export" : "Export"} <ShortcutBadge keyboard="Enter" bindingId="export" /></button>
-          <button type="button" onClick={() => dispatchAction({ type: "export", advance: true })} disabled={!candidateReady || exporting || requesting || !nextClipId}
+            className={`btn ${inline ? "btn-primary" : "btn-secondary"}`}>
+            {inline && exporting ? "Exporting…" : clip.last_export_path ? "Re-export" : "Export"} <ShortcutBadge keyboard="Enter" bindingId="export" /></button>
+          {!inline && <button type="button" onClick={() => dispatchAction({ type: "export", advance: true })} disabled={!candidateReady || exporting || requesting || !nextClipId}
             title={nextClipId ? "Export and open the next clip (Command+Enter)" : "No next clip in this view"}
             className="btn btn-primary">
             {exporting ? "Exporting…" : "Export & Next"}
             <ShortcutBadge keyboard="⌘ Enter" bindingId="export-next" />
-          </button>
+          </button>}
         </div>
       </footer>
   </>;
