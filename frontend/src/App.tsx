@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isExploreClip, orderByLikelyKeep } from "./reviewOrder";
 import TriageScreen from "./TriageScreen";
+import { isIdle, viewEvent, type OpenView, type ViewEndReason } from "./reviewViews";
 import { api, applySessionDelta, audioUrl, bootstrap, sendReviewEvents, uploadAudio, type Clip, type ClipFeaturesJob, type ClipTranscriptionJob, type LeadingSilenceJob, type PreviewJob, type Session, type SessionDelta, type SnapPoints, type Status } from "./api";
 import WaveformEditor from "./WaveformEditor";
 import { Button, CountBadge, Panel, StageLayout, StatusBadge, statusLabels } from "./ui";
@@ -58,9 +59,8 @@ type AppSettings = {
 
 // Titles longer than this get a "Show full title" toggle under their two-line clamp.
 const LONG_TITLE_CHARS = 60;
-// A clip counts as viewed for the review log after this long on screen.
-const VIEW_MIN_MS = 1000;
 const VIEW_FLUSH_MS = 10_000;
+const VIEW_IDLE_CHECK_MS = 5_000;
 
 const SETTINGS_STORAGE_KEY = "jipandan-settings";
 
@@ -600,52 +600,75 @@ export default function App() {
   }, [visible, effectiveOrder, activeFilter, mode, settings.exploreRanking, exploreSeed, session?.likely_keep_version]);
 
   // A "view" is logged once a clip has been on screen for VIEW_MIN_MS, with how often it was played.
-  const viewRef = useRef<{ audio: string; clipId: string; started: number; plays: number; context: object } | null>(null);
+  // It ends when the clip changes, the page is hidden or loses focus, or input stops for VIEW_IDLE_MS.
+  const viewRef = useRef<OpenView | null>(null);
   const pendingViewsRef = useRef<object[]>([]);
   const flushViews = useCallback((keepalive = false) => {
     const events = pendingViewsRef.current.splice(0);
     if (events.length) void sendReviewEvents(events, keepalive);
   }, []);
-  const closeView = useCallback(() => {
+  const autoplayRef = useRef(settings.autoplayClips);
+  autoplayRef.current = settings.autoplayClips;
+  const closeView = useCallback((reason: ViewEndReason) => {
     const view = viewRef.current;
     viewRef.current = null;
     if (!view) return;
-    const dwell = Date.now() - view.started;
-    if (dwell >= VIEW_MIN_MS) {
-      pendingViewsRef.current.push({
-        type: "view", audio: view.audio, clip: view.clipId, started_at: view.started, dwell_ms: dwell,
-        plays: view.plays, autoplay: settings.autoplayClips, context: view.context,
-      });
-    }
+    const event = viewEvent(view, Date.now(), reason, autoplayRef.current);
+    if (event) pendingViewsRef.current.push(event);
   }, []);
   const reviewingClip = session?.audio && !session.needs_transcription ? selected : null;
   const startViewRef = useRef<() => void>(() => {});
   startViewRef.current = () => {
+    const now = Date.now();
     viewRef.current = reviewingClip && session?.audio
-      ? { audio: session.audio, clipId: reviewingClip.clip_id, started: Date.now(), plays: 0,
+      ? { audio: session.audio, clipId: reviewingClip.clip_id, started: now, lastActive: now, plays: 0,
           context: rankingContext(reviewingClip) }
       : null;
   };
+  // Input or playback keeps a view going, or starts a new one after it ended for being idle.
+  const markViewActivityRef = useRef<() => void>(() => {});
+  markViewActivityRef.current = () => {
+    if (viewRef.current) viewRef.current.lastActive = Date.now();
+    else if (document.visibilityState === "visible" && document.hasFocus()) startViewRef.current();
+  };
+  const countViewPlayback = useCallback(() => {
+    markViewActivityRef.current();
+    if (viewRef.current) viewRef.current.plays += 1;
+  }, []);
   useEffect(() => {
-    closeView();
+    closeView("clip_change");
     startViewRef.current();
   }, [reviewingClip?.clip_id, session?.audio, closeView]);
   useEffect(() => {
-    const timer = window.setInterval(() => flushViews(), VIEW_FLUSH_MS);
+    const flushTimer = window.setInterval(() => flushViews(), VIEW_FLUSH_MS);
+    const idleTimer = window.setInterval(() => {
+      if (viewRef.current && isIdle(viewRef.current, Date.now())) closeView("idle");
+    }, VIEW_IDLE_CHECK_MS);
     function onVisibility() {
       if (document.visibilityState === "hidden") {
-        closeView();
+        closeView("hidden");
         flushViews(true);
       } else if (!viewRef.current) startViewRef.current();
     }
-    function onPageHide() { closeView(); flushViews(true); }
+    function onBlur() { closeView("blur"); }
+    function onFocus() { if (!viewRef.current && document.visibilityState === "visible") startViewRef.current(); }
+    function onActivity() { markViewActivityRef.current(); }
+    function onPageHide() { closeView("hidden"); flushViews(true); }
+    const activityEvents = ["keydown", "pointerdown", "pointermove", "wheel"] as const;
+    for (const type of activityEvents) window.addEventListener(type, onActivity, { capture: true, passive: true });
     document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("focus", onFocus);
     window.addEventListener("pagehide", onPageHide);
     return () => {
-      window.clearInterval(timer);
+      window.clearInterval(flushTimer);
+      window.clearInterval(idleTimer);
+      for (const type of activityEvents) window.removeEventListener(type, onActivity, { capture: true });
       document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("focus", onFocus);
       window.removeEventListener("pagehide", onPageHide);
-      closeView();
+      closeView("hidden");
       flushViews(true);
     };
   }, [closeView, flushViews]);
@@ -892,6 +915,7 @@ export default function App() {
       isInputSuppressed: () => gamepadCaptureActiveRef.current,
       getContext: () => gamepadDispatchRef.current?.availability.context ?? "review",
       onAction: (action) => {
+        markViewActivityRef.current();
         const current = gamepadDispatchRef.current;
         if (!current) return;
         current.dispatch(action);
@@ -1241,7 +1265,7 @@ export default function App() {
         orderNote={likelyKeepPending ? "Showing clip order until measuring finishes" : null}
         gamepadAction={gamepadActionRequest}
         onGamepadActionHandled={(id) => setGamepadActionRequest((current) => current?.id === id ? null : current)}
-        onPlayback={() => { if (viewRef.current) viewRef.current.plays += 1; }}
+        onPlayback={countViewPlayback}
         onDecide={(status) => dispatchReviewAction({ type: "classify", status })}
         onNavigate={(direction) => dispatchReviewAction({ type: "navigate", direction })}
         onSelect={setSelectedId} />
@@ -1573,7 +1597,7 @@ export default function App() {
                 detectLeadingSilence={settings.detectLeadingSilence}
                 showOriginalStart={settings.showOriginalStart}
                 active={!showExportModal && !showSettings}
-                onPlayback={() => { if (viewRef.current) viewRef.current.plays += 1; }}
+                onPlayback={countViewPlayback}
                 autoplay={settings.autoplayClips}
                 snapping={settings.snapEdges}
                 snapPoints={settings.snapEdges ? snapPoints : null}

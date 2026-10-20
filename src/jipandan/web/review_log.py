@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SOURCES = {"keyboard", "gamepad", "pointer"}
+# Why a view ended: another clip was selected, the page was hidden or lost focus, or input stopped.
+VIEW_END_REASONS = {"clip_change", "hidden", "blur", "idle"}
 MAX_CLIENT_EVENTS = 200
 MAX_DWELL_MS = 6 * 60 * 60 * 1000
 
@@ -62,6 +64,7 @@ def clean_client_event(raw: object, audio: Path) -> dict | None:
         **({"start": _iso(started / 1000)} if started is not None else {}),
         "plays": _int(raw.get("plays"), 0, 10_000) or 0,
         **({"autoplay": raw["autoplay"]} if isinstance(raw.get("autoplay"), bool) else {}),
+        **({"ended_by": raw["ended_by"]} if raw.get("ended_by") in VIEW_END_REASONS else {}),
         **clean_context(raw.get("context")),
     }
 

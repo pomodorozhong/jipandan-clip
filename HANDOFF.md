@@ -4,22 +4,25 @@
 
 ### feat/candidate-generator
 
-- **Task:** #47 generator plus #50, which lets a new session start from transcript lines or generated clips. The PR closes #50 and is related to #47, which stays open: the evaluation missed its target against the old SRT lines. Local branch only, not linked to either issue.
-- **PR:** awaiting owner approval to push and open (P-11); the body says `Closes #50` and `Related to #47`.
-- **Code checkpoint:** `05b6139 feat(web): choose transcript lines or generated clips for new sessions`.
-- **State:** owner agreed on 2026-10-20 to keep both modes, with transcript lines as the default, and to try generated clips on the next real clipping session. Against the app's own transcription of 0614 (web UI defaults), the generator found 48–70% of kept clips against 4–25%, at 998 against 794 clips per hour.
-- **Verification (2026-10-20):** `uv run python -m unittest discover -s tests` passed (83 tests), also at `c708c1b` alone; `npm --prefix frontend run test` (134), `check` and `build` passed. Manual: transcribed a 3-minute cut of 0614 in the app with Voice activity (generated); the session opened from `.candidates.srt` with 36 clips, titles and Likely keep scores, and no changed-transcript prompt.
+- **Task:** #47 generator plus #50, which lets a new session start from transcript lines or generated clips. The PR closes #50 and is related to #47, which stays open: the evaluation missed its target against the old SRT lines. Not linked to either issue.
+- **PR:** #74, open. The owner closed it by mistake on 2026-10-20 and it was reopened; `main` (with #76) was then merged in.
+- **Code checkpoint:** `05b6139 feat(web): choose transcript lines or generated clips for new sessions`, plus a merge of `main` at `16a5129`.
+- **State:** awaiting owner review and merge. The owner agreed on 2026-10-20 to keep both modes, with transcript lines as the default, and to try generated clips on the next real clipping session. Against the app's own transcription of 0614 (web UI defaults), the generator found 48–70% of kept clips against 4–25%, at 998 against 794 clips per hour.
+- **Verification (2026-10-20):** after the merge of `main`, `uv run python -m unittest discover -s tests` passed, and `npm --prefix frontend run test` (137), `check` and `build` passed. Earlier: a manual transcription of a 3-minute cut of 0614 with Voice activity (generated) opened a session from `.candidates.srt` with 36 clips.
 - **Inputs:** private data and tuning notes are in the gitignored `tmp/candidate-generation-2026-10-20/`.
-- **Pending:** P-10, P-11.
-- **Next action:** on approval, push and open the PR; after the owner's next clipping session with generated clips, compare its review speed with past sessions.
-- **P-10** Post the results comment drafted in chat on 2026-10-20 to #47. Why: outward-facing; not yet approved. Blocks: nothing.
-- **P-11** Push `feat/candidate-generator` and open the PR shown in chat on 2026-10-20, and comment on #50 that generated clips are an option rather than the default. Why: pushes and PRs need owner approval. Blocks: merging #50.
+- **Pending:** P-10.
+- **Next action:** owner merges #74, then the `fix/stale-transcription-job` PR.
+- **P-10** Post a results comment to #47 (the draft from 2026-10-20 needs the 0614 app-transcription comparison added). Why: outward-facing; not yet approved. Blocks: nothing.
 
 ## Ranked work
 
-Step 3 candidate generation (milestone):
+Before the owner's next clipping session (2026-10-20: about to start one):
 
-1. #47 Decide whether generated clips beat transcript lines, after the owner's next clipping session uses them (the generator and both session modes are on `main` once this branch merges; see `doc/app-rebuild-plan.md` step 3 and the 2026-10-20 results)
+1. `fix/stale-transcription-job` (no issue): let a recording be transcribed again after its SRT and session are deleted. Built locally; needs `main` merged in and a PR. Workaround meanwhile: open a copy of the recording under a new name.
+
+After that session:
+
+2. #47 Decide whether generated clips should become the default, based on how fast that session went (results in `doc/app-rebuild-plan.md` step 3).
 
 ## Pending
 
