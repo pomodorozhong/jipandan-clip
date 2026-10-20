@@ -48,6 +48,14 @@ class TrimMapTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             retained_ranges(original, self.pcm("different.wav", [-100, -200]))
 
+    def test_skips_stale_sample_and_repeat_from_start_silence_flush(self):
+        source = np.random.default_rng(4).integers(-10000, 10000, 1000, dtype=np.int32)
+        for stale in (0, source[98], 7):
+            with self.subTest(stale=stale):
+                kept = np.concatenate([source[100:400], [stale, source[399]], source[400:700]])
+                result = retained_ranges(self.pcm("source.wav", source), self.pcm("kept.wav", kept))
+                self.assertEqual(result["kept_ranges_ms"], [[100, 700]])
+
     def test_cache_rejects_invalid_trim_geometry(self):
         for ranges in ([[100, 50]], [[0, 1200]], [[0, 200], [100, 300]], [[float("nan"), 200]]):
             self.assertFalse(PreviewJobs._valid_trim_map({
@@ -89,6 +97,23 @@ class TrimMapTests(unittest.TestCase):
                     "ffmpeg", "-v", "error", "-i", str(baseline), "-f", "s32le", "pipe:1",
                 ], capture_output=True, check=True).stdout
                 self.assertEqual(decoded, expected)
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is required")
+    def test_real_filter_maps_speech_after_quiet_noise(self):
+        # Quiet but nonzero audio before the speech makes FFmpeg's start-silence
+        # flush emit a stale nonzero sample (#70).
+        for rate in (44100, 48000):
+            with self.subTest(rate=rate):
+                rng = np.random.default_rng(3)
+                noise = rng.integers(-30_000, 30_000, rate, dtype=np.int32)
+                speech = rng.integers(-300_000_000, 300_000_000, rate, dtype=np.int32)
+                audio = self.pcm(f"noisy-{rate}.wav", np.concatenate([noise, speech, noise, speech, noise]), rate)
+                clip = ClipCandidate(1, "test", "00:00:00.000", "00:00:05.000", "00:00:00.000", "5.000")
+                for mode in ("trim_edges", "trim_all"):
+                    result = render_export_preview(audio, clip, ExportOptions(mode), self.root / f"noisy-{mode}.mp3")
+                    self.assertIsNotNone(result, mode)
+                    self.assertTrue(PreviewJobs._valid_trim_map(result))
+                    self.assertAlmostEqual(result["kept_ranges_ms"][0][0], 900, delta=20)
 
     @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is required")
     def test_trimming_away_all_audio_reports_a_plain_message(self):

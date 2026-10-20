@@ -10,4 +10,4 @@ Step 3 candidate generation (milestone), in dependency order:
 
 App fixes left from step 2 (no milestone; independent of step 3, so they can run while #49 waits on the owner):
 
-4. #70 Publish preview loses its trim overlay (a bug on `main`, gets its own `fix/` branch)
+4. #26 Show export-directory errors inside Settings (goes in the Storage card from #45)
