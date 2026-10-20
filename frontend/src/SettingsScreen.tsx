@@ -70,7 +70,7 @@ function Footnote({ children }: { children: ReactNode }) {
   return <p className="subtle mt-3 mb-3.5 text-xs">{children}</p>;
 }
 
-export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, storageMessage, onClipDirChange,
+export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, storageMessage, storageError, onClipDirChange,
   onChooseClipDir, onResetClipDir, onApplyClipDir,
   detectLeadingSilence, showOriginalStart, exploreRanking, onExploreRankingChange,
   autoplayClips, onAutoplayClipsChange,
@@ -82,6 +82,7 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
   storageEnabled: boolean;
   storageBusy: boolean;
   storageMessage: string;
+  storageError: string;
   onClipDirChange: (path: string) => void;
   onChooseClipDir: () => void;
   onResetClipDir: () => void;
@@ -110,7 +111,15 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
 }) {
   const controllerRef = useRef<HTMLElement>(null);
   const clipDirId = useId();
+  const clipDirRef = useRef<HTMLInputElement>(null);
   const storageDisabled = !storageEnabled || storageBusy;
+
+  useEffect(() => {
+    if (!storageError) return;
+    // Wait a frame so the closing confirmation's focus restore doesn't win.
+    const frame = requestAnimationFrame(() => clipDirRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [storageError]);
 
   useEffect(() => {
     if (!focusController) return;
@@ -186,10 +195,12 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
       <div className="grid gap-2 py-3.5">
         <RowText title="Export directory" htmlFor={clipDirId}
           description={<span id={`${clipDirId}-hint`}>Absolute paths and paths beginning with <code>~</code> are supported.</span>} />
-        <input id={clipDirId} type="text" value={clipDir} disabled={storageDisabled}
+        <input ref={clipDirRef} id={clipDirId} type="text" value={clipDir} disabled={storageDisabled}
           onChange={(event) => onClipDirChange(event.target.value)}
-          placeholder="/path/to/exports" aria-describedby={`${clipDirId}-hint`}
-          className={`${FIELD} block w-full font-mono text-xs disabled:opacity-50`} />
+          placeholder="/path/to/exports" aria-invalid={Boolean(storageError)}
+          aria-describedby={storageError ? `${clipDirId}-hint ${clipDirId}-error` : `${clipDirId}-hint`}
+          className={`${FIELD} block w-full font-mono text-xs disabled:opacity-50 ${storageError ? "border-[#a96053]" : ""}`} />
+        {storageError && <p id={`${clipDirId}-error`} role="alert" className="text-xs text-[#ffb3a8]">{storageError}</p>}
         <div className="mt-1 flex flex-wrap items-center gap-2.5">
           <Button disabled={storageDisabled} onClick={onChooseClipDir}>Choose folder…</Button>
           <Button disabled={storageDisabled} onClick={onResetClipDir}>Reset to default</Button>

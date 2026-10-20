@@ -154,6 +154,19 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(revealed.status_code, 200, revealed.text)
         launch.assert_called_once_with(["xdg-open", str(old_output.parent.resolve())])
 
+    def test_storage_rejects_a_file_as_export_directory(self):
+        self.open()
+        before = self.service.session.clip_dir
+        existing_file = self.root / "existing.mp3"
+        existing_file.write_bytes(b"not a directory")
+        rejected = self.client.patch(
+            "/api/session/storage",
+            json={"expected_revision": self.service.session.revision, "clip_dir": str(existing_file)},
+            headers=self.headers,
+        )
+        self.assertEqual(rejected.status_code, 422, rejected.text)
+        self.assertEqual(self.stored().clip_dir, before)
+
     def test_storage_default_and_native_picker(self):
         self.open()
         default = self.client.get("/api/session/storage/default")
