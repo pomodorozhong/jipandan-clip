@@ -110,7 +110,3 @@ def speech_runs(
         for start, end in runs if (end - start) * FRAME_MS >= min_run_ms
     ]
 
-
-def speech_ends_ms(audio: Path) -> list[int]:
-    """Return the end of every speech run in ``audio``, in milliseconds."""
-    return [end for _, end in speech_runs(speech_probabilities(decode_audio(audio)))]

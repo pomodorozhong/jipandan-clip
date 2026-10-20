@@ -6,6 +6,7 @@ import bisect
 import itertools
 import math
 from dataclasses import dataclass
+from pathlib import Path
 
 # Voice activity for candidates uses a lower threshold than snap points: on 0602 it found more
 # kept clips at every edge tolerance, since kept clips keep quiet speech at their edges.
@@ -18,6 +19,15 @@ END_SNAP_MS = 1000
 # 1–99% of kept clips on 0602 are 0.5–5.4 s long.
 MIN_LENGTH_MS = 600
 MAX_LENGTH_MS = 5000
+
+
+def candidates_srt_path(srt_path: Path) -> Path:
+    """SRT holding the candidates generated while transcribing ``srt_path``."""
+    return srt_path.with_name(f"{srt_path.stem}.candidates.srt")
+
+
+def is_candidates_srt(srt_path: Path) -> bool:
+    return srt_path.name.endswith(".candidates.srt")
 
 
 @dataclass(frozen=True)
@@ -118,3 +128,24 @@ def generate_candidates(
         for start, end in sorted(bounds)
         if min_length_ms <= end - start <= max_length_ms
     ]
+
+
+def best_segments(segments: list[dict], candidates: list[Candidate]) -> list[dict]:
+    """Return, for each candidate, the Whisper segment that overlaps it most (or the nearest)."""
+    ordered = sorted(segments, key=lambda segment: float(segment["start"]))
+    starts = [round(float(segment["start"]) * 1000) for segment in ordered]
+    ends = [round(float(segment["end"]) * 1000) for segment in ordered]
+    matched = []
+    for candidate in candidates:
+        high = bisect.bisect_left(starts, candidate.end_ms)
+        # Segments are short and rarely nest, so the few before the candidate's end are enough.
+        nearby = range(max(0, high - 20), min(len(ordered), high + 1))
+        best = max(
+            nearby,
+            key=lambda i: (
+                min(ends[i], candidate.end_ms) - max(starts[i], candidate.start_ms),
+                -abs(starts[i] - candidate.start_ms),
+            ),
+        )
+        matched.append(ordered[best])
+    return matched
