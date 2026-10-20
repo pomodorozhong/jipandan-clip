@@ -85,6 +85,48 @@ export function bindingsForGamepadConfig(config: GamepadBindingConfig): readonly
   }));
 }
 
+export type GamepadBindingGroup = {
+  id: string;
+  title: string;
+  description: string;
+  bindings: readonly GamepadButtonBinding[];
+};
+
+// The mapping screen lists bindings in these task groups; anything not named
+// here lands in a final Other group so a new shortcut is never hidden.
+const GAMEPAD_BINDING_GROUPS: readonly { id: string; title: string; description: string; ids: readonly ShortcutId[] }[] = [
+  { id: "move", title: "Move and play", description: "Triage and Polish",
+    ids: ["previous", "next", "replay", "play-pause"] },
+  { id: "decide", title: "Decide", description: "Triage and Polish",
+    ids: ["group1", "group2", "rejected", "undo"] },
+  { id: "edges", title: "Trim edges", description: "Polish and Publish",
+    ids: ["nudge-start-fine-back", "nudge-start-fine-forward", "nudge-start-coarse-back", "nudge-start-coarse-forward",
+      "nudge-end-fine-back", "nudge-end-fine-forward", "nudge-end-coarse-back", "nudge-end-coarse-forward",
+      "snap-start-back", "snap-start-forward", "snap-end-back", "snap-end-forward"] },
+  { id: "boundary", title: "Selected boundary", description: "Pick an edge, then move it with fewer buttons",
+    ids: ["trim-select-start", "trim-select-end", "trim-nudge-fine-back", "trim-nudge-fine-forward",
+      "trim-nudge-coarse-back", "trim-nudge-coarse-forward", "trim-snap-back", "trim-snap-forward"] },
+  { id: "publish", title: "Publish and export preview", description: "Playback, export mode, and export",
+    ids: ["candidate-replay", "candidate-play-pause", "reference-replay", "reference-play-pause",
+      "export-mode-as-is", "export-mode-trim-edges", "export-mode-trim-all", "export", "export-next", "reveal-export", "dialog-close"] },
+  { id: "tools", title: "Clip tools", description: "Less frequent review actions",
+    ids: ["rename", "duplicate", "open-export", "jump", "focus-search", "show-help"] },
+];
+
+export function groupGamepadBindings(bindings: readonly GamepadButtonBinding[]): readonly GamepadBindingGroup[] {
+  const byId = new Map(bindings.map((binding) => [binding.id, binding]));
+  const groups: GamepadBindingGroup[] = GAMEPAD_BINDING_GROUPS.map(({ ids, ...group }) => ({
+    ...group,
+    bindings: ids.flatMap((id) => {
+      const binding = byId.get(id);
+      byId.delete(id);
+      return binding ? [binding] : [];
+    }),
+  }));
+  if (byId.size) groups.push({ id: "other", title: "Other", description: "", bindings: [...byId.values()] });
+  return groups.filter((group) => group.bindings.length > 0);
+}
+
 /** Publish prioritizes explicit export bindings, then reuses free review controls.
  * In particular, the review replay button plays the candidate. Keeping the
  * persisted review and dialog maps separate preserves existing custom layouts.
