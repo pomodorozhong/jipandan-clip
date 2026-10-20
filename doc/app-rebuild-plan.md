@@ -54,6 +54,13 @@ Clip timing findings (2026-10-16, 1,380 retimed keeps on three recordings; detai
 - Together they put both edges within 0.25 s on 48% of retimed clips (chance 7%), as choices offered in Polish. Moving SRT edges to the nearest point automatically does not help (21% vs 22% for the SRT as is).
 - Breeze-ASR-25, a Taiwanese Mandarin fine-tune of Whisper, is not worth a second transcription pass. Its word ends are better than Whisper's but worse than VAD's, it takes 1.5–2 times as long as Whisper, and it left keep/skip ranking unchanged.
 
+How candidates are evaluated (owner decision, 2026-10-20, [#49](https://github.com/pomodorozhong/jipandan-clip/issues/49)):
+
+- **Recordings:** 0511, 0526, and 0614, where reviews are complete enough that unkept clips are real rejections. 0511 was fully listened to; in 0614 only explicit rejections count.
+- **Match rule:** a candidate finds a kept clip when it overlaps the kept clip's final exported bounds by at least 80% and both edges fall within an edge tolerance. The tolerance is not fixed yet: 300 ms is likely too strict, so the evaluation script reports results at several tolerances, and the owner picks one after seeing them for SRT lines and the generator.
+- **Metrics:** the share of kept clips found (recall), candidates per hour of recording (review cost), and the boundary error a found clip would still need fixed.
+- **Target:** the generator beats SRT lines when it has the same or better recall with fewer candidates and smaller edge errors.
+
 ## Ranking direction
 
 Triage orders clips by a "Likely keep" score. The app ships fixed built-in weights rather than training per user. The event log, plus 5% exploration picks, collects unbiased review data for retraining the weights centrally.
