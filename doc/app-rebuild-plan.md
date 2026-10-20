@@ -17,7 +17,7 @@ Open work for each step is tracked as GitHub issues in that step's milestone. Th
 | Step | Scope | Status |
 | --- | --- | --- |
 | 1 | Per-recording SQLite event store, delta responses, Triage stage | Done ([#34](https://github.com/pomodorozhong/jipandan-clip/pull/34), [#36](https://github.com/pomodorozhong/jipandan-clip/pull/36)–[#38](https://github.com/pomodorozhong/jipandan-clip/pull/38)) |
-| 2 | Fast sample-exact previews and a Publish stage | Merged ([#35](https://github.com/pomodorozhong/jipandan-clip/pull/35), [#39](https://github.com/pomodorozhong/jipandan-clip/pull/39)); owner review in [#46](https://github.com/pomodorozhong/jipandan-clip/issues/46), UI pass in [Step 2 UI consistency](https://github.com/pomodorozhong/jipandan-clip/milestone/1) |
+| 2 | Fast sample-exact previews and a Publish stage | Done ([#35](https://github.com/pomodorozhong/jipandan-clip/pull/35), [#39](https://github.com/pomodorozhong/jipandan-clip/pull/39), UI pass in [Step 2 UI consistency](https://github.com/pomodorozhong/jipandan-clip/milestone/1)); owner sign-off on 2026-10-20 in [#46](https://github.com/pomodorozhong/jipandan-clip/issues/46) |
 | 3 | Soundboard-oriented candidate generation | Planned: [Step 3 candidate generation](https://github.com/pomodorozhong/jipandan-clip/milestone/2) |
 
 Each step is judged by the owner in the real app before the next one starts. A fourth step, packaging the app for friends on Macs, was dropped on 2026-10-13.
@@ -28,7 +28,7 @@ Each recording is stored in `<recording>.jipandan.db`: a clip table with the cur
 
 ### Step 2: previews and Publish
 
-Owner review is tracked in [#46](https://github.com/pomodorozhong/jipandan-clip/issues/46). Previews and exports seek straight to each clip without losing sample accuracy. Publish works through the Ready queue with Ready and Exported lists, an inline export panel, and export snapshots that flag later edits. Polish opens on Group 1 and focuses on titles and timing.
+The owner signed off on 2026-10-20 after checking it in the real app on a real recording ([#46](https://github.com/pomodorozhong/jipandan-clip/issues/46)). Previews and exports seek straight to each clip without losing sample accuracy. Publish works through the Ready queue with Ready and Exported lists, an inline export panel, Export all, and export snapshots that flag later edits. Polish opens on Needs work and focuses on titles and timing.
 
 Decisions:
 
@@ -40,6 +40,8 @@ Decisions:
 - The UI consistency pass follows the [mockup](mockups/step-2-ui/README.md) the owner approved in [#41](https://github.com/pomodorozhong/jipandan-clip/issues/41): one panel, section header, three button weights, a badge set, and a list-plus-main layout shared by all three stages. Triage gains a segmented progress panel, a bounded Up next queue in Likely keep order, and a view-only waveform with padding around the clip.
 - Group 1 and Group 2 are renamed **Needs work** and **Ready** in the UI, since the numbers said nothing about what happens next; stored statuses stay `group1`/`group2` ([#42](https://github.com/pomodorozhong/jipandan-clip/issues/42)).
 - Triage decides Needs work, Ready, or Reject; existing Unsure clips return to Unsorted when opened ([#52](https://github.com/pomodorozhong/jipandan-clip/issues/52)).
+- Each clip status is listed in one stage: Polish has Needs work, Unsorted, and Rejected tabs, and Publish has Ready and Exported. Five tabs in Polish's narrow list column were too cramped, and Publish can already edit and move Ready and Exported clips.
+- The gamepad mapping screen groups actions by task, since one list of every action made controls hard to find.
 
 ### Step 3: candidate generation
 
