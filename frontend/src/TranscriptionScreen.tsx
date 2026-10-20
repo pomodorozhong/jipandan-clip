@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, eventsUrl, type Session, type TranscriptionJob } from "./api";
+import { api, eventsUrl, type ClipSource, type Session, type TranscriptionJob } from "./api";
 
 function elapsed(start: number | null, end: number | null, now: number): string {
   if (!start) return "—";
@@ -17,6 +17,7 @@ export default function TranscriptionScreen({ session, onReady }: {
   const [temperature, setTemperature] = useState(String(job?.settings.temperature ?? 0));
   const [context, setContext] = useState(String(job?.settings.max_context ?? 0));
   const [threshold, setThreshold] = useState(String(job?.settings.entropy_thold ?? 3));
+  const [clipSource, setClipSource] = useState<ClipSource>(job?.settings.clip_source ?? "lines");
   const [now, setNow] = useState(Date.now() / 1000);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -64,7 +65,7 @@ export default function TranscriptionScreen({ session, onReady }: {
       const next = await api<TranscriptionJob>("/transcriptions", "POST", {
         audio: session.audio, model_name: model.trim(), language: language.trim() || null,
         temperature: Number(temperature), max_context: Number(context),
-        entropy_thold: Number(threshold),
+        entropy_thold: Number(threshold), clip_source: clipSource,
       });
       setJob(next);
     } catch (cause) {
@@ -130,6 +131,14 @@ export default function TranscriptionScreen({ session, onReady }: {
         </svg>
       </button>
       {settingsOpen && <div id="transcription-settings" className="mt-4 grid gap-4 sm:grid-cols-2">
+        <label className="text-sm sm:col-span-2">Clips from
+          <select value={clipSource} onChange={(event) => setClipSource(event.target.value as ClipSource)} disabled={active}
+            className="mt-1 w-full rounded-lg border line bg-[#101816] px-3 py-2">
+            <option value="lines">Transcript lines</option>
+            <option value="generated">Voice activity (generated)</option>
+          </select>
+          <span className="subtle mt-1 block">Generated clips are cut where speech starts and stops, so they are shorter with tighter edges. Both are saved; this picks which one the new session uses.</span>
+        </label>
         <label className="text-sm">Model
           <input value={model} onChange={(event) => setModel(event.target.value)} disabled={active}
             className="mt-1 w-full rounded-lg border line bg-[#101816] px-3 py-2" placeholder="large-v3" />

@@ -6,8 +6,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
+
 from jipandan.core import ffmpeg, whisper
+from jipandan.core.candidates import candidates_srt_path
 from jipandan.core.models import Session
+from jipandan.core.srt import load_segment_scores, parse_srt
 from jipandan.core.snap_points import load_snap_points, snap_points_path
 
 
@@ -85,7 +89,7 @@ class SessionSafetyTests(unittest.TestCase):
         self.assertEqual(self.srt.read_bytes(), old)
         self.assertEqual(list(self.root.glob(".audio.srt.*.tmp")), [])
 
-    def transcribe_with_words(self, speech_ends):
+    def transcribe_with_words(self, speech):
         calls = []
 
         def transcribe(*args, **kwargs):
@@ -98,27 +102,53 @@ class SessionSafetyTests(unittest.TestCase):
 
         with patch.dict(sys.modules, {"mlx_whisper": types.SimpleNamespace(transcribe=transcribe)}), \
              patch.object(whisper, "configure_progress_bars"), \
-             patch.object(whisper, "_speech_ends_ms", side_effect=speech_ends):
+             patch.object(whisper, "_speech_probabilities", side_effect=speech):
             whisper.transcribe_to_text(self.audio, self.srt)
         self.assertTrue(calls[0]["word_timestamps"])
         fingerprint = hashlib.sha256(self.srt.read_bytes()).hexdigest()
         return load_snap_points(self.srt, fingerprint)
 
+    @staticmethod
+    def speech(*frames):
+        """Silero probabilities with speech in each (first, last) span of 32 ms frames."""
+        def probabilities(audio):
+            values = np.zeros(200, np.float32)
+            for first, last in frames:
+                values[first:last] = 0.9
+            return values
+        return probabilities
+
     def test_transcription_saves_word_starts_and_speech_ends(self):
-        points = self.transcribe_with_words(lambda audio: [2100, 4200])
-        self.assertEqual(points, {"word_start": [1000, 1500, 3000], "speech_end": [2100, 4200]})
+        points = self.transcribe_with_words(self.speech((31, 66), (94, 131)))
+        self.assertEqual(points, {"word_start": [1000, 1500, 3000], "speech_end": [2112, 4192]})
+
+    def test_transcription_saves_generated_candidates_beside_the_srt(self):
+        self.transcribe_with_words(self.speech((31, 66), (94, 131)))
+        candidates = candidates_srt_path(self.srt)
+        self.assertEqual(candidates.name, "audio.candidates.srt")
+        entries = parse_srt(candidates)
+        # Each speech run starts 0.2 s early; the segments snap to the same bounds.
+        self.assertEqual(
+            [(e.start, e.end, e.text) for e in entries],
+            [("00:00:00,792", "00:00:02,112", "First"), ("00:00:02,808", "00:00:04,192", "Second")],
+        )
+        fingerprint = hashlib.sha256(candidates.read_bytes()).hexdigest()
+        self.assertEqual(sorted(load_segment_scores(candidates, fingerprint)), [1, 2])
+        self.assertEqual(load_snap_points(candidates, fingerprint)["speech_end"], [2112, 4192])
 
     def test_failed_voice_activity_keeps_transcript_and_word_starts(self):
         def fail(audio):
             raise RuntimeError("no model")
 
+        stale = candidates_srt_path(self.srt)
+        stale.write_text(SRT, encoding="utf-8")
         self.assertEqual(self.transcribe_with_words(fail), {"word_start": [1000, 1500, 3000]})
+        self.assertFalse(stale.exists())
 
     def test_snap_points_from_another_srt_are_ignored(self):
-        self.transcribe_with_words(lambda audio: [2100])
+        self.transcribe_with_words(self.speech((31, 66)))
         self.assertTrue(snap_points_path(self.srt).is_file())
         self.assertEqual(load_snap_points(self.srt, "other"), {})
-
 
 if __name__ == "__main__":
     unittest.main()

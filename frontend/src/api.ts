@@ -126,6 +126,8 @@ export interface ClipTranscriptionJob {
   error: string | null;
 }
 
+export type ClipSource = "lines" | "generated";
+
 export interface TranscriptionJob {
   id: string;
   audio: string;
@@ -135,6 +137,8 @@ export interface TranscriptionJob {
     temperature: number;
     max_context: number;
     entropy_thold: number;
+    // Missing on jobs saved before generated clips existed, which used transcript lines.
+    clip_source?: ClipSource;
   };
   state: "queued" | "running" | "completed" | "failed" | "cancelled";
   phase: string;

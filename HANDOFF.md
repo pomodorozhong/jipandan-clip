@@ -2,25 +2,27 @@
 
 ## In progress
 
-### fix/idle-review-time
+### feat/candidate-generator
 
-- **Task:** #75, stop counting review time while the app is unfocused or idle. Closes #75 when its PR merges. Local branch only, not linked to the issue.
-- **PR:** awaiting owner approval to push and open, ahead of #74; the body says `Closes #75`.
-- **Code checkpoint:** `9e9887f fix(web): stop counting review time while the app is unfocused or idle`.
-- **State:** awaiting owner review. Views end on window blur and after 60 s without input or playback (an idle view ends at its last input), and each view event stores `ended_by`.
-- **Verification (2026-10-20):** `uv run python -m unittest discover -s tests` passed; `npm --prefix frontend run test` (137), `check` and `build` passed. In the app on a 3-minute cut of 0614: a window blur ended a view as `blur` and focus started a new one; a minute without input ended a view as `idle`, counting only the time up to the last input.
-- **Next action:** show the owner a PR title and body for approval.
+- **Task:** #47 generator plus #50, which lets a new session start from transcript lines or generated clips. The PR closes #50 and is related to #47, which stays open: the evaluation missed its target against the old SRT lines. Not linked to either issue.
+- **PR:** #74, open. The owner closed it by mistake on 2026-10-20 and it was reopened; `main` (with #76) was then merged in.
+- **Code checkpoint:** `05b6139 feat(web): choose transcript lines or generated clips for new sessions`, plus a merge of `main` at `16a5129`.
+- **State:** awaiting owner review and merge. The owner agreed on 2026-10-20 to keep both modes, with transcript lines as the default, and to try generated clips on the next real clipping session. Against the app's own transcription of 0614 (web UI defaults), the generator found 48–70% of kept clips against 4–25%, at 998 against 794 clips per hour.
+- **Verification (2026-10-20):** after the merge of `main`, `uv run python -m unittest discover -s tests` passed, and `npm --prefix frontend run test` (137), `check` and `build` passed. Earlier: a manual transcription of a 3-minute cut of 0614 with Voice activity (generated) opened a session from `.candidates.srt` with 36 clips.
+- **Inputs:** private data and tuning notes are in the gitignored `tmp/candidate-generation-2026-10-20/`.
+- **Pending:** P-10.
+- **Next action:** owner merges #74, then the `fix/stale-transcription-job` PR.
+- **P-10** Post a results comment to #47 (the draft from 2026-10-20 needs the 0614 app-transcription comparison added). Why: outward-facing; not yet approved. Blocks: nothing.
 
 ## Ranked work
 
 Before the owner's next clipping session (2026-10-20: about to start one):
 
-1. #74 Review and merge the PR that lets new sessions start from generated clips (closes #50; branch `feat/candidate-generator`). The owner is testing it in the app. It needs `main` merged in after #75's PR, with a `HANDOFF.md` conflict to resolve.
-2. `fix/stale-transcription-job` (no issue): let a recording be transcribed again after its SRT and session are deleted. Built locally; its PR comes after #74. Workaround meanwhile: open a copy of the recording under a new name.
+1. `fix/stale-transcription-job` (no issue): let a recording be transcribed again after its SRT and session are deleted. Built locally; needs `main` merged in and a PR. Workaround meanwhile: open a copy of the recording under a new name.
 
 After that session:
 
-3. #47 Decide whether generated clips should become the default, based on how fast that session went (results in `doc/app-rebuild-plan.md` step 3 once #74 merges).
+2. #47 Decide whether generated clips should become the default, based on how fast that session went (results in `doc/app-rebuild-plan.md` step 3).
 
 ## Pending
 

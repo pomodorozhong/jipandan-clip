@@ -18,6 +18,8 @@ def main() -> None:
     print(f"Audio file: {audio}", flush=True)
     print(f"Settings: {json.dumps(settings, ensure_ascii=False, sort_keys=True)}", flush=True)
     print("Loading model and transcribing audio…", flush=True)
+    # The clip source only picks which saved SRT a new session uses; transcription writes both.
+    settings.pop("clip_source", None)
     transcribe_to_text(audio, output, **settings)
     finished = datetime.now(timezone.utc).isoformat(timespec="seconds")
     print(f"[{finished}] Transcript validated and ready: {output}", flush=True)
