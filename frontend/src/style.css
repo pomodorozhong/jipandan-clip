@@ -44,7 +44,9 @@ input:focus-visible, button:focus-visible { outline: 2px solid #b4e2b6; outline-
 
 /* Shared pieces from the approved step 2 mockup (doc/mockups/step-2-ui). */
 .panel { background: #192420; border: 1px solid #34423b; border-radius: 16px; min-width: 0; }
-.panel-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 12px 18px; border-bottom: 1px solid #34423b; }
+.panel-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; min-height: 42px; padding: 10px 18px; border-bottom: 1px solid #34423b; }
+/* Keep a badge or control beside the heading from adding a text line's height to the strip. */
+.panel-head > :not(:first-child) { display: flex; align-items: center; }
 .eyebrow { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .15em; text-transform: uppercase; color: #9eafa3; }
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; box-sizing: border-box; padding: 0 14px; border-radius: 10px; border: 1px solid transparent; font-size: 14px; font-weight: 600; white-space: nowrap; transition: background-color .12s; }
 .btn-primary { background: #b7d69d; color: #1b291f; }
@@ -69,6 +71,9 @@ input:focus-visible, button:focus-visible { outline: 2px solid #b4e2b6; outline-
 .seg-btn:hover { background: #22312a; }
 .seg-btn[aria-pressed="true"] { background: #b7d69d; color: #1b291f; }
 .seg-btn[aria-pressed="true"] .count-badge { background: #1b291f; color: #d4ecbe; }
+/* Many short options in a narrow column: each sizes to its label, with the count beneath. */
+.seg-compact { display: flex; }
+.seg-compact .seg-btn { flex: 1 1 auto; flex-direction: column; gap: 2px; min-width: 0; min-height: 40px; padding: 4px 6px; font-size: 12px; }
 
 /* Top bar (#43): one row, with the stage switcher on its own centered row below 1000 px. */
 .topbar { container-type: inline-size; background: #141e1a; border-bottom: 1px solid #34423b; }

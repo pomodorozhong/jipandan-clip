@@ -38,8 +38,7 @@ import {
   type InputAction,
 } from "./inputActions";
 
-type Filter = "unsorted" | "group1" | "group2" | "exported" | "all";
-type AllStatusFilter = "all" | Status;
+type Filter = "unsorted" | "group1" | "group2" | "rejected";
 type AllOrder = "clip-asc" | "clip-desc" | "start-asc" | "start-desc" | "title-asc" | "likely-desc";
 type SaveState = "saved" | "saving" | "failed";
 // Triage: one clip at a time for first-pass decisions. Polish: the list and editor for keepers.
@@ -94,12 +93,11 @@ function loadSettings(): AppSettings {
   };
 }
 
-const filters: { key: Filter; label: string }[] = [
-  { key: "group1", label: statusLabels.group1 },
-  { key: "group2", label: statusLabels.group2 },
-  { key: "unsorted", label: "Unsorted" },
-  { key: "exported", label: "Exported" },
-  { key: "all", label: "All" },
+// Polish's tabs. Ready and Exported clips are listed in Publish, which can edit them too.
+const filters: { key: Filter; label: string; hint: string }[] = [
+  { key: "group1", label: statusLabels.group1, hint: "Fix titles and timing, then mark Ready" },
+  { key: "unsorted", label: "Unsorted", hint: "Clips Triage hasn't decided yet" },
+  { key: "rejected", label: statusLabels.rejected, hint: "Change a clip's status to bring it back" },
 ];
 
 const allOrders: { key: AllOrder; label: string }[] = [
@@ -141,15 +139,11 @@ function formatDuration(ms: number): string {
   return `${Math.floor(ms / 60000)}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, "0")}`;
 }
 
-function visibleClips(
-  clips: Clip[], filter: Filter, query: string,
-  allStatusFilter: AllStatusFilter = "all",
-): Clip[] {
+function visibleClips(clips: Clip[], filter: Filter, query: string): Clip[] {
   const needle = query.trim().normalize("NFKC").toLocaleLowerCase();
   return clips.filter((clip) => {
     if (filter === "unsorted" && clip.status !== "pending") return false;
-    if (filter !== "unsorted" && filter !== "all" && clip.status !== filter) return false;
-    if (filter === "all" && allStatusFilter !== "all" && clip.status !== allStatusFilter) return false;
+    if (filter !== "unsorted" && clip.status !== filter) return false;
     if (needle && !clip.title.normalize("NFKC").toLocaleLowerCase().includes(needle)) return false;
     return true;
   });
@@ -265,7 +259,6 @@ export default function App() {
     const timer = window.setTimeout(() => setNotice((current) => current?.id === notice.id ? null : current), 3000);
     return () => window.clearTimeout(timer);
   }, [notice]);
-  const [allStatusFilter, setAllStatusFilter] = useState<AllStatusFilter>("all");
   const [allOrder, setAllOrder] = useState<AllOrder>("clip-asc");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -392,36 +385,33 @@ export default function App() {
       try {
         const preferences = JSON.parse(saved) as {
           filter?: Filter; selectedId?: string;
-          allStatusFilter?: AllStatusFilter; allOrder?: AllOrder; mode?: Mode;
+          allOrder?: AllOrder; mode?: Mode;
         };
         setMode(preferences.mode === "polish" || preferences.mode === "publish" ? preferences.mode : "triage");
         if (preferences.filter && filters.some((item) => item.key === preferences.filter)) {
           setFilter(preferences.filter);
-        } else if (session.counts.pending === 0) setFilter("all");
+        } else if (session.counts.pending === 0) setFilter("group1");
         setSelectedId(preferences.selectedId ?? null);
-        if (preferences.allStatusFilter === "all" || Object.hasOwn(statusLabels, preferences.allStatusFilter ?? "")) {
-          setAllStatusFilter(preferences.allStatusFilter!);
-        }
         if (allOrders.some((item) => item.key === preferences.allOrder)) {
           setAllOrder(preferences.allOrder!);
         }
       } catch {
-        if (session.counts.pending === 0) setFilter("all");
+        if (session.counts.pending === 0) setFilter("group1");
       }
     } else {
       // New sessions start in Triage, and Polish lists them in Likely keep order by default.
       setMode("triage");
       setAllOrder("likely-desc");
-      if (session.counts.pending === 0) setFilter("all");
+      if (session.counts.pending === 0) setFilter("group1");
     }
   }, [session?.audio]);
 
   useEffect(() => {
     if (!session?.audio) return;
     localStorage.setItem(`jipandan-review:${session.audio}`, JSON.stringify({
-      filter, selectedId, allStatusFilter, allOrder, mode,
+      filter, selectedId, allOrder, mode,
     }));
-  }, [session?.audio, filter, selectedId, allStatusFilter, allOrder, mode]);
+  }, [session?.audio, filter, selectedId, allOrder, mode]);
 
   useEffect(() => {
     if (!settings.detectLeadingSilence || !session?.audio || session.needs_transcription ||
@@ -576,7 +566,7 @@ export default function App() {
   const effectiveOrder: AllOrder = likelyKeepPending ? "clip-asc" : activeOrder;
   const visible = useMemo(() => {
     if (mode === "publish") return publishClips(session?.candidates ?? [], publishView);
-    const clips = visibleClips(session?.candidates ?? [], activeFilter, activeQuery, allStatusFilter);
+    const clips = visibleClips(session?.candidates ?? [], activeFilter, activeQuery);
     const compareClipId = (a: Clip, b: Clip) => a.index - b.index || a.suffix - b.suffix;
     if (effectiveOrder === "likely-desc") return orderByLikelyKeep(clips, exploreSeed, settings.exploreRanking, compareClipId);
     return clips.sort((a, b) => {
@@ -586,7 +576,7 @@ export default function App() {
       if (effectiveOrder === "title-asc") return a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: "base" }) || compareClipId(a, b);
       return compareClipId(a, b);
     });
-  }, [session?.candidates, activeFilter, activeQuery, allStatusFilter, effectiveOrder, exploreSeed, settings.exploreRanking, mode, publishView]);
+  }, [session?.candidates, activeFilter, activeQuery, effectiveOrder, exploreSeed, settings.exploreRanking, mode, publishView]);
   const effectiveSelectedId = visible.some((clip) => clip.clip_id === selectedId)
     ? selectedId : (visible[0]?.clip_id ?? null);
   const selected = session?.candidates.find((clip) => clip.clip_id === effectiveSelectedId) ?? null;
@@ -771,7 +761,7 @@ export default function App() {
     let nextSelection = effectiveSelectedId;
     if (selected && typeof change.status === "string") {
       const changed = { ...selected, status: change.status as Status };
-      if (visibleClips([changed], activeFilter, activeQuery, allStatusFilter).length === 0) {
+      if (visibleClips([changed], activeFilter, activeQuery).length === 0) {
         nextSelection = visible[selectedPosition + 1]?.clip_id ??
           visible[selectedPosition - 1]?.clip_id ?? effectiveSelectedId;
       }
@@ -779,7 +769,7 @@ export default function App() {
     void mutate(() => api<SessionDelta>(`/clips/${encodeURIComponent(effectiveSelectedId)}?delta=true`, "PATCH", {
       expected_revision: session.revision, ...change, context: selected ? rankingContext(selected) : undefined,
     })).then((next) => { if (next) setSelectedId(nextSelection); });
-  }, [session, effectiveSelectedId, selected, activeFilter, activeQuery, allStatusFilter,
+  }, [session, effectiveSelectedId, selected, activeFilter, activeQuery,
     visible, selectedPosition, mutate, rankingContext]);
 
   const moveSelection = useCallback((delta: number) => {
@@ -973,7 +963,7 @@ export default function App() {
     if (next) {
       setLeadingSilenceJob(null); setDismissedDetectionJobId(null); loadedDetectionAdjustment.current = null;
       autoDetectionRequest.current = null; loadedDetectionJob.current = null;
-      setQuery(""); setSelectedId(null); setFilter(next.counts.pending > 0 ? "unsorted" : "all");
+      setQuery(""); setSelectedId(null); setFilter(next.counts.pending > 0 ? "unsorted" : "group1");
     }
   }
 
@@ -1242,16 +1232,20 @@ export default function App() {
         onNavigate={(direction) => dispatchReviewAction({ type: "navigate", direction })}
         onSelect={setSelectedId} />
       : mode === "publish" ? <StageLayout label="Publish" list={
-        <Panel title="Publish" ariaLabel="Ready to publish" className="flex max-h-[calc(100dvh-140px)] flex-col overflow-hidden">
-          <div className="border-b line px-4 py-3">
-            <div className="seg flex" role="group" aria-label="Publish list">
-              {(["ready", "exported"] as const).map((view) => <button key={view} type="button" className="seg-btn"
-                aria-pressed={publishView === view} onClick={() => { setPublishView(view); setSelectedId(null); }}>
-                {view === "ready" ? "Ready" : "Exported"}
-                <CountBadge>{view === "ready" ? session.counts.group2 : publishClips(session.candidates, "exported").length}</CountBadge>
-              </button>)}
+        <Panel title="Publish" ariaLabel="Ready to publish"
+          aside={<span className="subtle mono text-xs">{visible.length} {visible.length === 1 ? "clip" : "clips"}</span>} className="flex max-h-[calc(100dvh-140px)] flex-col overflow-hidden">
+          <div className="border-b line p-4">
+            <div className="seg seg-compact mb-1" role="group" aria-label="Publish list">
+              {(["ready", "exported"] as const).map((view) => {
+                const label = view === "ready" ? "Ready" : "Exported";
+                const count = view === "ready" ? session.counts.group2 : publishClips(session.candidates, "exported").length;
+                return <button key={view} type="button" className="seg-btn" aria-label={`${label}, ${count} ${count === 1 ? "clip" : "clips"}`}
+                  aria-pressed={publishView === view} onClick={() => { setPublishView(view); setSelectedId(null); }}>
+                  <span>{label}</span><span aria-hidden="true" className="mono text-[11px] font-normal leading-none opacity-75">{count}</span>
+                </button>;
+              })}
             </div>
-            <p className="subtle mt-2 text-xs">{publishView === "ready" ? "Ready clips in clip order" : "Saved files, including clips edited after export"} · J/K to move</p>
+            <p className="subtle text-xs">{publishView === "ready" ? "Ready clips in clip order" : "Saved files, including clips edited after export"} · J/K to move</p>
             {publishView === "ready" && session.counts.group2 > 0 && <div className="mt-3">
               <Button onClick={() => void startExportAll()} disabled={exportAllRunning || busy || !exportAllSettingsValid}
                 title={exportAllSettingsValid ? "Export every Ready clip with its own title and the current export mode and thresholds"
@@ -1302,6 +1296,8 @@ export default function App() {
               </button>)}
           </div>
         </Panel>} main={selected && session.revision !== null ? <ExportPreview key={selected.clip_id} inline clip={selected}
+          heading={`Clip ${selectedPosition + 1} of ${visible.length}`}
+          headingDetail={`#${selected.clip_id} · ${formatDuration(selected.end_ms - selected.start_ms)}`}
           recordingDurationMs={session.duration_ms ?? undefined}
           initialSettings={publishSettings} onSettingsChange={setPublishSettings}
           revision={session.revision} open={!showSettings && !showHelp && !showJump && !showMerge}
@@ -1339,22 +1335,21 @@ export default function App() {
             <p className="subtle">Select a clip to publish.</p>
           </Panel>} />
       : <StageLayout label="Polish" fill list={
-        <Panel title={filters.find((item) => item.key === filter)?.label} ariaLabel="Clip list"
-          aside={<span title={`${visible.length} visible of ${session.candidates.length} total`}><CountBadge>{visible.length}</CountBadge></span>}
+        <Panel title="Polish" ariaLabel="Clip list"
+          aside={<span className="subtle mono text-xs">{visible.length} {visible.length === 1 ? "clip" : "clips"}</span>}
           className={`${showDetailMobile ? "hidden min-[900px]:flex" : "flex"} min-h-0 flex-col overflow-hidden`}>
           <div className="shrink-0 border-b line p-4">
-            <p className="subtle mb-3 text-xs">Fix titles and timing of clips that need work, then move each keeper to Publish.</p>
-            <div className="mb-3 grid grid-cols-5 overflow-hidden rounded-lg border line bg-[#22312a] p-1" role="group" aria-label="Status filter">
-              {filters.map((item) => <button key={item.key} type="button" onClick={() => setFilter(item.key)}
-                aria-pressed={filter === item.key}
-                aria-label={`${item.label}, ${item.key === "all" ? session.candidates.length : session.counts[item.key === "unsorted" ? "pending" : item.key]} ${
-                  (item.key === "all" ? session.candidates.length : session.counts[item.key === "unsorted" ? "pending" : item.key]) === 1 ? "clip" : "clips"}`}
-                className={`flex min-w-0 flex-col items-center justify-center gap-1 rounded-md px-0.5 py-2 text-[10px] leading-tight sm:text-xs ${filter === item.key ? "bg-[#b7d69d] text-[#1b291f] shadow-sm" : "hover:bg-[#304439] hover:text-white"}`}>
-                <span className="text-center font-semibold">{item.label}</span><span aria-hidden="true" className={`mono text-[11px] font-normal leading-none sm:text-xs ${filter === item.key ? "text-[#435d46]" : "text-[#9eafa3]"}`}>
-                  {item.key === "all" ? session.candidates.length : session.counts[item.key === "unsorted" ? "pending" : item.key]}
-                </span>
-              </button>)}
+            <div className="seg seg-compact mb-1" role="group" aria-label="Status filter">
+              {filters.map((item) => {
+                const count = session.counts[item.key === "unsorted" ? "pending" : item.key];
+                return <button key={item.key} type="button" onClick={() => setFilter(item.key)}
+                  aria-pressed={filter === item.key} aria-label={`${item.label}, ${count} ${count === 1 ? "clip" : "clips"}`}
+                  className="seg-btn">
+                  <span>{item.label}</span><span aria-hidden="true" className="mono text-[11px] font-normal leading-none opacity-75">{count}</span>
+                </button>;
+              })}
             </div>
+            <p className="subtle mb-3 text-xs">{filters.find((item) => item.key === filter)?.hint} · J/K to move</p>
             <div className="flex gap-2">
               <div className="relative min-w-0 flex-1">
                 {/* Native search inputs clear on Escape, including IME-owned Escape presses. */}
@@ -1365,14 +1360,7 @@ export default function App() {
               </div>
               <Button onClick={() => setShowJump(true)} title="Jump to clip index (G)" shortcut="G" shortcutId="jump">Go to #</Button>
             </div>
-            <div className={`mt-3 grid gap-2 ${filter === "all" ? "grid-cols-2" : "grid-cols-1"}`}>
-              {filter === "all" && <label className="subtle min-w-0 text-xs">Filter status
-                <select value={allStatusFilter} onChange={(event) => setAllStatusFilter(event.target.value as AllStatusFilter)}
-                  aria-label="Filter clips by status" className="mt-1 block w-full rounded-lg border line bg-[#101816] px-2.5 py-2 text-sm text-[#e7eee7]">
-                  <option value="all">All statuses</option>
-                  {Object.entries(statusLabels).map(([status, label]) => <option key={status} value={status}>{label}</option>)}
-                </select>
-              </label>}
+            <div className="mt-3 grid gap-2">
               <label className="subtle min-w-0 text-xs">Order by
                 <select value={allOrder} onChange={(event) => setAllOrder(event.target.value as AllOrder)}
                   aria-label="Order clips" className="mt-1 block w-full rounded-lg border line bg-[#101816] px-2.5 py-2 text-sm text-[#e7eee7]">
@@ -1430,34 +1418,28 @@ export default function App() {
                 tabIndex={clip.clip_id === effectiveSelectedId ? 0 : -1}
                 data-selected={clip.clip_id === effectiveSelectedId} onClick={() => { setSelectedId(clip.clip_id); setShowDetailMobile(true); }}
                 className="clip-row flex w-full items-start gap-3 border-b border-[#29362f] px-4 py-3 text-left transition-colors md:px-5">
-                {filter === "all" && <span className={`status-dot status-${clip.status} mt-2`} aria-hidden="true" />}
                 <span className="min-w-0 flex-1">
                   <span className="flex items-baseline gap-2"><span className="subtle mono shrink-0 text-xs">#{clip.clip_id}</span>
                     <span className="truncate text-sm font-medium" title={clip.title}>{clip.title}</span></span>
-                  {filter === "all" && <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                    <span className={`clip-tag clip-tag-${clip.status}`}>{statusLabels[clip.status]}</span>
-                    {changed && <span className="clip-tag clip-tag-trimmed">Trimmed</span>}
-                    {clip.suggested_title && <span className="clip-tag clip-tag-suggestion">New title</span>}
-                  </span>}
                 </span>
-                {filter !== "all" && clip.suggested_title && <span className="clip-tag clip-tag-suggestion shrink-0" title="A re-transcribed title is waiting for review">New title</span>}
-                {filter !== "all" && changed && <span className="clip-tag clip-tag-trimmed shrink-0">Trimmed</span>}
+                {clip.suggested_title && <span className="clip-tag clip-tag-suggestion shrink-0" title="A re-transcribed title is waiting for review">New title</span>}
+                {changed && <span className="clip-tag clip-tag-trimmed shrink-0">Trimmed</span>}
                 <span className="subtle mono shrink-0 text-xs">{formatDuration(clip.end_ms - clip.start_ms)}</span>
               </button>;
             })}
           </div>
         </Panel>} main={
-        <Panel ariaLabel="Clip details" className={`${showDetailMobile ? "flex" : "hidden min-[900px]:flex"} min-h-0 flex-col overflow-hidden`}>
+        <Panel ariaLabel="Clip details" title={selected ? `Clip ${selectedPosition + 1} of ${visible.length}` : undefined}
+          aside={selected && <span className="subtle mono text-xs">#{selected.clip_id} · {formatDuration(selected.end_ms - selected.start_ms)}</span>}
+          className={`${showDetailMobile ? "flex" : "hidden min-[900px]:flex"} min-h-0 flex-col overflow-hidden`}>
           {selected ? <>
             <div className="shrink-0 border-b line px-4 py-3 md:px-6">
               <button type="button" onClick={() => setShowDetailMobile(false)} className="accent mb-2 text-sm min-[900px]:hidden">← Back to clips</button>
               <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2">
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  <span className="eyebrow mono">#{selected.clip_id}</span>
                   <StatusBadge status={selected.status} />
                   {(selected.start_ms !== selected.original_start_ms || selected.end_ms !== selected.original_end_ms)
                     && <span className="clip-tag clip-tag-trimmed">Trimmed</span>}
-                  <span className="subtle mono text-xs">{selectedPosition + 1} of {visible.length}</span>
                 </div>
                 <div className="ml-auto flex flex-wrap items-center gap-1.5">
                   <button type="button" onClick={() => dispatchReviewAction({ type: "navigate", direction: "previous" })} disabled={selectedPosition <= 0}
@@ -1606,10 +1588,10 @@ export default function App() {
           } else if (!advance) {
             setSelectedId(selected.clip_id);
             const exportedClip = next.candidates.find((clip) => clip.clip_id === selected.clip_id);
-            if (exportedClip && !visibleClips([exportedClip], activeFilter, activeQuery, allStatusFilter).length) {
-              setFilter("all");
-              setAllStatusFilter("all");
-              if (!visibleClips([exportedClip], "all", query, "all").length) setQuery("");
+            // Exported clips are listed in Publish, so follow the clip there.
+            if (exportedClip && !visibleClips([exportedClip], activeFilter, activeQuery).length) {
+              setPublishView("exported");
+              setMode("publish");
             }
           }
         }} />}
