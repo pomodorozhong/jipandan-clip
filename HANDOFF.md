@@ -2,21 +2,26 @@
 
 ## In progress
 
-### docs/candidate-evaluation
+### fix/stale-transcription-job
 
-- **Task:** record the owner's #49 answers (how generated candidates are evaluated). Closes #49 when its PR merges.
-- **PR:** awaiting owner approval to push and open; the body says `Closes #49`.
-- **Code checkpoint:** `b9914bf docs: record how generated candidates are evaluated` (step 3 of `doc/app-rebuild-plan.md`).
-- **State:** owner approved the recordings, metrics and target on 2026-10-20, but said a 300 ms edge tolerance is too hard; the evaluation reports several tolerances before one is picked. Owner reviewed it and asked for a PR.
-- **Verification:** docs only; no checks run.
-- **Next action:** after the PR merges, remove this subsection and start #47.
+- **Task:** a bug already on `main`: after a recording's SRT and session are deleted, opening it shows its last completed transcription job instead of the transcription form, so it cannot be transcribed again. No issue filed; local branch only.
+- **PR:** none yet; it goes in its own small PR from `main`, after #74 (ranked 3rd, before the owner's next session).
+- **Code checkpoint:** `3af8f6f fix(web): let a recording be transcribed again after its transcript is removed`.
+- **State:** awaiting owner review. Found on 2026-10-20 while the owner tested #74 on `0903.mp3`.
+- **Verification (2026-10-20):** `uv run python -m unittest discover -s tests` passed; the new regression test fails without the fix. Frontend checks not run: no frontend change.
+- **Next action:** after #74, show the owner a PR title and body for approval.
 
 ## Ranked work
 
-Step 3 candidate generation (milestone), in dependency order:
+Before the owner's next clipping session (2026-10-20: about to start one):
 
-1. #47 Generate candidates from voice activity and word timings (evaluation agreed in #49, see `doc/app-rebuild-plan.md` step 3; report results at several edge tolerances; can use the snap points stored by #58; Silero VAD recommended in its comments)
-2. #50 Create new sessions from generated candidates (blocked by #47)
+1. #74 Review and merge the PR that lets new sessions start from generated clips (closes #50; branch `feat/candidate-generator`). The owner is testing it in the app.
+2. #75 Stop counting review time while the app is unfocused or idle, so the session's timing data is clean.
+3. `fix/stale-transcription-job` (no issue): let a recording be transcribed again after its SRT and session are deleted. Built locally; its PR comes after #74. Workaround meanwhile: open a copy of the recording under a new name.
+
+After that session:
+
+4. #47 Decide whether generated clips should become the default, based on how fast that session went (results in `doc/app-rebuild-plan.md` step 3 once #74 merges).
 
 ## Pending
 
