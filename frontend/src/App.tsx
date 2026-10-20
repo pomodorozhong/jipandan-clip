@@ -1470,9 +1470,6 @@ export default function App() {
                     <path d="m4 6 4 4 4-4" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
                 </span>
-                <span className="subtle inline-flex flex-wrap items-center gap-1.5 text-xs">
-                  Choose Needs work <ShortcutBadge keyboard="1" bindingId="group1" />, Ready <ShortcutBadge keyboard="2" bindingId="group2" />, or Rejected <ShortcutBadge keyboard="X" bindingId="rejected" />
-                </span>
               </div>
               {selected.last_export_path && <div className={`mb-4 rounded-lg border line px-3 py-2 text-xs ${selected.export_state === "matching" ? "subtle" : "text-[#edbc97]"}`}>
                 <p>{selected.export_state === "matching" ? "Exported · matches current edits."

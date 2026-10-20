@@ -72,7 +72,6 @@ export const CHEATSHEET_SECTIONS: readonly CheatsheetSection[] = [
       { id: "replay", label: "Replay from start" },
       { id: "play-pause", label: "Play / pause" },
       { id: "rename", label: "Edit title" },
-      { id: "group1", label: "Needs work" },
       { id: "group2", label: "Ready for Publish" },
       { id: "rejected", label: "Reject" },
       ...nudgeRows,
