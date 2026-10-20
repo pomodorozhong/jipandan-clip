@@ -29,6 +29,17 @@ def retained_ranges(source_path: Path, retained_path: Path) -> dict:
     source_cursor = kept_cursor = 0
     spans: list[tuple[int, int]] = []
     while kept_cursor < kept_count:
+        # When its start-silence buffer fills, FFmpeg may emit one stale sample
+        # (zero, or audio from just before the retained start), repeat the
+        # previous sample, then carry on. Check this before searching: a short
+        # search could match the stale sample elsewhere in quiet audio.
+        if source_cursor > 0 and kept_cursor + 1 < kept_count and np.array_equal(
+                kept_samples[kept_cursor + 1], source_samples[source_cursor - 1]):
+            size = min(256, kept_count - kept_cursor - 2, source_count - source_cursor)
+            if np.array_equal(kept_samples[kept_cursor + 2:kept_cursor + 2 + size],
+                              source_samples[source_cursor:source_cursor + size]):
+                kept_cursor += 2
+                continue
         # A run of zero samples alone is ambiguous. Include the first nonzero
         # sample in the search so retained leading silence stays by its speech.
         nonzero = np.flatnonzero(np.any(kept_samples[kept_cursor:kept_cursor + rate] != 0, axis=1))
