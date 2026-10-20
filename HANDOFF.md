@@ -4,22 +4,22 @@
 
 ### feat/candidate-generator
 
-- **Task:** #47, generate candidates from voice activity and word timings. Local branch only, not linked to the issue or pushed.
-- **PR:** none yet.
-- **Code checkpoint:** `ea96d05 feat: generate clip candidates from voice activity and word timings` (`jipandan.core.candidates`, `scripts/evaluate_candidates.py`).
-- **State:** awaiting owner review. On 0511/0526/0614 the generator does not meet the #49 target: recall 30–57% vs 41–63% for SRT lines across 250 ms–1.5 s, at 792 vs 643 candidates per hour, though with smaller edge errors and more retimed keeps found (SRT lines match untouched keeps by construction). Raw Whisper segments reach only 4–22%; the app's own transcription of 0614 with the web UI defaults scored the same (4–25%, against 48–70% for the generator), so a new recording starts from far worse lines than the old SRT files. The owner needs to decide how to judge this before the generator is changed further.
-- **Verification:** `uv run python -m unittest discover -s tests` passed (81 tests) on 2026-10-20. Frontend checks not run: no frontend change.
-- **Inputs:** the private recordings and the tuning notes live in the gitignored `tmp/candidate-generation-2026-10-20/` (word timings, Silero probabilities, `README.md` with the tuning log).
-- **Pending:** P-10.
-- **Next action:** get the owner's answer to P-10 and to the evaluation question, then either tune further or wire the generator into transcription for #50.
+- **Task:** #47 generator plus #50, which lets a new session start from transcript lines or generated clips. The PR closes #50 and is related to #47, which stays open: the evaluation missed its target against the old SRT lines. Local branch only, not linked to either issue.
+- **PR:** awaiting owner approval to push and open (P-11); the body says `Closes #50` and `Related to #47`.
+- **Code checkpoint:** `05b6139 feat(web): choose transcript lines or generated clips for new sessions`.
+- **State:** owner agreed on 2026-10-20 to keep both modes, with transcript lines as the default, and to try generated clips on the next real clipping session. Against the app's own transcription of 0614 (web UI defaults), the generator found 48–70% of kept clips against 4–25%, at 998 against 794 clips per hour.
+- **Verification (2026-10-20):** `uv run python -m unittest discover -s tests` passed (83 tests), also at `c708c1b` alone; `npm --prefix frontend run test` (134), `check` and `build` passed. Manual: transcribed a 3-minute cut of 0614 in the app with Voice activity (generated); the session opened from `.candidates.srt` with 36 clips, titles and Likely keep scores, and no changed-transcript prompt.
+- **Inputs:** private data and tuning notes are in the gitignored `tmp/candidate-generation-2026-10-20/`.
+- **Pending:** P-10, P-11.
+- **Next action:** on approval, push and open the PR; after the owner's next clipping session with generated clips, compare its review speed with past sessions.
 - **P-10** Post the results comment drafted in chat on 2026-10-20 to #47. Why: outward-facing; not yet approved. Blocks: nothing.
+- **P-11** Push `feat/candidate-generator` and open the PR shown in chat on 2026-10-20, and comment on #50 that generated clips are an option rather than the default. Why: pushes and PRs need owner approval. Blocks: merging #50.
 
 ## Ranked work
 
-Step 3 candidate generation (milestone), in dependency order:
+Step 3 candidate generation (milestone):
 
-1. #47 Generate candidates from voice activity and word timings (evaluation agreed in #49, see `doc/app-rebuild-plan.md` step 3; report results at several edge tolerances; can use the snap points stored by #58; Silero VAD recommended in its comments)
-2. #50 Create new sessions from generated candidates (blocked by #47)
+1. #47 Decide whether generated clips beat transcript lines, after the owner's next clipping session uses them (the generator and both session modes are on `main` once this branch merges; see `doc/app-rebuild-plan.md` step 3 and the 2026-10-20 results)
 
 ## Pending
 

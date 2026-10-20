@@ -61,6 +61,15 @@ How candidates are evaluated (owner decision, 2026-10-20, [#49](https://github.c
 - **Metrics:** the share of kept clips found (recall), candidates per hour of recording (review cost), and the boundary error a found clip would still need fixed.
 - **Target:** the generator beats SRT lines when it has the same or better recall with fewer candidates and smaller edge errors.
 
+First results (2026-10-20, [#47](https://github.com/pomodorozhong/jipandan-clip/issues/47)), tuned on 0602:
+
+- The generator takes each run of voice activity that Whisper heard words in, starting 0.2 s before the speech, plus each Whisper segment with its edges moved to nearby voice-activity edges. Candidates are 0.6–5 s long.
+- Against the old SRT lines it misses the target: across 250 ms–1.5 s tolerances it finds 30–57% of kept clips against 41–63%, at 792 against 643 candidates per hour. Its edges are closer (median 0.10–0.16 s start, 0.06–0.08 s end), and on retimed keeps it finds more (27–49% against 13–20% at 250 ms). Keeps that were never retimed match their SRT line by construction, which favours the SRT lines.
+- The app's own transcription today is much worse than the old SRT files. On 0614 with the web UI defaults, its lines found 4–25% of kept clips against 48–70% for the generator.
+- About 11% of kept clips on 0602 have no detected speech (laughs, shouts), which caps any voice-activity approach.
+
+Decision (owner, 2026-10-20): keep both. Transcription saves transcript lines and generated clips, and the Transcription screen picks which one a new session starts from, with transcript lines as the default. The owner will try generated clips on the next real clipping session, and its review speed decides whether they become the default.
+
 ## Ranking direction
 
 Triage orders clips by a "Likely keep" score. The app ships fixed built-in weights rather than training per user. The event log, plus 5% exploration picks, collects unbiased review data for retraining the weights centrally.
