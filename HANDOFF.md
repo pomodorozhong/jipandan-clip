@@ -2,14 +2,17 @@
 
 ## In progress
 
-### docs/candidate-evaluation
+### feat/candidate-generator
 
-- **Task:** record the owner's #49 answers (how generated candidates are evaluated). Closes #49 when its PR merges.
-- **PR:** awaiting owner approval to push and open; the body says `Closes #49`.
-- **Code checkpoint:** `b9914bf docs: record how generated candidates are evaluated` (step 3 of `doc/app-rebuild-plan.md`).
-- **State:** owner approved the recordings, metrics and target on 2026-10-20, but said a 300 ms edge tolerance is too hard; the evaluation reports several tolerances before one is picked. Owner reviewed it and asked for a PR.
-- **Verification:** docs only; no checks run.
-- **Next action:** after the PR merges, remove this subsection and start #47.
+- **Task:** #47, generate candidates from voice activity and word timings. Local branch only, not linked to the issue or pushed.
+- **PR:** none yet.
+- **Code checkpoint:** `ea96d05 feat: generate clip candidates from voice activity and word timings` (`jipandan.core.candidates`, `scripts/evaluate_candidates.py`).
+- **State:** awaiting owner review. On 0511/0526/0614 the generator does not meet the #49 target: recall 30–57% vs 41–63% for SRT lines across 250 ms–1.5 s, at 792 vs 643 candidates per hour, though with smaller edge errors and more retimed keeps found (SRT lines match untouched keeps by construction). Raw Whisper segments reach only 4–22%; the app's own transcription of 0614 with the web UI defaults scored the same (4–25%, against 48–70% for the generator), so a new recording starts from far worse lines than the old SRT files. The owner needs to decide how to judge this before the generator is changed further.
+- **Verification:** `uv run python -m unittest discover -s tests` passed (81 tests) on 2026-10-20. Frontend checks not run: no frontend change.
+- **Inputs:** the private recordings and the tuning notes live in the gitignored `tmp/candidate-generation-2026-10-20/` (word timings, Silero probabilities, `README.md` with the tuning log).
+- **Pending:** P-10.
+- **Next action:** get the owner's answer to P-10 and to the evaluation question, then either tune further or wire the generator into transcription for #50.
+- **P-10** Post the results comment drafted in chat on 2026-10-20 to #47. Why: outward-facing; not yet approved. Blocks: nothing.
 
 ## Ranked work
 
