@@ -95,7 +95,7 @@ Cache files and failed preview work can be removed at any time and will be rebui
 - `src/jipandan/core/`: shared audio, subtitle, and persistence logic.
 - `src/jipandan/cli/`: browser GUI and standalone transcription entry points.
 - `tests/`: Python regression and API tests.
-- `scripts/`: disposable web-review fixture preparation.
+- `scripts/`: disposable web-review fixture preparation, and `evaluate_candidates.py`, which scores generated clip candidates against SRT lines on reviewed recordings.
 - `doc/`: [documentation index](doc/README.md), reviews, and archived project plans.
 - `AGENTS.md`: how coding agents work in this repository, including the session handoff rules.
 - `HANDOFF.md`: where work stands: each active branch's resume point, the ranked list of issues to work on next, and requests awaiting approval.
