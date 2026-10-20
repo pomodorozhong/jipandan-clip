@@ -282,7 +282,9 @@ export default function App() {
   const [showGamepadMapping, setShowGamepadMapping] = useState(false);
   const [clipDirDraft, setClipDirDraft] = useState("");
   const [storageMessage, setStorageMessage] = useState("");
-  const [storagePickerBusy, setStoragePickerBusy] = useState(false);
+  // Storage failures are shown inside Settings, apart from clip-save status (#26).
+  const [storageError, setStorageError] = useState("");
+  const [storageBusy, setStorageBusy] = useState(false);
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
   const [inputType, setInputType] = useState<DisplayInputType>("keyboard");
   // Which input made the last decision, for the review log; gamepad actions also arrive as dispatches.
@@ -359,6 +361,7 @@ export default function App() {
     if (showSettings && session) {
       setClipDirDraft(session.clip_dir);
       setStorageMessage("");
+      setStorageError("");
     }
   }, [showSettings, session?.audio]);
 
@@ -1020,20 +1023,30 @@ export default function App() {
 
   async function applyClipDir() {
     if (!session || !clipDirDraft.trim()) return;
+    setStorageBusy(true);
     setStorageMessage("");
-    const next = await mutate(() => api<Session>("/session/storage", "PATCH", {
-      expected_revision: session.revision,
-      clip_dir: clipDirDraft.trim(),
-    }));
-    if (next) {
+    setStorageError("");
+    try {
+      const next = await api<Session>("/session/storage", "PATCH", {
+        expected_revision: session.revision,
+        clip_dir: clipDirDraft.trim(),
+      });
+      setSession(next);
       setClipDirDraft(next.clip_dir);
       setStorageMessage("Export directory updated.");
+    } catch (cause) {
+      const failure = cause as Error & { status?: number; session?: Session };
+      if (failure.status === 409 && failure.session) setSession(failure.session);
+      setStorageError(failure.message);
+    } finally {
+      setStorageBusy(false);
     }
   }
 
   async function chooseClipDir() {
-    setStoragePickerBusy(true);
+    setStorageBusy(true);
     setStorageMessage("");
+    setStorageError("");
     try {
       const result = await api<{ path: string | null; cancelled: boolean }>("/session/storage/pick", "POST");
       if (result.path) {
@@ -1041,23 +1054,24 @@ export default function App() {
         setStorageMessage("Folder selected. Review and apply to save it.");
       }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setStorageError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setStoragePickerBusy(false);
+      setStorageBusy(false);
     }
   }
 
   async function resetClipDir() {
-    setStoragePickerBusy(true);
+    setStorageBusy(true);
     setStorageMessage("");
+    setStorageError("");
     try {
       const result = await api<{ clip_dir: string }>("/session/storage/default");
       setClipDirDraft(result.clip_dir);
       setStorageMessage("Default path selected. Review and apply to save it.");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setStorageError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setStoragePickerBusy(false);
+      setStorageBusy(false);
     }
   }
 
@@ -1605,8 +1619,8 @@ export default function App() {
             onSave={(config) => { setGamepadBindingConfig(config); closeGamepadMapping(); }} onCancel={closeGamepadMapping}
             onCaptureChange={setGamepadCaptureActive} />
         : <SettingsScreen clipDir={clipDirDraft} storageEnabled={Boolean(session?.audio)}
-            storageBusy={busy || storagePickerBusy} storageMessage={storageMessage}
-            onClipDirChange={setClipDirDraft} onChooseClipDir={() => void chooseClipDir()}
+            storageBusy={busy || storageBusy} storageMessage={storageMessage} storageError={storageError}
+            onClipDirChange={(path) => { setClipDirDraft(path); setStorageError(""); }} onChooseClipDir={() => void chooseClipDir()}
             onResetClipDir={() => void resetClipDir()}
             onApplyClipDir={() => setShowStorageConfirm(true)}
             detectLeadingSilence={settings.detectLeadingSilence}
@@ -1642,7 +1656,7 @@ export default function App() {
       <div className="flex justify-end gap-2">
         <button type="button" onClick={() => setShowStorageConfirm(false)}
           className="soft-surface rounded-lg px-4 py-2 text-sm font-medium hover:bg-[#354b3b]">Cancel</button>
-        <button type="button" disabled={busy || !clipDirDraft.trim()} onClick={() => void confirmClipDir()}
+        <button type="button" disabled={busy || storageBusy || !clipDirDraft.trim()} onClick={() => void confirmClipDir()}
           className="rounded-lg bg-[#b7d69d] px-4 py-2 text-sm font-semibold text-[#1d2d20] disabled:cursor-not-allowed disabled:opacity-50">Confirm</button>
       </div>
     </Dialog>}
