@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isExploreClip, orderByLikelyKeep } from "./reviewOrder";
 import TriageScreen from "./TriageScreen";
-import { api, applySessionDelta, audioUrl, bootstrap, sendReviewEvents, uploadAudio, type Clip, type ClipFeaturesJob, type ClipTranscriptionJob, type LeadingSilenceJob, type Session, type SessionDelta, type SnapPoints, type Status } from "./api";
+import { api, applySessionDelta, audioUrl, bootstrap, sendReviewEvents, uploadAudio, type Clip, type ClipFeaturesJob, type ClipTranscriptionJob, type LeadingSilenceJob, type PreviewJob, type Session, type SessionDelta, type SnapPoints, type Status } from "./api";
 import WaveformEditor from "./WaveformEditor";
 import { Button, CountBadge, Panel, StageLayout, StatusBadge, statusLabels } from "./ui";
 import { publishClips, type PublishView } from "./publish";
@@ -45,6 +45,7 @@ type SaveState = "saved" | "saving" | "failed";
 // Triage: one clip at a time for first-pass decisions. Polish: the list and editor for keepers.
 // Publish: the Ready queue with export previews, title, and timing fixes.
 type Mode = "triage" | "polish" | "publish";
+type ExportAllRun = { state: "running" | "completed" | "cancelled" | "failed"; total: number; done: number; failed: string[]; error?: string };
 type AppSettings = {
   detectLeadingSilence: boolean;
   showOriginalStart: boolean;
@@ -681,6 +682,64 @@ export default function App() {
   const group1SuggestionCount = useMemo(() => session?.candidates
     .filter((clip) => clip.status === "group1" && clip.suggested_title).length ?? 0, [session?.candidates]);
 
+  // Export all runs in the browser: render each Ready clip with Publish's settings, then save it.
+  const [exportAllRun, setExportAllRun] = useState<ExportAllRun | null>(null);
+  const exportAllCancelled = useRef(false);
+  const exportAllRunning = exportAllRun?.state === "running";
+  const sessionRevisionRef = useRef<number | null>(null);
+  sessionRevisionRef.current = session?.revision ?? null;
+  const exportAllThresholds = publishSettings.mode === "as_is" ? { start: -40, stop: -50 }
+    : { start: Number(publishSettings.startDb), stop: Number(publishSettings.stopDb) };
+  const exportAllSettingsValid = publishSettings.mode === "as_is" || (
+    publishSettings.startDb.trim() !== "" && publishSettings.stopDb.trim() !== "" &&
+    [exportAllThresholds.start, exportAllThresholds.stop].every((value) => Number.isFinite(value) && value >= -90 && value <= -5));
+
+  const startExportAll = useCallback(async () => {
+    if (!session || exportAllRunning) return;
+    const clips = publishClips(session.candidates, "ready");
+    if (!clips.length) return;
+    const mode = publishSettings.mode;
+    const { start, stop } = exportAllThresholds;
+    exportAllCancelled.current = false;
+    setError("");
+    const run: ExportAllRun = { state: "running", total: clips.length, done: 0, failed: [] };
+    setExportAllRun({ ...run });
+    for (const clip of clips) {
+      if (exportAllCancelled.current) { setExportAllRun({ ...run, state: "cancelled" }); return; }
+      try {
+        let job = await api<PreviewJob>("/previews", "POST", {
+          clip_id: clip.clip_id, expected_revision: sessionRevisionRef.current, mode,
+          start_threshold_db: start, stop_threshold_db: stop, title: clip.title.trim(),
+        });
+        while (job.state === "queued" || job.state === "running") {
+          await new Promise((resolve) => window.setTimeout(resolve, 700));
+          job = await api<PreviewJob>(`/previews/${job.id}`);
+        }
+        if (job.state === "completed") {
+          const next = await api<Session>("/exports", "POST", {
+            preview_id: job.id, expected_revision: sessionRevisionRef.current, context: rankingContext(clip),
+          });
+          sessionRevisionRef.current = next.revision;
+          setSession(next);
+        } else {
+          run.failed = [...run.failed, clip.clip_id];
+        }
+      } catch (cause) {
+        const failure = cause as Error & { status?: number; session?: Session };
+        // Another edit changed the session; stop rather than export clips the owner may have changed.
+        if (failure.status === 409) {
+          if (failure.session) setSession(failure.session);
+          setExportAllRun({ ...run, state: "failed", error: failure.message });
+          return;
+        }
+        run.failed = [...run.failed, clip.clip_id];
+      }
+      run.done += 1;
+      setExportAllRun({ ...run });
+    }
+    setExportAllRun({ ...run, state: "completed" });
+  }, [session, exportAllRunning, publishSettings.mode, exportAllThresholds.start, exportAllThresholds.stop, rankingContext]);
+
   const mutate = useCallback(async <T extends Session | SessionDelta>(work: () => Promise<T>) => {
     setBusy(true);
     setSaveState("saving");
@@ -1193,6 +1252,37 @@ export default function App() {
               </button>)}
             </div>
             <p className="subtle mt-2 text-xs">{publishView === "ready" ? "Ready clips in clip order" : "Saved files, including clips edited after export"} · J/K to move</p>
+            {publishView === "ready" && session.counts.group2 > 0 && <div className="mt-3">
+              <Button onClick={() => void startExportAll()} disabled={exportAllRunning || busy || !exportAllSettingsValid}
+                title={exportAllSettingsValid ? "Export every Ready clip with its own title and the current export mode and thresholds"
+                  : "Fix the export thresholds first"}>
+                Export all Ready clips
+              </Button>
+            </div>}
+            {exportAllRun && <div role="status" aria-live="polite"
+              className={`mt-2 text-xs ${exportAllRun.state === "failed" || exportAllRun.failed.length ? "text-[#ffcfc4]" : "subtle"}`}>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span>
+                  {exportAllRunning
+                    ? <>Exporting · {exportAllRun.done} of {exportAllRun.total}</>
+                    : exportAllRun.state === "completed"
+                      ? <>Exported {exportAllRun.total - exportAllRun.failed.length} of {exportAllRun.total} {exportAllRun.total === 1 ? "clip" : "clips"}</>
+                      : exportAllRun.state === "failed"
+                        ? <>Export all stopped after {exportAllRun.done} of {exportAllRun.total}: {exportAllRun.error}</>
+                        : <>Export all stopped after {exportAllRun.done} of {exportAllRun.total}</>}
+                  {exportAllRun.failed.length > 0 && <> · could not export {exportAllRun.failed.map((id) => `#${id}`).join(", ")}</>}
+                </span>
+                {exportAllRunning
+                  ? <button type="button" className="underline" onClick={() => { exportAllCancelled.current = true; }}>Cancel</button>
+                  : <button type="button" aria-label="Dismiss export all status" className="text-base leading-none"
+                    onClick={() => setExportAllRun(null)}>×</button>}
+              </div>
+              {exportAllRunning && <div role="progressbar" aria-label="Export all progress"
+                aria-valuemin={0} aria-valuemax={exportAllRun.total} aria-valuenow={exportAllRun.done}
+                className="mt-1.5 h-1 overflow-hidden rounded-full bg-[#17241c]">
+                <div className="h-full bg-[#b7d69d] transition-[width]" style={{ width: `${exportAllRun.total ? exportAllRun.done / exportAllRun.total * 100 : 0}%` }} />
+              </div>}
+            </div>}
           </div>
           <div className="panel-scroll min-h-0 flex-1 overflow-auto" role="listbox" aria-label={publishView === "ready" ? "Ready clips" : "Exported clips"}>
             {visible.length === 0 ? <p className="subtle px-4 py-6 text-sm">{publishView === "ready"
@@ -1219,7 +1309,7 @@ export default function App() {
           gamepadAction={gamepadActionRequest}
           onGamepadActionHandled={(id) => setGamepadActionRequest((current) => current?.id === id ? null : current)}
           exportContext={rankingContext(selected)}
-          nudgeDisabled={busy}
+          nudgeDisabled={busy || exportAllRunning}
           onTrim={(relativeStart, relativeEnd) => {
             if (session.revision === null || busy) return;
             const start = Math.round(selected.start_ms + relativeStart);
