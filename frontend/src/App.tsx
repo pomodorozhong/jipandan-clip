@@ -10,6 +10,7 @@ import ExportPreview, { type ExportSettings } from "./ExportPreview";
 import ShortcutCheatsheet from "./ShortcutCheatsheet";
 import TranscriptionScreen from "./TranscriptionScreen";
 import SettingsScreen from "./SettingsScreen";
+import type { StageTimes } from "./stageTimes";
 import GamepadStatusLine from "./GamepadStatus";
 import GamepadMappingScreen from "./GamepadMappingScreen";
 import { ShortcutBadge, ShortcutDisplayProvider, type BadgeMode, type DisplayInputType, type UnboundBadgeBehavior } from "./ShortcutBadge";
@@ -606,6 +607,12 @@ export default function App() {
   const flushViews = useCallback((keepalive = false) => {
     const events = pendingViewsRef.current.splice(0);
     if (events.length) void sendReviewEvents(events, keepalive);
+  }, []);
+  // Send finished views first so the breakdown includes them.
+  const loadStageTimes = useCallback(async () => {
+    const events = pendingViewsRef.current.splice(0);
+    if (events.length) await sendReviewEvents(events);
+    return api<StageTimes>("/session/stage-times");
   }, []);
   const autoplayRef = useRef(settings.autoplayClips);
   autoplayRef.current = settings.autoplayClips;
@@ -1654,6 +1661,7 @@ export default function App() {
             onAutoplayClipsChange={(enabled) => setSettings((current) => ({ ...current, autoplayClips: enabled }))}
             onExploreRankingChange={(enabled) => setSettings((current) => ({ ...current, exploreRanking: enabled }))}
             gamepadStatus={gamepadStatus}
+            onLoadStageTimes={loadStageTimes}
             gamepadRepeatDelayMs={settings.gamepadRepeatDelayMs}
             gamepadMappingButtonRef={gamepadMappingButtonRef}
             onOpenGamepadMapping={openGamepadMapping}

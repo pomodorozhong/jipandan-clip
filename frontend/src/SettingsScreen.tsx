@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, type ReactNode, type Ref } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode, type Ref } from "react";
 import { GamepadStatusBadge, gamepadStatusMessage } from "./GamepadStatus";
 import {
   GAMEPAD_REPEAT_DELAY_MAX_MS,
@@ -7,6 +7,7 @@ import {
   type GamepadStatus,
 } from "./gamepad";
 import type { BadgeMode, UnboundBadgeBehavior } from "./ShortcutBadge";
+import { formatDuration, formatPerClip, formatShare, stageLabels, type StageTimes } from "./stageTimes";
 import { Button } from "./ui";
 
 const ROW_BASE = "grid items-center gap-x-6 gap-y-2.5 border-b border-[#2a3731] py-3.5 last:border-b-0";
@@ -70,6 +71,71 @@ function Footnote({ children }: { children: ReactNode }) {
   return <p className="subtle mt-3 mb-3.5 text-xs">{children}</p>;
 }
 
+const CELL = "border-b border-[#2a3731] px-2 py-2 text-right tabular-nums first:pl-0 first:text-left last:pr-0";
+
+function formatDay(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+// Time per stage for the open session, so the slowest stage can be worked on first.
+function ReviewTimeSection({ enabled, onLoad }: { enabled: boolean; onLoad: () => Promise<StageTimes> }) {
+  const [result, setResult] = useState<StageTimes | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  async function analyze() {
+    setLoading(true);
+    setError("");
+    try {
+      setResult(await onLoad());
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not read the review log");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return <SettingsSection title="Review time" tag="This session" description={enabled
+    ? "Add up how long clips were on screen in each stage, from the session's review log."
+    : "Open an audio session to see its review time."}>
+    <div className="grid gap-3 py-3.5">
+      <div className="flex flex-wrap items-center gap-2.5">
+        <Button disabled={!enabled || loading} onClick={() => void analyze()}>
+          {loading ? "Analyzing…" : result ? "Analyze again" : "Analyze review time"}
+        </Button>
+        {result?.first_view && result.last_view && <span className="subtle text-xs">
+          Views from {formatDay(result.first_view)} to {formatDay(result.last_view)}
+        </span>}
+      </div>
+      {error && <p role="alert" className="text-xs text-[#ffb3a8]">{error}</p>}
+      {result && (result.total_ms
+        ? <table className="w-full border-collapse text-[13px]">
+          <thead className="subtle text-xs">
+            <tr>{["Stage", "Time", "Share", "Clips viewed", "Per clip", "Changes"].map((label) =>
+              <th key={label} scope="col" className={`${CELL} font-medium`}>{label}</th>)}</tr>
+          </thead>
+          <tbody>
+            {result.stages.map((row) => <tr key={row.stage}>
+              <th scope="row" className={`${CELL} font-semibold`}>{stageLabels[row.stage]}</th>
+              <td className={CELL}>{formatDuration(row.ms)}</td>
+              <td className={CELL}>{formatShare(row, result.total_ms)}</td>
+              <td className={CELL}>{row.clips}</td>
+              <td className={CELL}>{formatPerClip(row)}</td>
+              <td className={CELL}>{row.changes}</td>
+            </tr>)}
+            <tr>
+              <th scope="row" className={`${CELL} border-b-0 font-semibold`}>Total</th>
+              <td className={`${CELL} border-b-0 font-semibold`}>{formatDuration(result.total_ms)}</td>
+              <td className={`${CELL} border-b-0`} colSpan={4} />
+            </tr>
+          </tbody>
+        </table>
+        : <p className="subtle text-[13px]">No clip views recorded yet.</p>)}
+    </div>
+    <Footnote>Time counts while a clip is selected and the app is in front; it stops after 60 s without input and leaves out the clip on screen now until you move on. Changes count edits such as status, title, and trim, plus exports in Publish.</Footnote>
+  </SettingsSection>;
+}
+
 export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, storageMessage, storageError, onClipDirChange,
   onChooseClipDir, onResetClipDir, onApplyClipDir,
   detectLeadingSilence, showOriginalStart, exploreRanking, onExploreRankingChange,
@@ -77,7 +143,7 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
   gamepadStatus, gamepadMappingButtonRef, onOpenGamepadMapping, focusController = false,
   onDetectLeadingSilenceChange, onShowOriginalStartChange, badgeMode, unboundBadgeBehavior,
   onBadgeModeChange, onUnboundBadgeBehaviorChange, gamepadRepeatDelayMs,
-  onGamepadRepeatDelayChange, snapEdges, onSnapEdgesChange }: {
+  onGamepadRepeatDelayChange, snapEdges, onSnapEdgesChange, onLoadStageTimes }: {
   clipDir: string;
   storageEnabled: boolean;
   storageBusy: boolean;
@@ -108,6 +174,7 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
   onUnboundBadgeBehaviorChange: (behavior: UnboundBadgeBehavior) => void;
   gamepadRepeatDelayMs: number;
   onGamepadRepeatDelayChange: (delayMs: number) => void;
+  onLoadStageTimes: () => Promise<StageTimes>;
 }) {
   const controllerRef = useRef<HTMLElement>(null);
   const clipDirId = useId();
@@ -188,6 +255,8 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
       </ControlRow>
       <Footnote>Controller actions pause while typing or this tab is inactive; dialogs use D-pad/left-stick focus, A confirm, and B back. Saving blocks mutating actions while navigation remains available. After reconnecting or changing context, release a held control before pressing it again.</Footnote>
     </SettingsSection>
+
+    <ReviewTimeSection enabled={storageEnabled} onLoad={onLoadStageTimes} />
 
     <SettingsSection title="Storage" tag="This session" description={storageEnabled
       ? "Choose where new audio exports from this session are saved. Existing exported files stay in their current folder."
