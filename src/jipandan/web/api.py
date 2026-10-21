@@ -57,6 +57,11 @@ class RevisionRequest(BaseModel):
     context: dict | None = None
 
 
+class StartOverRequest(BaseModel):
+    expected_revision: int = Field(ge=0)
+    clip_source: Literal["lines", "generated"]
+
+
 class StorageRequest(BaseModel):
     expected_revision: int | None = Field(default=None, ge=0)
     clip_dir: str = Field(min_length=1, max_length=4096)
@@ -244,6 +249,10 @@ def create_app(
     @app.post("/api/session/undo")
     def undo(request: RevisionRequest, delta: bool = False):
         return SessionJSON(app.state.service.undo(request.expected_revision, request.context, delta))
+
+    @app.post("/api/session/start-over")
+    def start_over(request: StartOverRequest):
+        return SessionJSON(app.state.service.start_over(request.expected_revision, request.clip_source))
 
     @app.post("/api/review-log")
     def record_review_events(request: ReviewEvents):
