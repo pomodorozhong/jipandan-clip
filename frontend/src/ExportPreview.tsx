@@ -4,11 +4,13 @@ import PreviewPlayer, { type PreviewPlayerHandle } from "./PreviewPlayer";
 import { ShortcutBadge } from "./ShortcutBadge";
 import { SectionHeader } from "./ui";
 import type { GamepadActionRequest } from "./gamepad";
-import { exportMatchesSettings } from "./publish";
+import { exportMatchesSettings, initialExportSettings } from "./publish";
 import { renderedRangeToSource } from "./trimMap";
 import {
+  confirmsTextField,
   deactivateTextEditingTarget,
   isActionAvailable,
+  isInteractiveTarget,
   isTextEditingTarget,
   keyboardInputFromEvent,
   resolveKeyboardAction,
@@ -43,8 +45,6 @@ function peak(waveform: WaveformWindow | null): number {
   return result;
 }
 
-export type ExportSettings = { mode: ExportMode; startDb: string; stopDb: string };
-
 /**
  * Compare the original clip with its rendered export and publish it. Shown as a
  * dialog from Polish, or ``inline`` as the Publish stage's main panel, where
@@ -52,7 +52,7 @@ export type ExportSettings = { mode: ExportMode; startDb: string; stopDb: string
  */
 export default function ExportPreview({ clip, revision, open, nextClipId, onClose, onPublished,
   gamepadAction, onGamepadActionHandled, controllerHandlerRef, inline = false, heading, headingDetail, onNudge, nudgeDisabled = false,
-  exportContext, initialSettings, onSettingsChange, onTrim, recordingDurationMs }: {
+  exportContext, onTrim, recordingDurationMs, titleFocusRequest = 0, onTitleSave }: {
   clip: Clip; revision: number; open: boolean; onClose: () => void;
   nextClipId: string | null;
   onPublished: (session: Session, advance: boolean) => void;
@@ -69,12 +69,15 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
   recordingDurationMs?: number;
   /** Ranking context recorded with the export in the review history. */
   exportContext?: object;
-  initialSettings?: ExportSettings;
-  onSettingsChange?: (settings: ExportSettings) => void;
+  /** Raised by the parent (R in Publish) to put focus in the export title field. */
+  titleFocusRequest?: number;
+  /** Saves an edited export title to the clip when the field is confirmed or left, so it survives switching clips. */
+  onTitleSave?: (title: string) => void;
 }) {
-  const [mode, setMode] = useState<ExportMode>(clip.last_export_path ? clip.last_export_mode ?? "trim_edges" : initialSettings?.mode ?? "trim_edges");
-  const [startDb, setStartDb] = useState(clip.last_export_path ? String(clip.last_export_start_threshold_db ?? -40) : initialSettings?.startDb ?? "-40");
-  const [stopDb, setStopDb] = useState(clip.last_export_path ? String(clip.last_export_stop_threshold_db ?? -50) : initialSettings?.stopDb ?? "-50");
+  // Settings belong to this clip only; the next clip starts from the defaults again.
+  const [mode, setMode] = useState<ExportMode>(() => initialExportSettings(clip).mode);
+  const [startDb, setStartDb] = useState(() => initialExportSettings(clip).startDb);
+  const [stopDb, setStopDb] = useState(() => initialExportSettings(clip).stopDb);
   const [title, setTitle] = useState(clip.title);
   const [job, setJob] = useState<PreviewJob | null>(null);
   const [referenceJob, setReferenceJob] = useState<PreviewJob | null>(null);
@@ -93,15 +96,21 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
   const referencePlayer = useRef<PreviewPlayerHandle>(null);
   const candidatePlayer = useRef<PreviewPlayerHandle>(null);
   const dialogRef = useRef<HTMLElement>(null);
+  const titleInput = useRef<HTMLInputElement>(null);
   const handledGamepadAction = useRef<number | null>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
   const wasOpen = useRef(false);
 
-  useEffect(() => {
-    if (inline && !clip.last_export_path) onSettingsChange?.({ mode, startDb, stopDb });
-  }, [inline, clip.last_export_path, mode, startDb, stopDb, onSettingsChange]);
-
   useEffect(() => { setTitle(clip.title); }, [clip.clip_id, clip.title]);
+
+  // Only an R pressed while this clip is shown moves focus; the next clip opens with the same count.
+  const handledTitleFocus = useRef(titleFocusRequest);
+  useEffect(() => {
+    if (titleFocusRequest === handledTitleFocus.current) return;
+    handledTitleFocus.current = titleFocusRequest;
+    titleInput.current?.focus();
+    titleInput.current?.select();
+  }, [titleFocusRequest]);
 
   useEffect(() => {
     if (open && !wasOpen.current) {
@@ -406,8 +415,16 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
       event.preventDefault();
       dispatchAction(action);
     }
+    // A focused button would also take Space as a click on key release; Space is playback here.
+    function onKeyUp(event: KeyboardEvent) {
+      if (event.code === "Space" && isInteractiveTarget(event.target)) event.preventDefault();
+    }
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
   });
 
   if (!open) return null;
@@ -459,8 +476,18 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
                 className="w-full rounded-lg border line bg-[#101816] px-3 py-2 pr-9" /><span className="subtle pointer-events-none absolute right-3 top-2">dB</span></span>
             </label>
           </>}
-          <label className="min-w-44 flex-1 text-xs font-medium">Export title
-            <input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={180}
+          <label className="min-w-44 flex-1 text-xs font-medium">Export title {inline && <ShortcutBadge keyboard="R" bindingId="rename" />}
+            <input ref={titleInput} value={title} onChange={(event) => setTitle(event.target.value)} maxLength={180}
+              onKeyDown={(event) => {
+                // Enter keeps the edited title and hands the keys back to the shortcuts.
+                if (confirmsTextField(keyboardInputFromEvent(event.nativeEvent))) {
+                  event.preventDefault();
+                  event.currentTarget.blur();
+                }
+              }}
+              onBlur={() => {
+                if (onTitleSave && title.trim() && title.trim() !== clip.title) onTitleSave(title.trim());
+              }}
               className="mt-1 block w-full rounded-lg border line bg-[#101816] px-3 py-2" />
           </label>
           <p role="status" className="subtle flex shrink-0 items-center gap-2 pb-2 text-xs">

@@ -5,8 +5,8 @@ import { isIdle, viewEvent, type OpenView, type ViewEndReason } from "./reviewVi
 import { api, applySessionDelta, audioUrl, bootstrap, sendReviewEvents, uploadAudio, type Clip, type ClipFeaturesJob, type ClipTranscriptionJob, type LeadingSilenceJob, type PreviewJob, type Session, type SessionDelta, type SnapPoints, type Status, type ClipSource, clipSourceLabels } from "./api";
 import WaveformEditor from "./WaveformEditor";
 import { Button, CountBadge, Panel, StageLayout, StatusBadge, statusLabels } from "./ui";
-import { publishClips, type PublishView } from "./publish";
-import ExportPreview, { type ExportSettings } from "./ExportPreview";
+import { DEFAULT_EXPORT_SETTINGS, publishClips, type PublishView } from "./publish";
+import ExportPreview from "./ExportPreview";
 import ShortcutCheatsheet from "./ShortcutCheatsheet";
 import TranscriptionScreen from "./TranscriptionScreen";
 import SettingsScreen from "./SettingsScreen";
@@ -35,6 +35,7 @@ import {
   isActionAvailable,
   isTextEditingTarget,
   keyboardInputFromEvent,
+  releaseClickedButton,
   resolveKeyboardAction,
   shouldDispatchAction,
   type InputAvailability,
@@ -246,7 +247,6 @@ export default function App() {
   const [filter, setFilter] = useState<Filter>("unsorted");
   const [mode, setMode] = useState<Mode>("triage");
   const [publishView, setPublishView] = useState<PublishView>("ready");
-  const [publishSettings, setPublishSettings] = useState<ExportSettings>({ mode: "trim_edges", startDb: "-40", stopDb: "-50" });
   // Clip edge snap points are measured once per recording, so load them once per session.
   const [snapPoints, setSnapPoints] = useState<SnapPoints | null>(null);
   const sessionPath = session?.session_path ?? null;
@@ -273,6 +273,7 @@ export default function App() {
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [publishTitleFocus, setPublishTitleFocus] = useState(0);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleExpanded, setTitleExpanded] = useState(false);
   const [showClipMenu, setShowClipMenu] = useState(false);
@@ -744,24 +745,20 @@ export default function App() {
   const group1SuggestionCount = useMemo(() => scopedCandidates
     .filter((clip) => clip.status === "group1" && clip.suggested_title).length, [scopedCandidates]);
 
-  // Export all runs in the browser: render each Ready clip with Publish's settings, then save it.
+  // Export all runs in the browser: render each Ready clip with the default settings, then save it.
   const [exportAllRun, setExportAllRun] = useState<ExportAllRun | null>(null);
   const exportAllCancelled = useRef(false);
   const exportAllRunning = exportAllRun?.state === "running";
   const sessionRevisionRef = useRef<number | null>(null);
   sessionRevisionRef.current = session?.revision ?? null;
-  const exportAllThresholds = publishSettings.mode === "as_is" ? { start: -40, stop: -50 }
-    : { start: Number(publishSettings.startDb), stop: Number(publishSettings.stopDb) };
-  const exportAllSettingsValid = publishSettings.mode === "as_is" || (
-    publishSettings.startDb.trim() !== "" && publishSettings.stopDb.trim() !== "" &&
-    [exportAllThresholds.start, exportAllThresholds.stop].every((value) => Number.isFinite(value) && value >= -90 && value <= -5));
 
   const startExportAll = useCallback(async () => {
     if (!session || exportAllRunning) return;
     const clips = publishClips(scopedCandidates, "ready");
     if (!clips.length) return;
-    const mode = publishSettings.mode;
-    const { start, stop } = exportAllThresholds;
+    // Every clip gets the default settings, whatever the clip on screen was changed to.
+    const { mode } = DEFAULT_EXPORT_SETTINGS;
+    const start = Number(DEFAULT_EXPORT_SETTINGS.startDb), stop = Number(DEFAULT_EXPORT_SETTINGS.stopDb);
     exportAllCancelled.current = false;
     setError("");
     const run: ExportAllRun = { state: "running", total: clips.length, done: 0, failed: [] };
@@ -800,7 +797,7 @@ export default function App() {
       setExportAllRun({ ...run });
     }
     setExportAllRun({ ...run, state: "completed" });
-  }, [session, scopedCandidates, exportAllRunning, publishSettings.mode, exportAllThresholds.start, exportAllThresholds.stop, rankingContext]);
+  }, [session, scopedCandidates, exportAllRunning, rankingContext]);
 
   const mutate = useCallback(async <T extends Session | SessionDelta>(work: () => Promise<T>) => {
     setBusy(true);
@@ -978,6 +975,14 @@ export default function App() {
     };
   }, []);
 
+  // In Publish a clicked button lets go of focus, so Space and Enter keep driving the shortcuts.
+  useEffect(() => {
+    if (mode !== "publish") return;
+    const onClick = (event: MouseEvent) => { releaseClickedButton(event); };
+    document.addEventListener("click", onClick);
+    return () => document.removeEventListener("click", onClick);
+  }, [mode]);
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       const input = keyboardInputFromEvent(event);
@@ -996,10 +1001,14 @@ export default function App() {
         canUndo: Boolean(session?.can_undo && session.revision !== null),
         canDuplicate: Boolean(session && session.revision !== null && effectiveSelectedId),
       })) return;
-      // Publish shows the export panel itself: E picks the Trim edges mode there, and the
-      // title is edited in its export title field rather than Polish's rename box.
-      if (mode === "publish" && (action.type === "open-export" || action.type === "rename")) return;
+      // Publish shows the export panel itself: E picks the Trim edges mode there.
+      if (mode === "publish" && action.type === "open-export") return;
       event.preventDefault();
+      // R in Publish edits the export title field rather than Polish's rename box.
+      if (mode === "publish" && action.type === "rename") {
+        setPublishTitleFocus((count) => count + 1);
+        return;
+      }
       dispatchReviewAction(action);
     }
     window.addEventListener("keydown", onKeyDown);
@@ -1415,9 +1424,8 @@ export default function App() {
             </div>
             <p className="subtle text-xs">{publishView === "ready" ? `Ready clips in ${reviewSetOpen ? "review set" : "clip"} order` : "Saved files, including clips edited after export"} · J/K to move</p>
             {publishView === "ready" && scopedCounts.group2 > 0 && <div className="mt-3">
-              <Button onClick={() => void startExportAll()} disabled={exportAllRunning || busy || !exportAllSettingsValid}
-                title={exportAllSettingsValid ? "Export every Ready clip with its own title and the current export mode and thresholds"
-                  : "Fix the export thresholds first"}>
+              <Button onClick={() => void startExportAll()} disabled={exportAllRunning || busy}
+                title="Export every Ready clip with its own title and the default settings (Trim edges, −40 dB start, −50 dB stop)">
                 Export all Ready clips
               </Button>
             </div>}
@@ -1465,9 +1473,15 @@ export default function App() {
           </div>
         </Panel>} main={selected && session.revision !== null ? <ExportPreview key={selected.clip_id} inline clip={selected}
           heading={`Clip ${selectedPosition + 1} of ${visible.length}`}
+          titleFocusRequest={publishTitleFocus}
+          onTitleSave={(title) => {
+            if (session.revision === null) return;
+            void mutate(() => api<SessionDelta>(`/clips/${encodeURIComponent(selected.clip_id)}?delta=true`, "PATCH", {
+              expected_revision: session.revision, title, context: rankingContext(selected),
+            }));
+          }}
           headingDetail={`#${selected.clip_id} · ${formatDuration(selected.end_ms - selected.start_ms)}`}
           recordingDurationMs={session.duration_ms ?? undefined}
-          initialSettings={publishSettings} onSettingsChange={setPublishSettings}
           revision={session.revision} open={!showSettings && !showHelp && !showJump && !showMerge}
           nextClipId={nextVisibleClipId} controllerHandlerRef={dialogControllerHandlerRef} onClose={() => {}}
           gamepadAction={gamepadActionRequest}
