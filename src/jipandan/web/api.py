@@ -290,6 +290,10 @@ def create_app(
     def snap_points():
         return app.state.service.snap_points()
 
+    @app.get("/api/session/stage-times")
+    def stage_times():
+        return app.state.service.stage_times()
+
     @app.get("/api/session/leading-silence-detection")
     def leading_silence_detection_status():
         return app.state.service.leading_silence_detection_status()

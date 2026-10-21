@@ -366,6 +366,19 @@ class WebApiTests(unittest.TestCase):
         too_many = self.client.post("/api/review-log", json={"events": [{}] * 201}, headers=self.headers)
         self.assertEqual(too_many.status_code, 422)
 
+    def test_stage_times_sum_views_per_stage(self):
+        self.assertEqual(self.client.get("/api/session/stage-times").status_code, 409)
+        self.open()
+        audio = str(self.audio.resolve())
+        self.client.post("/api/review-log", json={"events": [
+            {"type": "view", "audio": audio, "clip": "1", "dwell_ms": 3000, "context": {"filter": "triage"}},
+            {"type": "view", "audio": audio, "clip": "1", "dwell_ms": 9000, "context": {"filter": "group1"}},
+        ]}, headers=self.headers)
+        result = self.client.get("/api/session/stage-times").json()
+        self.assertEqual([(row["stage"], row["ms"]) for row in result["stages"]],
+                         [("triage", 3000), ("polish", 9000), ("publish", 0)])
+        self.assertEqual(result["total_ms"], 12000)
+
     def test_clip_features_score_clips_and_persist_without_undo(self):
         self.open()
         path = "/api/session/clip-features"
