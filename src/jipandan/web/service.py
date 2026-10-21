@@ -941,7 +941,7 @@ class SessionService:
                 "clip_features_complete": session.clip_features_complete if session else False,
                 "likely_keep_version": LIKELY_KEEP_VERSION,
                 "needs_transcription": bool(self.audio and session is None),
-                "transcription": self._transcriptions.latest(self.audio),
+                "transcription": self._latest_transcription(),
                 "revision": session.revision if session else None,
                 "candidates": self._clip_payloads(session) if session else [],
                 "counts": counts,
@@ -953,8 +953,17 @@ class SessionService:
         with self._lock:
             return {
                 "revision": self.session.revision if self.session else None,
-                "transcription": self._transcriptions.latest(self.audio),
+                "transcription": self._latest_transcription(),
             }
+
+    def _latest_transcription(self) -> dict | None:
+        """Return this audio's latest transcription job, unless it finished and its transcript is gone."""
+        job = self._transcriptions.latest(self.audio)
+        # A completed job always opened a session, so with none left its SRT and session were removed,
+        # and showing it would hide the form for transcribing again.
+        if job is not None and job["state"] == "completed" and self.session is None:
+            return None
+        return job
 
     def _ready(self) -> Session:
         if self.session is None:

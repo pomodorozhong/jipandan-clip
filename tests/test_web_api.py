@@ -901,6 +901,33 @@ class WebApiTests(unittest.TestCase):
                 "/api/transcriptions", json=settings, headers=self.headers,
             ).status_code, 409)
 
+    def test_removed_transcript_allows_transcribing_again(self):
+        self.srt.unlink()
+        self.open()
+        settings = {"audio": str(self.audio.resolve()), "model_name": "large-v3", "language": None,
+                    "temperature": 0, "max_context": 0, "entropy_thold": 3}
+
+        def succeed(_manager, job):
+            job.output.write_text(SRT, encoding="utf-8")
+            return 0
+
+        with patch("jipandan.web.transcription.TranscriptionJobs._run_process", succeed):
+            started = self.client.post("/api/transcriptions", json=settings, headers=self.headers)
+            self.wait_for_job(f"/api/transcriptions/{started.json()['id']}", "completed")
+        self.assertEqual(self.client.get("/api/session").json()["transcription"]["state"], "completed")
+
+        # The owner deletes the SRT and session to start over.
+        self.service.store.close()
+        self.srt.unlink()
+        store_path(self.audio).unlink()
+        reopened = self.open()
+        self.assertTrue(reopened["needs_transcription"])
+        self.assertIsNone(reopened["transcription"])
+        with patch("jipandan.web.transcription.TranscriptionJobs._run_process", succeed):
+            again = self.client.post("/api/transcriptions", json=settings, headers=self.headers)
+            self.assertEqual(again.status_code, 200, again.text)
+            self.wait_for_job(f"/api/transcriptions/{again.json()['id']}", "completed")
+
     def test_generated_clip_source_builds_the_session_from_candidates(self):
         self.srt.unlink()
         self.open()
