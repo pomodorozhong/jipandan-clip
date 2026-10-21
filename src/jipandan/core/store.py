@@ -134,6 +134,20 @@ class RecordingStore:
             self._insert_event("import", None, {"clips": len(session.candidates)}, mutation=None)
         session.revision = 1
 
+    def review_set(self) -> dict | None:
+        """Return the session's review set, or None when it has none."""
+        with self._lock:
+            row = self._db.execute("SELECT value FROM meta WHERE key = 'review_set'").fetchone()
+        return json.loads(row[0]) if row else None
+
+    def save_review_set(self, review_set: dict, event: dict) -> None:
+        """Save the review set and log ``event`` in one transaction; neither changes a clip or can be undone."""
+        with self._lock, self._transaction():
+            self._db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('review_set', ?)",
+                             (json.dumps(review_set, ensure_ascii=False),))
+            fields = dict(event)
+            self._insert_event(str(fields.pop("type")), None, fields, mutation=None)
+
     def snap_points(self, kind: str) -> list[int]:
         """Return the recording's snap points of ``kind`` in milliseconds, in order."""
         with self._lock:

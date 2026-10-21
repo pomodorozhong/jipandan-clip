@@ -423,6 +423,52 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertEqual(self.client.get("/api/session").json()["revision"], state["revision"])
 
+    def measure_clip_features(self):
+        path = "/api/session/clip-features"
+        measured = [ClipFeatures(-12.0, -3.0, -25.0), ClipFeatures(-35.0, -9.0, -6.0)]
+        with patch("jipandan.web.service.compute_clip_features", return_value=measured):
+            self.client.post(path, headers=self.headers)
+            self.wait_for_job(path, "completed")
+
+    def test_review_set_is_picked_once_and_completed(self):
+        self.open()
+        self.assertEqual(self.client.post("/api/session/review-set", json={"size": 10},
+                                          headers=self.headers).status_code, 409)
+        self.measure_clip_features()
+        self.assertEqual(self.client.post("/api/session/review-set", json={"size": 9},
+                                          headers=self.headers).status_code, 422)
+        state = self.client.post("/api/session/review-set", json={"size": 10}, headers=self.headers).json()
+        # Two clips: the set holds both, so nothing outside it can be missed.
+        self.assertEqual(state["review_set"], {"size": 2, "total": 2, "random_share": 0.2,
+                                               "unprocessed": 2, "completed": None})
+        # 20% of two clips rounds to no random picks.
+        self.assertEqual([c["review_set"] for c in state["candidates"]], ["top", "top"])
+        event = self.events("review-set")[0]
+        self.assertEqual((event["size"], event["score_version"]), (2, "builtin-v1"))
+        self.assertEqual(sorted(event["top"] + event["random"]), ["1", "2"])
+        # Asking again keeps the set it already has.
+        again = self.client.post("/api/session/review-set", json={"size": 50}, headers=self.headers).json()
+        self.assertEqual(again["review_set"]["size"], 2)
+
+        revision = self.client.patch("/api/clips/1", json={
+            "expected_revision": state["revision"], "status": "rejected",
+            "context": {"review_set": "top", "filter": "triage"},
+        }, headers=self.headers).json()["revision"]
+        self.assertEqual(self.events("status")[0]["review_set"], "top")
+        self.assertEqual(self.open()["review_set"]["unprocessed"], 1)
+
+        completed = self.client.post("/api/session/review-set/complete", headers=self.headers).json()
+        self.assertEqual(completed["review_set"]["completed"]["unprocessed"], 1)
+        self.assertEqual([c["review_set"] for c in completed["candidates"]], [None, None])
+        self.assertEqual(self.events("review-set-complete")[0]["unprocessed"], 1)
+        self.assertEqual(self.client.post("/api/session/review-set/complete",
+                                          headers=self.headers).status_code, 422)
+        # A completed set stays completed after reopening, and no new set is picked.
+        self.assertIsNotNone(self.open()["review_set"]["completed"])
+        self.assertIsNotNone(self.client.post("/api/session/review-set", json={"size": 10},
+                                              headers=self.headers).json()["review_set"]["completed"])
+        self.assertEqual(revision, self.client.get("/api/session").json()["revision"])
+
     def test_clip_features_score_clips_and_persist_without_undo(self):
         self.open()
         path = "/api/session/clip-features"
