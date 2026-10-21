@@ -11,7 +11,7 @@ import ShortcutCheatsheet from "./ShortcutCheatsheet";
 import TranscriptionScreen from "./TranscriptionScreen";
 import SettingsScreen from "./SettingsScreen";
 import type { StageTimes } from "./stageTimes";
-import { countStatuses, isProcessed, isReviewSetOpen, normalizeReviewSetSize, REVIEW_SET_DEFAULT_SIZE, scopeClips } from "./reviewSet";
+import { countStatuses, isProcessed, isReviewSetOpen, normalizeReviewSetSize, orderReviewSet, REVIEW_SET_DEFAULT_SIZE, scopeClips } from "./reviewSet";
 import GamepadStatusLine from "./GamepadStatus";
 import GamepadMappingScreen from "./GamepadMappingScreen";
 import { ShortcutBadge, ShortcutDisplayProvider, type BadgeMode, type DisplayInputType, type UnboundBadgeBehavior } from "./ShortcutBadge";
@@ -43,6 +43,8 @@ import {
 
 type Filter = "unsorted" | "group1" | "group2" | "rejected";
 type AllOrder = "clip-asc" | "clip-desc" | "start-asc" | "start-desc" | "title-asc" | "likely-desc";
+// An open review set orders every screen the same way.
+type Order = AllOrder | "review-set";
 type SaveState = "saved" | "saving" | "failed";
 // Triage: one clip at a time for first-pass decisions. Polish: the list and editor for keepers.
 // Publish: the Ready queue with export previews, title, and timing fixes.
@@ -590,22 +592,22 @@ export default function App() {
     if (reviewSetProcessed && reviewSetPromptDismissed !== session?.audio) setShowCompleteReviewSet(true);
   }, [reviewSetProcessed, reviewSetPromptDismissed, session?.audio]);
   // Triage works through the Unsorted queue in Likely keep order; Publish through Ready in clip order.
+  // An open review set replaces both, and Polish's order, with its own shuffled order.
   const activeFilter: Filter = mode === "triage" ? "unsorted" : mode === "publish" ? "group2" : filter;
   const activeQuery = mode === "polish" ? query : "";
-  const activeOrder: AllOrder = mode === "triage" ? "likely-desc" : mode === "publish" ? "clip-asc" : allOrder;
+  const activeOrder: Order = reviewSetOpen ? "review-set"
+    : mode === "triage" ? "likely-desc" : mode === "publish" ? "clip-asc" : allOrder;
   // Scores shift while clips are still being measured, so hold clip order until they settle.
   const likelyKeepPending = activeOrder === "likely-desc" && Boolean(session && !session.clip_features_complete);
-  const effectiveOrder: AllOrder = likelyKeepPending ? "clip-asc" : activeOrder;
+  const effectiveOrder: Order = likelyKeepPending ? "clip-asc" : activeOrder;
+  const reviewSetSeed = session?.review_set?.seed ?? "";
   const visible = useMemo(() => {
-    if (mode === "publish") return publishClips(scopedCandidates, publishView);
-    const clips = visibleClips(scopedCandidates, activeFilter, activeQuery);
+    const clips = mode === "publish" ? publishClips(scopedCandidates, publishView)
+      : visibleClips(scopedCandidates, activeFilter, activeQuery);
+    if (effectiveOrder === "review-set") return orderReviewSet(clips, reviewSetSeed);
+    if (mode === "publish") return clips;
     const compareClipId = (a: Clip, b: Clip) => a.index - b.index || a.suffix - b.suffix;
-    if (effectiveOrder === "likely-desc") {
-      // A review set brings its own random part, which replaces the usual exploration picks.
-      return reviewSetOpen
-        ? orderByLikelyKeep(clips, exploreSeed, true, compareClipId, (clip) => clip.review_set === "random")
-        : orderByLikelyKeep(clips, exploreSeed, settings.exploreRanking, compareClipId);
-    }
+    if (effectiveOrder === "likely-desc") return orderByLikelyKeep(clips, exploreSeed, settings.exploreRanking, compareClipId);
     return clips.sort((a, b) => {
       if (effectiveOrder === "clip-desc") return compareClipId(b, a);
       if (effectiveOrder === "start-asc") return a.start_ms - b.start_ms || compareClipId(a, b);
@@ -613,7 +615,7 @@ export default function App() {
       if (effectiveOrder === "title-asc") return a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: "base" }) || compareClipId(a, b);
       return compareClipId(a, b);
     });
-  }, [scopedCandidates, reviewSetOpen, activeFilter, activeQuery, effectiveOrder, exploreSeed, settings.exploreRanking, mode, publishView]);
+  }, [scopedCandidates, reviewSetSeed, activeFilter, activeQuery, effectiveOrder, exploreSeed, settings.exploreRanking, mode, publishView]);
   const effectiveSelectedId = visible.some((clip) => clip.clip_id === selectedId)
     ? selectedId : (visible[0]?.clip_id ?? null);
   const selected = session?.candidates.find((clip) => clip.clip_id === effectiveSelectedId) ?? null;
@@ -1411,7 +1413,7 @@ export default function App() {
                 </button>;
               })}
             </div>
-            <p className="subtle text-xs">{publishView === "ready" ? "Ready clips in clip order" : "Saved files, including clips edited after export"} · J/K to move</p>
+            <p className="subtle text-xs">{publishView === "ready" ? `Ready clips in ${reviewSetOpen ? "review set" : "clip"} order` : "Saved files, including clips edited after export"} · J/K to move</p>
             {publishView === "ready" && scopedCounts.group2 > 0 && <div className="mt-3">
               <Button onClick={() => void startExportAll()} disabled={exportAllRunning || busy || !exportAllSettingsValid}
                 title={exportAllSettingsValid ? "Export every Ready clip with its own title and the current export mode and thresholds"
@@ -1528,8 +1530,10 @@ export default function App() {
             </div>
             <div className="mt-3 grid gap-2">
               <label className="subtle min-w-0 text-xs">Order by
-                <select value={allOrder} onChange={(event) => setAllOrder(event.target.value as AllOrder)}
-                  aria-label="Order clips" className="mt-1 block w-full rounded-lg border line bg-[#101816] px-2.5 py-2 text-sm text-[#e7eee7]">
+                <select value={reviewSetOpen ? "review-set" : allOrder} onChange={(event) => setAllOrder(event.target.value as AllOrder)}
+                  disabled={reviewSetOpen} title={reviewSetOpen ? "A review set shows its clips in one order on every screen" : undefined}
+                  aria-label="Order clips" className="mt-1 block w-full rounded-lg border line bg-[#101816] px-2.5 py-2 text-sm text-[#e7eee7] disabled:opacity-60">
+                  {reviewSetOpen && <option value="review-set">Review set order</option>}
                   {allOrders.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
                 </select>
               </label>

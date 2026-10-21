@@ -8,7 +8,7 @@ export const EXPLORE_RATE = 0.05;
 // FNV-1a followed by the MurmurHash3 finalizer, mapped to [0, 1). Without the
 // finalizer, IDs that differ only in their last digit hash to nearby values, so
 // neighbouring clips would be picked (and placed) together.
-function unitHash(text: string): number {
+export function unitHash(text: string): number {
   let hash = 0x811c9dc5;
   for (let index = 0; index < text.length; index += 1) {
     hash ^= text.charCodeAt(index);
@@ -33,12 +33,10 @@ export function isExploreClip(seed: string, clipId: string): boolean {
  */
 export function orderByLikelyKeep<T extends { clip_id: string; likely_keep: number | null }>(
   clips: T[], seed: string | null, explore: boolean, tieBreak: (a: T, b: T) => number,
-  // Which clips are random picks; by default, the exploration picks above. A review set passes its random part.
-  isPick: (clip: T) => boolean = (clip) => isExploreClip(seed ?? "", clip.clip_id),
 ): T[] {
   const byScore = (a: T, b: T) => (b.likely_keep ?? -1) - (a.likely_keep ?? -1) || tieBreak(a, b);
   if (!explore || !seed) return [...clips].sort(byScore);
-  const picks = clips.filter(isPick);
+  const picks = clips.filter((clip) => isExploreClip(seed, clip.clip_id));
   if (!picks.length) return [...clips].sort(byScore);
   const pickIds = new Set(picks.map((clip) => clip.clip_id));
   const ordered = clips.filter((clip) => !pickIds.has(clip.clip_id)).sort(byScore);
