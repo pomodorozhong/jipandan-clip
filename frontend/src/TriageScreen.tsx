@@ -30,9 +30,11 @@ const decisions: { status: ClassificationStatus; label: string; keyboard: string
  * handling (Undo itself is in the top bar); this screen owns playback, which plays only the clip's span.
  */
 export default function TriageScreen({
-  clip, upNext, durationMs, position, remaining, counts, audioSrc, autoplay, active, busy, orderNote,
+  clip, upNext, durationMs, position, remaining, counts, hideScores = false, audioSrc, autoplay, active, busy, orderNote,
   gamepadAction, onGamepadActionHandled, onPlayback, onDecide, onNavigate, onSelect,
 }: {
+  // Hidden while a review set is open, so scores don't sway decisions or give away its random picks.
+  hideScores?: boolean;
   clip: Clip | null;
   upNext: Clip[];
   durationMs: number;
@@ -195,7 +197,7 @@ export default function TriageScreen({
         </div>
       </Panel>
       {upNext.length > 0 && <Panel title="Up next" ariaLabel="Up next clips"
-        aside={<span className="subtle text-xs">{orderNote ? "Clip order ↑" : "Likely keep ↓"}</span>}
+        aside={<span className="subtle text-xs">{orderNote ? "Clip order ↑" : hideScores ? "Review set" : "Likely keep ↓"}</span>}
         className="overflow-hidden">
         <div aria-label="Up next clips">
           {upNext.map((item) => {
@@ -207,9 +209,9 @@ export default function TriageScreen({
                 current ? "bg-[#344b39] shadow-[inset_3px_0_0_#cce7a9]" : "hover:bg-[#283b30]"}`}>
               <span className="subtle mono shrink-0 text-xs">#{item.clip_id}</span>
               <span className="min-w-0 flex-1 truncate" title={item.title}>{item.title}</span>
-              <span className="clip-score mono shrink-0" aria-label={item.likely_keep === null ? "Likely keep score pending" : `Likely keep score ${score}`}>
+              {!hideScores && <span className="clip-score mono shrink-0" aria-label={item.likely_keep === null ? "Likely keep score pending" : `Likely keep score ${score}`}>
                 {score}
-              </span>
+              </span>}
             </button>;
           })}
         </div>

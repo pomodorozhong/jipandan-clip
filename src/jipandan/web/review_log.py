@@ -35,7 +35,7 @@ def clean_context(raw: object) -> dict:
     context: dict[str, object] = {}
     if raw.get("source") in SOURCES:
         context["source"] = raw["source"]
-    for key in ("order", "filter", "score_version"):
+    for key in ("order", "filter", "score_version", "review_set"):
         if (value := _short(raw.get(key))) is not None:
             context[key] = value
     if (rank := _int(raw.get("rank"), 1, 1_000_000)) is not None:

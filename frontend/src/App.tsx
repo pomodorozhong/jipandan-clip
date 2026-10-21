@@ -11,6 +11,7 @@ import ShortcutCheatsheet from "./ShortcutCheatsheet";
 import TranscriptionScreen from "./TranscriptionScreen";
 import SettingsScreen from "./SettingsScreen";
 import type { StageTimes } from "./stageTimes";
+import { countStatuses, isProcessed, isReviewSetOpen, normalizeReviewSetSize, REVIEW_SET_DEFAULT_SIZE, scopeClips } from "./reviewSet";
 import GamepadStatusLine from "./GamepadStatus";
 import GamepadMappingScreen from "./GamepadMappingScreen";
 import { ShortcutBadge, ShortcutDisplayProvider, type BadgeMode, type DisplayInputType, type UnboundBadgeBehavior } from "./ShortcutBadge";
@@ -56,6 +57,8 @@ type AppSettings = {
   gamepadRepeatDelayMs: number;
   exploreRanking: boolean;
   autoplayClips: boolean;
+  // The size last used for a review set.
+  reviewSetSize: number;
 };
 
 // Titles longer than this get a "Show full title" toggle under their two-line clamp.
@@ -79,6 +82,7 @@ function loadSettings(): AppSettings {
         gamepadRepeatDelayMs: normalizeGamepadRepeatDelay(parsed.gamepadRepeatDelayMs),
         exploreRanking: typeof parsed.exploreRanking === "boolean" ? parsed.exploreRanking : true,
         autoplayClips: typeof parsed.autoplayClips === "boolean" ? parsed.autoplayClips : true,
+        reviewSetSize: normalizeReviewSetSize(parsed.reviewSetSize),
       };
     }
   } catch { /* Use defaults when browser storage is unavailable or invalid. */ }
@@ -91,6 +95,7 @@ function loadSettings(): AppSettings {
     gamepadRepeatDelayMs: GAMEPAD_REPEAT_DELAY_MS,
     exploreRanking: true,
     autoplayClips: true,
+    reviewSetSize: REVIEW_SET_DEFAULT_SIZE,
   };
 }
 
@@ -282,6 +287,14 @@ export default function App() {
   const [showStorageConfirm, setShowStorageConfirm] = useState(false);
   // The clip source Start over is waiting to confirm, and how it went.
   const [startOverSource, setStartOverSource] = useState<ClipSource | null>(null);
+  // The "Complete this review set?" dialog, and the recording whose prompt was answered with "Not yet".
+  const [showCompleteReviewSet, setShowCompleteReviewSet] = useState(false);
+  const [reviewSetPromptDismissed, setReviewSetPromptDismissed] = useState<string | null>(null);
+  const [completingReviewSet, setCompletingReviewSet] = useState(false);
+  const [startingReviewSet, setStartingReviewSet] = useState(false);
+  const [reviewSetError, setReviewSetError] = useState("");
+  // A review set asked for before Likely keep scores were final; it starts as soon as measuring finishes.
+  const [pendingReviewSet, setPendingReviewSet] = useState<{ audio: string; size: number } | null>(null);
   const [startOverBusy, setStartOverBusy] = useState(false);
   const [startOverMessage, setStartOverMessage] = useState("");
   const [startOverError, setStartOverError] = useState("");
@@ -566,6 +579,16 @@ export default function App() {
   }, []);
 
   const exploreSeed = session?.srt_fingerprint ?? null;
+  // While a review set is open, every stage, list, and count covers only its clips.
+  const reviewSetOpen = isReviewSetOpen(session?.review_set);
+  const scopedCandidates = useMemo(() => scopeClips(session?.candidates ?? [], reviewSetOpen),
+    [session?.candidates, reviewSetOpen]);
+  const scopedCounts = useMemo(() => countStatuses(scopedCandidates), [scopedCandidates]);
+  // Once every set clip is exported or rejected, ask whether to complete the set.
+  const reviewSetProcessed = reviewSetOpen && isProcessed(scopedCandidates);
+  useEffect(() => {
+    if (reviewSetProcessed && reviewSetPromptDismissed !== session?.audio) setShowCompleteReviewSet(true);
+  }, [reviewSetProcessed, reviewSetPromptDismissed, session?.audio]);
   // Triage works through the Unsorted queue in Likely keep order; Publish through Ready in clip order.
   const activeFilter: Filter = mode === "triage" ? "unsorted" : mode === "publish" ? "group2" : filter;
   const activeQuery = mode === "polish" ? query : "";
@@ -574,10 +597,15 @@ export default function App() {
   const likelyKeepPending = activeOrder === "likely-desc" && Boolean(session && !session.clip_features_complete);
   const effectiveOrder: AllOrder = likelyKeepPending ? "clip-asc" : activeOrder;
   const visible = useMemo(() => {
-    if (mode === "publish") return publishClips(session?.candidates ?? [], publishView);
-    const clips = visibleClips(session?.candidates ?? [], activeFilter, activeQuery);
+    if (mode === "publish") return publishClips(scopedCandidates, publishView);
+    const clips = visibleClips(scopedCandidates, activeFilter, activeQuery);
     const compareClipId = (a: Clip, b: Clip) => a.index - b.index || a.suffix - b.suffix;
-    if (effectiveOrder === "likely-desc") return orderByLikelyKeep(clips, exploreSeed, settings.exploreRanking, compareClipId);
+    if (effectiveOrder === "likely-desc") {
+      // A review set brings its own random part, which replaces the usual exploration picks.
+      return reviewSetOpen
+        ? orderByLikelyKeep(clips, exploreSeed, true, compareClipId, (clip) => clip.review_set === "random")
+        : orderByLikelyKeep(clips, exploreSeed, settings.exploreRanking, compareClipId);
+    }
     return clips.sort((a, b) => {
       if (effectiveOrder === "clip-desc") return compareClipId(b, a);
       if (effectiveOrder === "start-asc") return a.start_ms - b.start_ms || compareClipId(a, b);
@@ -585,7 +613,7 @@ export default function App() {
       if (effectiveOrder === "title-asc") return a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: "base" }) || compareClipId(a, b);
       return compareClipId(a, b);
     });
-  }, [session?.candidates, activeFilter, activeQuery, effectiveOrder, exploreSeed, settings.exploreRanking, mode, publishView]);
+  }, [scopedCandidates, reviewSetOpen, activeFilter, activeQuery, effectiveOrder, exploreSeed, settings.exploreRanking, mode, publishView]);
   const effectiveSelectedId = visible.some((clip) => clip.clip_id === selectedId)
     ? selectedId : (visible[0]?.clip_id ?? null);
   const selected = session?.candidates.find((clip) => clip.clip_id === effectiveSelectedId) ?? null;
@@ -599,11 +627,15 @@ export default function App() {
     return {
       source: lastInputSourceRef.current, order: effectiveOrder, filter: mode === "polish" ? activeFilter : mode,
       rank: rank || undefined, score: clip.likely_keep ?? undefined,
-      explore: effectiveOrder === "likely-desc" && settings.exploreRanking && exploreSeed !== null
-        && isExploreClip(exploreSeed, clip.clip_id),
+      explore: reviewSetOpen ? clip.review_set === "random"
+        : effectiveOrder === "likely-desc" && settings.exploreRanking && exploreSeed !== null
+          && isExploreClip(exploreSeed, clip.clip_id),
       score_version: session?.likely_keep_version,
+      // "top" or "random" inside an open set; "outside" for clips reviewed beyond a session's set.
+      review_set: clip.review_set ?? (session?.review_set ? "outside" : undefined),
     };
-  }, [visible, effectiveOrder, activeFilter, mode, settings.exploreRanking, exploreSeed, session?.likely_keep_version]);
+  }, [visible, effectiveOrder, activeFilter, mode, settings.exploreRanking, exploreSeed, session?.likely_keep_version,
+    reviewSetOpen, session?.review_set]);
 
   // A "view" is logged once a clip has been on screen for VIEW_MIN_MS, with how often it was played.
   // It ends when the clip changes, the page is hidden or loses focus, or input stops for VIEW_IDLE_MS.
@@ -707,8 +739,8 @@ export default function App() {
   useEffect(() => { setShowExportModal(false); }, [session?.audio]);
 
   const clipTranscriptionRunning = clipTranscriptionJob?.state === "queued" || clipTranscriptionJob?.state === "running";
-  const group1SuggestionCount = useMemo(() => session?.candidates
-    .filter((clip) => clip.status === "group1" && clip.suggested_title).length ?? 0, [session?.candidates]);
+  const group1SuggestionCount = useMemo(() => scopedCandidates
+    .filter((clip) => clip.status === "group1" && clip.suggested_title).length, [scopedCandidates]);
 
   // Export all runs in the browser: render each Ready clip with Publish's settings, then save it.
   const [exportAllRun, setExportAllRun] = useState<ExportAllRun | null>(null);
@@ -724,7 +756,7 @@ export default function App() {
 
   const startExportAll = useCallback(async () => {
     if (!session || exportAllRunning) return;
-    const clips = publishClips(session.candidates, "ready");
+    const clips = publishClips(scopedCandidates, "ready");
     if (!clips.length) return;
     const mode = publishSettings.mode;
     const { start, stop } = exportAllThresholds;
@@ -766,7 +798,7 @@ export default function App() {
       setExportAllRun({ ...run });
     }
     setExportAllRun({ ...run, state: "completed" });
-  }, [session, exportAllRunning, publishSettings.mode, exportAllThresholds.start, exportAllThresholds.stop, rankingContext]);
+  }, [session, scopedCandidates, exportAllRunning, publishSettings.mode, exportAllThresholds.start, exportAllThresholds.stop, rankingContext]);
 
   const mutate = useCallback(async <T extends Session | SessionDelta>(work: () => Promise<T>) => {
     setBusy(true);
@@ -817,7 +849,7 @@ export default function App() {
     setShowDetailMobile(false);
   }, [visible, selectedPosition]);
 
-  const activeDialog = showSettings || showStorageConfirm || startOverSource !== null || showHelp || showJump || showMerge || showExportModal;
+  const activeDialog = showSettings || showStorageConfirm || startOverSource !== null || showCompleteReviewSet || showHelp || showJump || showMerge || showExportModal;
   const reviewContext = getInputContext({ activeDialog, textEditing: editingTitle });
 
   const undo = useCallback(() => {
@@ -1111,6 +1143,52 @@ export default function App() {
     }
   }
 
+  async function startReviewSet(size: number) {
+    if (!session?.audio) return;
+    // Picking the top clips needs every clip's final score, so wait for measuring instead of ranking on partial scores.
+    if (!session.clip_features_complete) {
+      setReviewSetError("");
+      setPendingReviewSet({ audio: session.audio, size });
+      return;
+    }
+    setPendingReviewSet(null);
+    setStartingReviewSet(true);
+    setReviewSetError("");
+    try {
+      const next = await api<Session>("/session/review-set", "POST", { size });
+      setSession(next);
+      setMode("triage");
+      setSelectedId(null);
+      showNotice(`Review set started: ${next.review_set?.size ?? size} clips.`);
+    } catch (cause) {
+      setReviewSetError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setStartingReviewSet(false);
+    }
+  }
+
+  const startReviewSetRef = useRef(startReviewSet);
+  startReviewSetRef.current = startReviewSet;
+  useEffect(() => {
+    if (!pendingReviewSet) return;
+    if (session?.audio !== pendingReviewSet.audio || session.review_set) setPendingReviewSet(null);
+    else if (session.clip_features_complete) void startReviewSetRef.current(pendingReviewSet.size);
+  }, [pendingReviewSet, session?.audio, session?.review_set, session?.clip_features_complete]);
+
+  async function completeReviewSet() {
+    setCompletingReviewSet(true);
+    try {
+      const next = await api<Session>("/session/review-set/complete", "POST");
+      setSession(next);
+      setShowCompleteReviewSet(false);
+      showNotice(`Review set completed. All ${next.candidates.length} clips are shown again.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setCompletingReviewSet(false);
+    }
+  }
+
   async function startOver(source: ClipSource) {
     if (!session || session.revision === null) return;
     setStartOverSource(null);
@@ -1135,6 +1213,7 @@ export default function App() {
       setLeadingSilenceJob(null); setDismissedDetectionJobId(null); loadedDetectionAdjustment.current = null;
       autoDetectionRequest.current = null; loadedDetectionJob.current = null;
       setClipFeaturesAttempt((attempt) => attempt + 1);
+      setPendingReviewSet(null);
       const backupName = next.start_over_backup?.split(/[\\/]/).pop();
       setStartOverMessage(`Started over. The previous session was saved beside the recording as ${backupName}.`);
     } catch (cause) {
@@ -1205,7 +1284,9 @@ export default function App() {
               ? `Session: ${session.session_path ?? "Not created"}\nExports: ${session.clip_dir}` : undefined}>
               {session?.audio_name ?? "No audio open"}
               {reviewing && session && <> · <span className="mono">{formatDuration(session.duration_ms ?? 0)}</span>
-                {!session.srt_exists && <> · <span className="text-[#ead49b]">SRT missing</span></>}</>}
+                {!session.srt_exists && <> · <span className="text-[#ead49b]">SRT missing</span></>}
+                {reviewSetOpen && session.review_set && <> · <span className="text-[#c4e7ff]"
+                  title="Only the review set's clips are shown until it is completed">Review set of {session.review_set.size}</span></>}</>}
             </div>
           </div>
         </div>
@@ -1217,7 +1298,7 @@ export default function App() {
                 if (item === "polish" && mode !== "polish") { setFilter("group1"); setQuery(""); setSelectedId(null); }
                 setEditingTitle(false); setShowClipMenu(false); setMode(item);
               }}>
-              {label} <CountBadge label={`${session.counts[status]} ${statusLabels[status]}`}>{session.counts[status]}</CountBadge>
+              {label} <CountBadge label={`${scopedCounts[status]} ${statusLabels[status]}`}>{scopedCounts[status]}</CountBadge>
             </button>)}
           </div>
         </nav>}
@@ -1306,7 +1387,7 @@ export default function App() {
       {session.needs_transcription ? <TranscriptionScreen key={session.audio} session={session}
         onReady={(next) => { setSession(next); setFilter("unsorted"); setSelectedId(null); }} />
       : mode === "triage" ? <TriageScreen clip={selected} upNext={triageUpNext} durationMs={session.duration_ms ?? 0} position={selectedPosition + 1} remaining={visible.length}
-        counts={session.counts} audioSrc={audioUrl()} autoplay={settings.autoplayClips}
+        counts={scopedCounts} hideScores={reviewSetOpen} audioSrc={audioUrl()} autoplay={settings.autoplayClips}
         active={!showExportModal && !showSettings && !showHelp && !showJump && !showMerge}
         busy={busy}
         orderNote={likelyKeepPending ? "Showing clip order until measuring finishes" : null}
@@ -1323,7 +1404,7 @@ export default function App() {
             <div className="seg seg-compact mb-1" role="group" aria-label="Publish list">
               {(["ready", "exported"] as const).map((view) => {
                 const label = view === "ready" ? "Ready" : "Exported";
-                const count = view === "ready" ? session.counts.group2 : publishClips(session.candidates, "exported").length;
+                const count = view === "ready" ? scopedCounts.group2 : publishClips(scopedCandidates, "exported").length;
                 return <button key={view} type="button" className="seg-btn" aria-label={`${label}, ${count} ${count === 1 ? "clip" : "clips"}`}
                   aria-pressed={publishView === view} onClick={() => { setPublishView(view); setSelectedId(null); }}>
                   <span>{label}</span><span aria-hidden="true" className="mono text-[11px] font-normal leading-none opacity-75">{count}</span>
@@ -1331,7 +1412,7 @@ export default function App() {
               })}
             </div>
             <p className="subtle text-xs">{publishView === "ready" ? "Ready clips in clip order" : "Saved files, including clips edited after export"} · J/K to move</p>
-            {publishView === "ready" && session.counts.group2 > 0 && <div className="mt-3">
+            {publishView === "ready" && scopedCounts.group2 > 0 && <div className="mt-3">
               <Button onClick={() => void startExportAll()} disabled={exportAllRunning || busy || !exportAllSettingsValid}
                 title={exportAllSettingsValid ? "Export every Ready clip with its own title and the current export mode and thresholds"
                   : "Fix the export thresholds first"}>
@@ -1426,7 +1507,7 @@ export default function App() {
           <div className="shrink-0 border-b line p-4">
             <div className="seg seg-compact mb-1" role="group" aria-label="Status filter">
               {filters.map((item) => {
-                const count = session.counts[item.key === "unsorted" ? "pending" : item.key];
+                const count = scopedCounts[item.key === "unsorted" ? "pending" : item.key];
                 return <button key={item.key} type="button" onClick={() => setFilter(item.key)}
                   aria-pressed={filter === item.key} aria-label={`${item.label}, ${count} ${count === 1 ? "clip" : "clips"}`}
                   className="seg-btn">
@@ -1453,9 +1534,9 @@ export default function App() {
                 </select>
               </label>
             </div>
-            {filter === "group1" && session.counts.group1 > 0 && <div className="mt-3 flex flex-wrap items-center gap-2">
+            {filter === "group1" && scopedCounts.group1 > 0 && <div className="mt-3 flex flex-wrap items-center gap-2">
               <Button onClick={() => void startClipTranscription(
-                session.candidates.filter((clip) => clip.status === "group1").map((clip) => clip.clip_id))}
+                scopedCandidates.filter((clip) => clip.status === "group1").map((clip) => clip.clip_id))}
                 disabled={clipTranscriptionRunning}
                 title="Run Whisper again on each Needs work clip's own audio and suggest a new title">
                 Re-transcribe Needs work titles
@@ -1702,6 +1783,16 @@ export default function App() {
             onExploreRankingChange={(enabled) => setSettings((current) => ({ ...current, exploreRanking: enabled }))}
             gamepadStatus={gamepadStatus}
             onLoadStageTimes={loadStageTimes}
+            reviewSet={{
+              sessionOpen: Boolean(session?.audio && !session.needs_transcription),
+              scoresReady: Boolean(session?.clip_features_complete),
+              size: settings.reviewSetSize, reviewSet: session?.review_set ?? null,
+              busy: startingReviewSet, error: reviewSetError, onStart: (size) => void startReviewSet(size),
+              waiting: pendingReviewSet?.audio === session?.audio, onCancelWaiting: () => setPendingReviewSet(null),
+              measuring: clipFeaturesJob,
+              onSizeChange: (size) => setSettings((current) => ({ ...current, reviewSetSize: normalizeReviewSetSize(size) })),
+              onComplete: () => setShowCompleteReviewSet(true),
+            }}
             startOver={{
               sources: session?.clip_sources ?? [],
               current: session?.srt?.endsWith(".candidates.srt") ? "generated" : "lines",
@@ -1736,6 +1827,19 @@ export default function App() {
           className="soft-surface rounded-lg px-4 py-2 text-sm font-medium hover:bg-[#354b3b]">Cancel</button>
         <button type="button" disabled={busy || storageBusy || !clipDirDraft.trim()} onClick={() => void confirmClipDir()}
           className="rounded-lg bg-[#b7d69d] px-4 py-2 text-sm font-semibold text-[#1d2d20] disabled:cursor-not-allowed disabled:opacity-50">Confirm</button>
+      </div>
+    </Dialog>}
+
+    {showCompleteReviewSet && session?.review_set && <Dialog title="Complete this review set?"
+      controllerHandlerRef={dialogControllerHandlerRef}
+      onClose={() => { setShowCompleteReviewSet(false); setReviewSetPromptDismissed(session.audio); }}>
+      <p className="subtle mb-3 text-sm">{reviewSetProcessed
+        ? `All ${session.review_set.size} clips in the set are exported or rejected.`
+        : `${session.review_set.unprocessed} of ${session.review_set.size} clips in the set are not exported or rejected yet. Completing now ends the set early.`}</p>
+      <p className="subtle mb-5 text-xs">Completing returns to regular review, showing the other {session.candidates.length - scopedCandidates.length} candidates. A session has one review set, so this cannot be undone.</p>
+      <div className="flex justify-end gap-2">
+        <Button onClick={() => { setShowCompleteReviewSet(false); setReviewSetPromptDismissed(session.audio); }}>Not yet</Button>
+        <Button variant="primary" disabled={completingReviewSet} onClick={() => void completeReviewSet()}>Complete review set</Button>
       </div>
     </Dialog>}
 

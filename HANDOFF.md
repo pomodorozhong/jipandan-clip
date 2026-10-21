@@ -2,24 +2,22 @@
 
 ## In progress
 
-### fix/start-over-measuring
-
-- **Task:** a bug already on `main` from #81, found by the owner on 2026-10-21: after Start over while loudness measuring was still running, measuring never restarted, so Likely keep scores never finished (and Review set could not start). No issue; local branch, unlinked.
-- **PR:** none yet; its own small PR from `main`.
-- **Code checkpoint:** `377f9c2 fix(web): restart loudness measuring and silence detection after Start over`.
-- **State:** awaiting owner approval of the PR title and body.
-- **Verification (2026-10-21):** `npm --prefix frontend run test` (140), `check` and `build` passed. In the app, on a scratchpad copy of 0903 (4,757 clips), Start over while measuring was at 402 of 4,757 started a new measuring job. Python tests not run: no backend change.
-- **Next action:** owner approves the PR; then push and open it.
-
 ### feat/review-set
 
-- **PR:** #82, open; see that branch's subsection.
+- **Task:** a review set mode, requested and planned with the owner on 2026-10-21: a session reviews a fixed set of clips (300 by default; 80% top Likely keep, 20% random from all candidates), and the whole app shows only the set until the owner completes it. Decisions and reasoning are in `doc/app-rebuild-plan.md` under "Review sets". No issue; local branch, unlinked.
+- **PR:** #82, open. On 2026-10-21 the owner found the setting's checkbox redundant, so it became a **Start review set** button for the open session.
+- **Code checkpoint:** `e303c79 feat(web): review only a fixed set of clips until it is completed`.
+- **State:** awaiting owner review and merge; the Start review set button (which waits for measuring when needed) is committed locally and awaits approval to push. The Start over measuring fix (#83) is merged into `main` and merged in here.
+- **Verification (2026-10-21):** `uv run python -m unittest discover -s tests` passed, and `npm --prefix frontend run test` (145), `check` and `build` passed. In the app, on a copy of the 0511 snap demo session (83 clips) with a set of 30, the set held 24 top and 6 random clips. Triage counted only the set and hid scores, and Publish's Export all exported only the set's Ready clip. After the last set clip was exported, the completion dialog appeared; completing showed all 83 clips with scores. The log held `review-set` and `review-set-complete` events, and the UI decision recorded `review_set: random` with `explore: true`. No console errors.
+- **Start review set while measuring (2026-10-21):** on a scratchpad copy of 0903 (4,757 clips), clicking Start review set during measuring showed its progress with a Cancel button, and the set of 300 (240 top, 60 random) started by itself when measuring finished.
+- **Not covered:** most set clips in that run were rejected through the local API to reach the end quickly; Polish in set mode was checked only through its counts.
+- **Next action:** owner approves pushing the Start review set change to #82, then merges it.
 
 ## Ranked work
 
 Before the owner's next clipping session:
 
-1. `fix/start-over-measuring`, then `feat/review-set` (#82): merge them, then use Settings → Start over with generated clips and Settings → Review set → Start review set (300) to begin the timed session.
+1. `feat/review-set` (#82): merge it, then use Settings → Start over with generated clips and Settings → Review set → Start review set (300) to begin the timed session.
 
 After that session:
 

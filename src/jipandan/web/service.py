@@ -36,11 +36,12 @@ from jipandan.core.leading_silence import detect_leading_silence_start
 from jipandan.core.paths import AppPaths, default_export_dir, get_app_paths, resolve_export_dir
 from jipandan.core.candidates import candidates_srt_path, is_candidates_srt
 from jipandan.core.snap_points import KINDS as SNAP_KINDS, load_snap_points, snap_points_path
+from jipandan.core.review_set import MAX_SIZE, MIN_SIZE, pick_review_set, unprocessed
 from jipandan.core.stage_times import stage_breakdown
 from jipandan.core.srt import parse_srt, segment_scores_path
 from jipandan.core.whisper import describe_transcribe_call
 from jipandan.core.models import ClipCandidate, MIN_CLIP_DURATION_SECONDS, Session
-from jipandan.core.store import RecordingStore, StoreConflict, store_path
+from jipandan.core.store import RecordingStore, StoreConflict, store_path, utc_now
 from jipandan.core.srt import seconds_to_ffmpeg_timestamp, srt_time_to_seconds
 from jipandan.web.waveform import MAX_BUCKETS, MAX_WINDOW_MS, MIN_BUCKETS, WaveformCache
 from jipandan.web.preview import PreviewJobs
@@ -115,6 +116,7 @@ class SessionService:
         self._clip_dir_override = clip_dir.expanduser().resolve() if clip_dir else None
         self.upload_dir = (upload_dir or self.paths.uploads_dir).expanduser().resolve()
         self._waveforms = WaveformCache()
+        self._review_set: dict | None = None
         self._leading_silence_job: dict[str, object] | None = None
         self._clip_features_job: dict[str, object] | None = None
         self._clip_transcription_job: dict[str, object] | None = None
@@ -867,6 +869,58 @@ class SessionService:
             self._replace_recording(session, store, srt)
             return self.snapshot()
 
+    @property
+    def _review_set_roles(self) -> dict[str, str]:
+        """Review set role ("top" or "random") by SRT index, while the set is open."""
+        review_set = self._review_set
+        return review_set["roles"] if review_set and not review_set["completed"] else {}
+
+    def _review_set_summary(self, session: Session | None) -> dict | None:
+        review_set = self._review_set
+        if review_set is None or session is None:
+            return None
+        return {
+            "size": review_set["size"], "total": review_set["total"], "random_share": review_set["random_share"],
+            "unprocessed": unprocessed(review_set["roles"], [(c.index, c.status) for c in session.candidates]),
+            "completed": review_set["completed"],
+        }
+
+    def create_review_set(self, size: int) -> dict:
+        """Give the open session its fixed review set; a session that already has one keeps it."""
+        if not MIN_SIZE <= size <= MAX_SIZE:
+            raise InvalidEdit(f"A review set holds {MIN_SIZE} to {MAX_SIZE} clips")
+        with self._lock:
+            session = self._ready()
+            if self._review_set is not None:
+                return self.snapshot()
+            if not session.clip_features_complete:
+                raise SessionNotReady("Likely keep scores are still being measured")
+            scores = self._scores(session)
+            review_set = pick_review_set(
+                [(c.clip_id, c.index, score) for c, score in zip(session.candidates, scores)], size,
+            )
+            review_set["score_version"] = LIKELY_KEEP_VERSION
+            self.store.save_review_set(review_set, {
+                "type": "review-set", **{key: review_set[key] for key in (
+                    "size", "total", "random_share", "seed", "score_version", "top", "random")},
+            })
+            self._review_set = review_set
+            return self.snapshot()
+
+    def complete_review_set(self) -> dict:
+        """Close the open review set so every clip shows again; early if set clips are still unprocessed."""
+        with self._lock:
+            session = self._ready()
+            review_set = self._review_set
+            if review_set is None or review_set["completed"]:
+                raise InvalidEdit("This session has no open review set")
+            left = unprocessed(review_set["roles"], [(c.index, c.status) for c in session.candidates])
+            completed = {"t": utc_now(), "unprocessed": left}
+            self.store.save_review_set({**review_set, "completed": completed},
+                                       {"type": "review-set-complete", **completed})
+            self._review_set = {**review_set, "completed": completed}
+            return self.snapshot()
+
     def _clip_source_srts(self) -> dict[str, Path]:
         """The saved SRTs a new session for the open audio can start from, by clip source."""
         if self.audio is None:
@@ -913,6 +967,7 @@ class SessionService:
         self.session = session
         self.store = store
         self._title_suggestions = store.suggestions() if store is not None else {}
+        self._review_set = store.review_set() if store is not None else None
         self._payload_cache.clear()
         self._score_cache = None
         self._merge_preview_cache = None
@@ -939,7 +994,8 @@ class SessionService:
         cached = self._payload_cache.get(candidate.clip_id)
         if cached is None or cached[0] is not candidate:
             cached = self._payload_cache[candidate.clip_id] = (candidate, clip_payload(candidate))
-        return {**cached[1], "likely_keep": score, "suggested_title": self._title_suggestions.get(candidate.clip_id)}
+        return {**cached[1], "likely_keep": score, "suggested_title": self._title_suggestions.get(candidate.clip_id),
+                "review_set": self._review_set_roles.get(str(candidate.index))}
 
     def _counts(self, session: Session | None) -> dict[str, int]:
         counts = {name: 0 for name in ("pending", "group1", "group2", "exported", "rejected")}
@@ -988,6 +1044,7 @@ class SessionService:
                 "can_undo": bool(self.store and self.store.can_undo()),
                 "merge_preview": self.merge_preview() if session and self.srt and self.srt.exists() else None,
                 "clip_sources": self._clip_sources(),
+                "review_set": self._review_set_summary(session),
             }
 
     def event_snapshot(self) -> dict:

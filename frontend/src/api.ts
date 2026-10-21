@@ -1,8 +1,21 @@
 export type Status = "pending" | "group1" | "group2" | "exported" | "rejected";
 
+/** A session's fixed review set; see doc/app-rebuild-plan.md, "Review sets". */
+export interface ReviewSet {
+  size: number;
+  /** Candidates in the session when the set was picked. */
+  total: number;
+  random_share: number;
+  /** Set clips not yet exported or rejected. */
+  unprocessed: number;
+  completed: { t: string; unprocessed: number } | null;
+}
+
 export interface Clip {
   clip_id: string;
   index: number;
+  /** Role in the open review set; null outside it or once the set is completed. */
+  review_set: "top" | "random" | null;
   suffix: number;
   title: string;
   status: Status;
@@ -64,6 +77,7 @@ export interface Session {
   merge_preview: MergePreview | null;
   /** Saved SRTs a fresh session can start from. */
   clip_sources: ClipSource[];
+  review_set: ReviewSet | null;
   /** Where Start over saved the previous session. */
   start_over_backup?: string;
   created_clip_id?: string;

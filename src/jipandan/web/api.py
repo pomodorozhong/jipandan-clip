@@ -62,6 +62,10 @@ class StartOverRequest(BaseModel):
     clip_source: Literal["lines", "generated"]
 
 
+class ReviewSetRequest(BaseModel):
+    size: int
+
+
 class StorageRequest(BaseModel):
     expected_revision: int | None = Field(default=None, ge=0)
     clip_dir: str = Field(min_length=1, max_length=4096)
@@ -253,6 +257,14 @@ def create_app(
     @app.post("/api/session/start-over")
     def start_over(request: StartOverRequest):
         return SessionJSON(app.state.service.start_over(request.expected_revision, request.clip_source))
+
+    @app.post("/api/session/review-set")
+    def create_review_set(request: ReviewSetRequest):
+        return SessionJSON(app.state.service.create_review_set(request.size))
+
+    @app.post("/api/session/review-set/complete")
+    def complete_review_set():
+        return SessionJSON(app.state.service.complete_review_set())
 
     @app.post("/api/review-log")
     def record_review_events(request: ReviewEvents):
