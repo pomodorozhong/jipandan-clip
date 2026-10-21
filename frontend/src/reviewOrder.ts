@@ -33,10 +33,12 @@ export function isExploreClip(seed: string, clipId: string): boolean {
  */
 export function orderByLikelyKeep<T extends { clip_id: string; likely_keep: number | null }>(
   clips: T[], seed: string | null, explore: boolean, tieBreak: (a: T, b: T) => number,
+  // Which clips are random picks; by default, the exploration picks above. A review set passes its random part.
+  isPick: (clip: T) => boolean = (clip) => isExploreClip(seed ?? "", clip.clip_id),
 ): T[] {
   const byScore = (a: T, b: T) => (b.likely_keep ?? -1) - (a.likely_keep ?? -1) || tieBreak(a, b);
   if (!explore || !seed) return [...clips].sort(byScore);
-  const picks = clips.filter((clip) => isExploreClip(seed, clip.clip_id));
+  const picks = clips.filter(isPick);
   if (!picks.length) return [...clips].sort(byScore);
   const pickIds = new Set(picks.map((clip) => clip.clip_id));
   const ordered = clips.filter((clip) => !pickIds.has(clip.clip_id)).sort(byScore);

@@ -8,7 +8,8 @@ import {
 } from "./gamepad";
 import type { BadgeMode, UnboundBadgeBehavior } from "./ShortcutBadge";
 import { formatDuration, formatPerClip, formatShare, stageLabels, type StageTimes } from "./stageTimes";
-import { clipSourceLabels, type ClipSource } from "./api";
+import { clipSourceLabels, type ClipSource, type ReviewSet } from "./api";
+import { normalizeReviewSetSize, REVIEW_SET_MAX_SIZE, REVIEW_SET_MIN_SIZE } from "./reviewSet";
 import { Button } from "./ui";
 
 const ROW_BASE = "grid items-center gap-x-6 gap-y-2.5 border-b border-[#2a3731] py-3.5 last:border-b-0";
@@ -137,6 +138,32 @@ function ReviewTimeSection({ enabled, onLoad }: { enabled: boolean; onLoad: () =
   </SettingsSection>;
 }
 
+// A fixed set of clips per session: the top Likely keep clips plus a random sample that keeps the data fair.
+function ReviewSetSection({ enabled, onEnabledChange, size, onSizeChange, reviewSet, onComplete }: {
+  enabled: boolean; onEnabledChange: (enabled: boolean) => void; size: number; onSizeChange: (size: number) => void;
+  reviewSet: ReviewSet | null; onComplete: () => void;
+}) {
+  const [draft, setDraft] = useState(String(size));
+  const open = Boolean(reviewSet && !reviewSet.completed);
+  const random = reviewSet ? Math.round(reviewSet.size * reviewSet.random_share) : 0;
+  return <SettingsSection title="Review set" description="Review a fixed number of clips instead of every candidate: mostly the top Likely keep clips, plus 20% picked at random from all candidates. The random part lets the review log be used to improve the ranking without the bias of reviewing only top clips, so decide each one like any other.">
+    <CheckboxRow title="Review a fixed set of clips" checked={enabled} onChange={onEnabledChange}
+      description="Sessions without a set get one once Likely keep scores are ready. Until you complete it, Triage, Polish, and Publish show only its clips, and Triage hides scores." />
+    <ControlRow title="Clips to review" description={`${REVIEW_SET_MIN_SIZE}–${REVIEW_SET_MAX_SIZE}. Applies to sessions that don't have a set yet.`}>
+      {(id) => <input id={id} type="number" min={REVIEW_SET_MIN_SIZE} max={REVIEW_SET_MAX_SIZE} step={10} value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => { const next = normalizeReviewSetSize(Number(draft)); setDraft(String(next)); onSizeChange(next); }}
+        className={`${FIELD} w-28 font-mono`} />}
+    </ControlRow>
+    {reviewSet && <div className={ROW}>
+      <RowText title={open ? "This session's set" : "This session's set is completed"} description={open
+        ? `${reviewSet.size} of ${reviewSet.total} clips (${reviewSet.size - random} top, ${random} random); ${reviewSet.unprocessed} not yet exported or rejected.`
+        : `${reviewSet.size} of ${reviewSet.total} clips; every clip is shown again.`} />
+      {open && <Button onClick={onComplete}>Complete review set…</Button>}
+    </div>}
+  </SettingsSection>;
+}
+
 // Replace the open session with a fresh one; the server keeps the old one as a backup.
 function StartOverSection({ enabled, sources, current, busy, message, error, onStartOver }: {
   enabled: boolean; sources: ClipSource[]; current: ClipSource; busy: boolean; message: string; error: string;
@@ -171,7 +198,7 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
   gamepadStatus, gamepadMappingButtonRef, onOpenGamepadMapping, focusController = false,
   onDetectLeadingSilenceChange, onShowOriginalStartChange, badgeMode, unboundBadgeBehavior,
   onBadgeModeChange, onUnboundBadgeBehaviorChange, gamepadRepeatDelayMs,
-  onGamepadRepeatDelayChange, snapEdges, onSnapEdgesChange, onLoadStageTimes, startOver }: {
+  onGamepadRepeatDelayChange, snapEdges, onSnapEdgesChange, onLoadStageTimes, startOver, reviewSet }: {
   clipDir: string;
   storageEnabled: boolean;
   storageBusy: boolean;
@@ -203,6 +230,10 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
   gamepadRepeatDelayMs: number;
   onGamepadRepeatDelayChange: (delayMs: number) => void;
   onLoadStageTimes: () => Promise<StageTimes>;
+  reviewSet: {
+    enabled: boolean; onEnabledChange: (enabled: boolean) => void; size: number; onSizeChange: (size: number) => void;
+    reviewSet: ReviewSet | null; onComplete: () => void;
+  };
   startOver: {
     sources: ClipSource[]; current: ClipSource; busy: boolean; message: string; error: string;
     onStartOver: (source: ClipSource) => void;
@@ -240,6 +271,8 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
         description="About 1 in 20 clips is placed at a random position instead of by score. These reveal good clips the score ranks too low; they are not marked, so judge them like any other clip." />
       <Footnote>Your decisions, which clips you viewed and played, and where each clip ranked are recorded in the session's <code>.jipandan.db</code> file beside the recording, to improve the Likely keep score.</Footnote>
     </SettingsSection>
+
+    <ReviewSetSection {...reviewSet} />
 
     <SettingsSection title="Clip timing">
       <CheckboxRow title="Detect leading silence" checked={detectLeadingSilence} onChange={onDetectLeadingSilenceChange}
