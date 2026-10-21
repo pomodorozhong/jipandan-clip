@@ -6,6 +6,8 @@ export interface ReviewSet {
   /** Candidates in the session when the set was picked. */
   total: number;
   random_share: number;
+  /** Seeds the set's random part and the order its clips are shown in. */
+  seed: string;
   /** Set clips not yet exported or rejected. */
   unprocessed: number;
   completed: { t: string; unprocessed: number } | null;

@@ -1,4 +1,5 @@
 import type { Clip, ReviewSet, Status } from "./api";
+import { unitHash } from "./reviewOrder";
 
 // While a review set is open, the whole app works on its clips only; see doc/app-rebuild-plan.md, "Review sets".
 export const REVIEW_SET_DEFAULT_SIZE = 300;
@@ -12,6 +13,15 @@ export function isReviewSetOpen(reviewSet: ReviewSet | null | undefined): review
 /** The clips the app shows: only the set's while a set is open, otherwise all of them. */
 export function scopeClips(clips: Clip[], open: boolean): Clip[] {
   return open ? clips.filter((clip) => clip.review_set) : clips;
+}
+
+/**
+ * Order a set's clips the same way on every screen: shuffled by the set's seed, not by score, so a
+ * random pick's place in the list doesn't give it away. Clips split off one clip stay together.
+ */
+export function orderReviewSet<T extends Pick<Clip, "index" | "suffix">>(clips: T[], seed: string): T[] {
+  const keys = new Map(clips.map((clip) => [clip.index, unitHash(`${seed}:order:${clip.index}`)]));
+  return [...clips].sort((a, b) => keys.get(a.index)! - keys.get(b.index)! || a.index - b.index || a.suffix - b.suffix);
 }
 
 export function countStatuses(clips: Clip[]): Record<Status, number> {

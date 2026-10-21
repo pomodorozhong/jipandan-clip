@@ -881,6 +881,7 @@ class SessionService:
             return None
         return {
             "size": review_set["size"], "total": review_set["total"], "random_share": review_set["random_share"],
+            "seed": review_set["seed"],
             "unprocessed": unprocessed(review_set["roles"], [(c.index, c.status) for c in session.candidates]),
             "completed": review_set["completed"],
         }

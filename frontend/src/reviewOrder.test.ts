@@ -35,16 +35,6 @@ describe("likely keep exploration", () => {
       .toEqual([...regular].sort((a, b) => b.likely_keep - a.likely_keep || byId(a, b)).map((clip) => clip.clip_id));
   });
 
-  it("can take its random picks from a review set instead", () => {
-    const random = new Set(["7", "3000"]);
-    const ordered = orderByLikelyKeep(clips, "session-a", true, byId, (clip) => random.has(clip.clip_id));
-    const regular = ordered.filter((clip) => !random.has(clip.clip_id));
-    expect(regular.map((clip) => clip.clip_id))
-      .toEqual([...regular].sort((a, b) => b.likely_keep - a.likely_keep || byId(a, b)).map((clip) => clip.clip_id));
-    // Exploration picks that are not in the set are ordered by score like any other clip.
-    expect(ordered.filter((clip) => random.has(clip.clip_id))).toHaveLength(2);
-  });
-
   it("orders purely by score when exploration is off", () => {
     const ordered = orderByLikelyKeep(clips, "session-a", false, byId);
     expect(ordered.map((clip) => clip.clip_id))

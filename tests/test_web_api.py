@@ -440,7 +440,9 @@ class WebApiTests(unittest.TestCase):
         state = self.client.post("/api/session/review-set", json={"size": 10}, headers=self.headers).json()
         # Two clips: the set holds both, so nothing outside it can be missed.
         self.assertEqual(state["review_set"], {"size": 2, "total": 2, "random_share": 0.2,
+                                               "seed": state["review_set"]["seed"],
                                                "unprocessed": 2, "completed": None})
+        self.assertRegex(state["review_set"]["seed"], r"^[0-9a-f]{16}$")
         # 20% of two clips rounds to no random picks.
         self.assertEqual([c["review_set"] for c in state["candidates"]], ["top", "top"])
         event = self.events("review-set")[0]
