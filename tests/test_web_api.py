@@ -12,6 +12,7 @@ from unittest.mock import patch
 import numpy as np
 from fastapi.testclient import TestClient
 
+from jipandan.core.candidates import candidates_srt_path
 from jipandan.core.clip_features import ClipFeatures
 from jipandan.core.models import Session
 from jipandan.core.snap_points import SPEECH_END, WORD_START, write_snap_points
@@ -345,9 +346,9 @@ class WebApiTests(unittest.TestCase):
         audio = str(self.audio.resolve())
         response = self.client.post("/api/review-log", json={"events": [
             {"type": "view", "audio": audio, "clip": "1", "dwell_ms": 2400, "plays": 2, "autoplay": True,
-             "started_at": int(time.time() * 1000) - 5000,
+             "started_at": int(time.time() * 1000) - 5000, "ended_by": "idle",
              "context": {"source": "gamepad", "rank": 1, "score": 50}},
-            {"type": "view", "audio": audio, "clip": "2", "dwell_ms": -5},
+            {"type": "view", "audio": audio, "clip": "2", "dwell_ms": -5, "ended_by": "lunch"},
             {"type": "status", "audio": audio, "clip": "2", "dwell_ms": 100},
             {"type": "view", "audio": audio, "dwell_ms": 100},
             # A view of a previously open recording must not land in this one's log.
@@ -359,7 +360,9 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual((events[0]["source"], events[0]["rank"], events[0]["score"]), ("gamepad", 1, 50.0))
         self.assertLess(events[0]["start"], events[0]["t"])
         self.assertTrue(events[0]["autoplay"])
+        self.assertEqual(events[0]["ended_by"], "idle")
         self.assertNotIn("start", events[1])
+        self.assertNotIn("ended_by", events[1])
         too_many = self.client.post("/api/review-log", json={"events": [{}] * 201}, headers=self.headers)
         self.assertEqual(too_many.status_code, 422)
 
@@ -911,6 +914,52 @@ class WebApiTests(unittest.TestCase):
             again = self.client.post("/api/transcriptions", json=settings, headers=self.headers)
             self.assertEqual(again.status_code, 200, again.text)
             self.wait_for_job(f"/api/transcriptions/{again.json()['id']}", "completed")
+
+    def test_generated_clip_source_builds_the_session_from_candidates(self):
+        self.srt.unlink()
+        self.open()
+        settings = {"audio": str(self.audio.resolve()), "model_name": "large-v3", "language": None,
+                    "temperature": 0, "max_context": 0, "entropy_thold": 3, "clip_source": "generated"}
+        generated = "1\n00:00:00,800 --> 00:00:02,100\nFirst\n\n"
+
+        def without_candidates(_manager, job):
+            job.output.write_text(SRT, encoding="utf-8")
+            return 0
+
+        with patch("jipandan.web.transcription.TranscriptionJobs._run_process", without_candidates):
+            started = self.client.post("/api/transcriptions", json=settings, headers=self.headers)
+            failed = self.wait_for_job(f"/api/transcriptions/{started.json()['id']}", "failed")
+            self.assertIn("voice activity detection failed", failed["error"])
+            self.assertFalse(self.srt.exists())
+
+        def succeed(_manager, job):
+            job.output.write_text(SRT, encoding="utf-8")
+            candidates = candidates_srt_path(job.output)
+            candidates.write_text(generated, encoding="utf-8")
+            write_segment_scores(candidates, [{"no_speech_prob": 0.3}])
+            write_snap_points(candidates, {WORD_START: [1000], SPEECH_END: [2100]})
+            return 0
+
+        with patch("jipandan.web.transcription.TranscriptionJobs._run_process", succeed):
+            retried = self.client.post(
+                f"/api/transcriptions/{started.json()['id']}/retry", headers=self.headers,
+            )
+            completed = self.wait_for_job(f"/api/transcriptions/{retried.json()['id']}", "completed")
+        self.assertEqual(completed["entry_count"], 1)
+        candidates = candidates_srt_path(self.srt.resolve())
+        self.assertEqual(self.srt.read_text(encoding="utf-8"), SRT)
+        self.assertEqual(candidates.read_text(encoding="utf-8"), generated)
+        state = self.client.get("/api/session").json()
+        self.assertEqual(state["srt"], str(candidates))
+        self.assertEqual([(c["start"], c["no_speech_prob"]) for c in state["candidates"]],
+                         [("00:00:00.800", 0.3)])
+        self.assertEqual(self.client.get("/api/session/snap-points").json(),
+                         {WORD_START: [1000], SPEECH_END: [2100]})
+
+        # Reopening follows the generated SRT, so it is not offered as a changed transcript.
+        reopened = self.open()
+        self.assertEqual(reopened["srt"], str(candidates))
+        self.assertFalse(reopened["merge_preview"]["file_changed"])
 
     def test_export_save_failure_removes_new_file_and_keeps_session_unexported(self):
         self.open()

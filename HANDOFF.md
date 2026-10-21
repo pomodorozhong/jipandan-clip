@@ -15,13 +15,11 @@
 
 Before the owner's next clipping session (2026-10-20: about to start one):
 
-1. #74 Review and merge the PR that lets new sessions start from generated clips (closes #50; branch `feat/candidate-generator`). The owner is testing it in the app.
-2. #75 Stop counting review time while the app is unfocused or idle, so the session's timing data is clean.
-3. `fix/stale-transcription-job` (no issue): let a recording be transcribed again after its SRT and session are deleted. Built locally; its PR comes after #74. Workaround meanwhile: open a copy of the recording under a new name.
+1. `fix/stale-transcription-job` (no issue): let a recording be transcribed again after its SRT and session are deleted. Built locally; needs `main` merged in and a PR. Workaround meanwhile: open a copy of the recording under a new name.
 
 After that session:
 
-4. #47 Decide whether generated clips should become the default, based on how fast that session went (results in `doc/app-rebuild-plan.md` step 3 once #74 merges).
+2. #47 Decide whether generated clips should become the default, based on how fast that session went (results in `doc/app-rebuild-plan.md` step 3).
 
 ## Pending
 

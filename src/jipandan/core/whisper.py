@@ -10,6 +10,12 @@ import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
+from jipandan.core.candidates import (
+    SPEECH_THRESHOLD,
+    best_segments,
+    candidates_srt_path,
+    generate_candidates,
+)
 from jipandan.core.snap_points import (
     SPEECH_END,
     WORD_START,
@@ -107,7 +113,7 @@ def transcribe_to_text(
     print(f"Whisper model repository: {model_repo}", file=sys.stderr, flush=True)
     # Voice activity runs on the CPU while Whisper uses the GPU, so the two overlap.
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="jipandan-vad")
-    speech_ends = executor.submit(_speech_ends_ms, input_audio) if output_format == "srt" else None
+    speech = executor.submit(_speech_probabilities, input_audio) if output_format == "srt" else None
     executor.shutdown(wait=False)
     result = mlx_whisper.transcribe(
         str(input_audio),
@@ -228,25 +234,70 @@ def transcribe_to_text(
             temporary_path.unlink(missing_ok=True)
     if output_format == "srt":
         write_segment_scores(output_text, segments)
-        _write_snap_points(output_text, segments, speech_ends)
+        probabilities = _result_or_none(speech)
+        points = _snap_points(segments, probabilities)
+        write_snap_points(output_text, points)
+        _write_candidates(output_text, segments, probabilities, points)
 
 
-def _speech_ends_ms(audio: Path) -> list[int]:
-    from jipandan.core.vad import speech_ends_ms
+def _speech_probabilities(audio: Path):
+    from jipandan.core import vad
 
-    return speech_ends_ms(audio)
+    return vad.speech_probabilities(vad.decode_audio(audio))
 
 
-def _write_snap_points(srt_path: Path, segments: list[dict], speech_ends: Future | None) -> None:
-    """Save word starts and speech ends; a failed voice-activity pass leaves speech ends out."""
+def _result_or_none(speech: Future | None):
+    """Return the voice-activity result, or None when it failed."""
+    if speech is None:
+        return None
+    try:
+        return speech.result()
+    except Exception as exc:
+        print(f"Voice activity detection failed; speech ends and generated candidates not saved: {exc}",
+              file=sys.stderr, flush=True)
+        return None
+
+
+def _snap_points(segments: list[dict], probabilities) -> dict[str, list[int]]:
+    """Word starts and, when voice activity ran, speech ends."""
     points = {WORD_START: word_starts_ms(segments)}
-    if speech_ends is not None:
-        try:
-            points[SPEECH_END] = speech_ends.result()
-        except Exception as exc:
-            print(f"Voice activity detection failed; speech ends not saved: {exc}",
-                  file=sys.stderr, flush=True)
-    write_snap_points(srt_path, points)
+    if probabilities is not None:
+        from jipandan.core.vad import speech_runs
+
+        points[SPEECH_END] = [end for _, end in speech_runs(probabilities)]
+    return points
+
+
+def _write_candidates(srt_path: Path, segments: list[dict], probabilities, points: dict) -> None:
+    """Save generated candidates as a second SRT with its own scores and snap points."""
+    destination = candidates_srt_path(srt_path)
+    if probabilities is None:
+        destination.unlink(missing_ok=True)
+        return
+    from jipandan.core.vad import speech_runs
+
+    candidates = generate_candidates(segments, speech_runs(probabilities, threshold=SPEECH_THRESHOLD))
+    if not candidates:
+        destination.unlink(missing_ok=True)
+        return
+    matched = best_segments(segments, candidates)
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=destination.parent,
+        prefix=f".{destination.name}.", suffix=".tmp", delete=False,
+    ) as handle:
+        for index, (candidate, segment) in enumerate(zip(candidates, matched), start=1):
+            handle.write(f"{index}\n")
+            handle.write(
+                f"{_format_srt_timestamp(candidate.start_ms / 1000)} --> "
+                f"{_format_srt_timestamp(candidate.end_ms / 1000)}\n"
+            )
+            # A clip whose words all lie mostly outside it takes its segment's text as a title.
+            handle.write(f"{candidate.text or str(segment['text']).strip()}\n\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(handle.name, destination)
+    write_segment_scores(destination, matched)
+    write_snap_points(destination, points)
 
 
 def _finite_or_none(value: object) -> float | None:

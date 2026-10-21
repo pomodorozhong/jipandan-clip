@@ -8,6 +8,7 @@ import secrets
 import mimetypes
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
@@ -89,6 +90,7 @@ class TranscriptionRequest(BaseModel):
     temperature: float = Field(default=0.0, ge=0, allow_inf_nan=False)
     max_context: int = Field(default=0, ge=0, le=4096)
     entropy_thold: float = Field(default=3.0, gt=0, allow_inf_nan=False)
+    clip_source: Literal["lines", "generated"] = "lines"
 
 
 def create_app(

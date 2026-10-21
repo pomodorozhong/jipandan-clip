@@ -31,6 +31,8 @@ Review happens in three stages, switched in the header. **Triage** shows one uns
 
 In Publish, the As is reference is read-only. The candidate uses Polish's waveform editor on the original recording timeline: swipe sideways to find audio outside the clip, pinch to zoom, drag either boundary handle to extend the clip, or drag the background to select both bounds. Candidate playback follows the rendered output, and edits regenerate its preview.
 When a session opens, the GUI measures each clip's loudness and tone in the background (about 30 seconds for a 7-hour recording). Choose **Order by → Likely keep ↓** to review louder, voice-like clips first; each row shows its 0–100 score. Transcriptions also save Whisper's per-segment confidence as `<audio>.segments.json` beside the SRT, which new sessions add to the score. They also save clip edge snap points as `<audio>.snap.json`: Whisper word starts, and speech ends from Silero voice activity detection, which runs on the CPU alongside Whisper. The Silero model (about 2 MB) downloads on the first transcription. New sessions store these points in their database. In Polish, a dragged start edge snaps to word starts and an end edge to speech ends (hold Option to place it freely), and Option with the nudge keys jumps an edge to the previous or next point. **Settings → Clip timing → Snap clip edges** turns this off. Sessions made before snap points existed have none.
+
+Transcription also saves generated clips as `<audio>.candidates.srt`, with its own `.segments.json` and `.snap.json`. Instead of one clip per transcript line, they are cut where speech starts and stops (Silero voice activity, with Whisper's word timings), so they are shorter and their edges sit closer to where clips usually get trimmed. On the Transcription screen, **Clips from** picks which one the new session uses: **Transcript lines** (the default) or **Voice activity (generated)**. The choice is made once per recording, and reopening it later uses the same SRT. If voice activity detection fails, no generated clips are saved and a transcription set to use them fails. `scripts/evaluate_candidates.py` compares both against a reviewed session's kept clips.
 Each transcription keeps its full worker output and traceback in the application log directory under `transcriptions/<job-id>/run.log`; the Transcription screen shows the log path and offers a download link. Zero-duration segments are omitted from the SRT and listed in that log.
 
 To build the frontend manually without starting the server, run:
@@ -95,7 +97,7 @@ Cache files and failed preview work can be removed at any time and will be rebui
 - `src/jipandan/core/`: shared audio, subtitle, and persistence logic.
 - `src/jipandan/cli/`: browser GUI and standalone transcription entry points.
 - `tests/`: Python regression and API tests.
-- `scripts/`: disposable web-review fixture preparation.
+- `scripts/`: disposable web-review fixture preparation, and `evaluate_candidates.py`, which scores generated clip candidates against SRT lines on reviewed recordings.
 - `doc/`: [documentation index](doc/README.md), reviews, and archived project plans.
 - `AGENTS.md`: how coding agents work in this repository, including the session handoff rules.
 - `HANDOFF.md`: where work stands: each active branch's resume point, the ranked list of issues to work on next, and requests awaiting approval.

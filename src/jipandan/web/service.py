@@ -33,6 +33,7 @@ from jipandan.core.clip_features import (
 from jipandan.core.ffmpeg import ExportOptions, probe_duration_seconds, publish_prebuilt_clip
 from jipandan.core.leading_silence import detect_leading_silence_start
 from jipandan.core.paths import AppPaths, default_export_dir, get_app_paths, resolve_export_dir
+from jipandan.core.candidates import candidates_srt_path, is_candidates_srt
 from jipandan.core.snap_points import KINDS as SNAP_KINDS, load_snap_points, snap_points_path
 from jipandan.core.srt import parse_srt, segment_scores_path
 from jipandan.core.whisper import describe_transcribe_call
@@ -68,6 +69,16 @@ def _time_ms(value: str) -> int:
     return round(srt_time_to_seconds(value.replace(".", ",")) * 1000)
 
 
+def _copy_sidecars(source_srt: Path, destination_srt: Path) -> None:
+    """Copy an SRT's segment scores and snap points to sit beside ``destination_srt``."""
+    for path in (segment_scores_path, snap_points_path):
+        if path(source_srt).is_file():
+            shutil.copyfile(path(source_srt), path(destination_srt))
+
+
+# Where a new session's clips come from: transcript lines, or the generated candidates SRT.
+CLIP_SOURCE_LINES = "lines"
+CLIP_SOURCE_GENERATED = "generated"
 LEADING_SILENCE_BATCH_SIZE = 25
 # Used when this audio was never transcribed in the GUI, so no job settings exist.
 DEFAULT_CLIP_TRANSCRIPTION_SETTINGS = {
@@ -249,8 +260,13 @@ class SessionService:
                 raise ValueError("Transcription contains invalid clip times")
         destination = job.audio.with_suffix(".srt")
         staged = destination.with_name(f".{destination.name}.{job.id}.tmp")
-        scores = segment_scores_path(job.output)
-        snap_points = snap_points_path(job.output)
+        generated = job.settings.get("clip_source", CLIP_SOURCE_LINES) == CLIP_SOURCE_GENERATED
+        candidates = candidates_srt_path(job.output)
+        if generated and not candidates.is_file():
+            raise ValueError(
+                "No generated clips were saved because voice activity detection failed; "
+                "see run.log, or transcribe again with clips from transcript lines"
+            )
         with self._lock:
             if destination.exists() or store_path(job.audio).exists():
                 raise SessionConflict("An SRT or session was created while transcription ran")
@@ -260,20 +276,21 @@ class SessionService:
                     target.flush()
                     os.fsync(target.fileno())
                 os.link(staged, destination)
-                if scores.is_file():
-                    shutil.copyfile(scores, segment_scores_path(destination))
-                if snap_points.is_file():
-                    shutil.copyfile(snap_points, snap_points_path(destination))
-                session = Session.from_srt(job.audio, destination, self._new_session_clip_dir(job.audio))
+                _copy_sidecars(job.output, destination)
+                if candidates.is_file():
+                    shutil.copyfile(candidates, candidates_srt_path(destination))
+                    _copy_sidecars(candidates, candidates_srt_path(destination))
+                source_srt = candidates_srt_path(destination) if generated else destination
+                session = Session.from_srt(job.audio, source_srt, self._new_session_clip_dir(job.audio))
                 store = RecordingStore(store_path(job.audio))
-                store.create(session, load_snap_points(destination, session.srt_fingerprint))
+                store.create(session, load_snap_points(source_srt, session.srt_fingerprint))
             finally:
                 staged.unlink(missing_ok=True)
             if self.audio == job.audio:
-                self._replace_recording(session, store, destination)
+                self._replace_recording(session, store, source_srt)
             else:
                 store.close()
-            return len(entries)
+            return len(session.candidates)
 
     def close(self) -> None:
         self._transcriptions.close()
@@ -823,6 +840,9 @@ class SessionService:
             if database.exists():
                 store = RecordingStore(database)
                 session = store.load()
+                # A session made from generated clips keeps following their SRT.
+                if is_candidates_srt(session.srt):
+                    srt = candidates_srt_path(srt)
                 session.audio, session.srt = resolved, srt
             elif srt.exists():
                 session = Session.from_srt(resolved, srt, self._new_session_clip_dir(resolved))
