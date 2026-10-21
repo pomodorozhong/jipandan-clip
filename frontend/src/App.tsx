@@ -1130,7 +1130,11 @@ export default function App() {
       setFilter("unsorted");
       setSelectedId(null);
       setAllOrder("likely-desc");
-      setLeadingSilenceJob(null);
+      // The server stopped the old session's background jobs, so start them again for the new one, even when
+      // "measuring finished" reads the same before and after (a start over while measuring was still running).
+      setLeadingSilenceJob(null); setDismissedDetectionJobId(null); loadedDetectionAdjustment.current = null;
+      autoDetectionRequest.current = null; loadedDetectionJob.current = null;
+      setClipFeaturesAttempt((attempt) => attempt + 1);
       const backupName = next.start_over_backup?.split(/[\\/]/).pop();
       setStartOverMessage(`Started over. The previous session was saved beside the recording as ${backupName}.`);
     } catch (cause) {
