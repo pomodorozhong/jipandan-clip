@@ -2,29 +2,26 @@
 
 ## In progress
 
-### feat/candidate-generator
+### fix/stale-transcription-job
 
-- **Task:** #47 generator plus #50, which lets a new session start from transcript lines or generated clips. The PR closes #50 and is related to #47, which stays open: the evaluation missed its target against the old SRT lines. Not linked to either issue.
-- **PR:** #74, open. The owner closed it by mistake on 2026-10-20 and it was reopened; `main` (with #76) was then merged in.
-- **Code checkpoint:** `05b6139 feat(web): choose transcript lines or generated clips for new sessions`, plus a merge of `main` at `16a5129`.
-- **State:** awaiting owner review and merge. The owner agreed on 2026-10-20 to keep both modes, with transcript lines as the default, and to try generated clips on the next real clipping session. Against the app's own transcription of 0614 (web UI defaults), the generator found 48–70% of kept clips against 4–25%, at 998 against 794 clips per hour.
-- **Verification (2026-10-20):** after the merge of `main`, `uv run python -m unittest discover -s tests` passed, and `npm --prefix frontend run test` (137), `check` and `build` passed. Earlier: a manual transcription of a 3-minute cut of 0614 with Voice activity (generated) opened a session from `.candidates.srt` with 36 clips.
-- **Inputs:** private data and tuning notes are in the gitignored `tmp/candidate-generation-2026-10-20/`.
-- **Pending:** P-10.
-- **Next action:** owner merges #74, then the `fix/stale-transcription-job` PR.
-- **P-10** Post a results comment to #47 (the draft from 2026-10-20 needs the 0614 app-transcription comparison added). Why: outward-facing; not yet approved. Blocks: nothing.
+- **Task:** #77, a bug already on `main`: after a recording's SRT and session are deleted, opening it shows its last completed transcription job instead of the transcription form, so it cannot be transcribed again. The PR will close #77; the branch is not linked to it.
+- **PR:** none yet; its own small PR from `main`. It also carries the `architecture.md` note on `.candidates.srt` and the AGENTS.md rule change (P-08) that were left behind when #74 merged.
+- **Code checkpoint:** `3af8f6f fix(web): let a recording be transcribed again after its transcript is removed`, plus a merge of `main` at `3fb4eaa` (#74).
+- **State:** awaiting owner approval of the PR title and body. Found on 2026-10-20 while the owner tested #74 on `0903.mp3`.
+- **Verification (2026-10-21):** after the merge of `main`, `uv run python -m unittest discover -s tests` passed; the regression test failed without the fix when it was written. Frontend checks not run: no frontend change on this branch.
+- **Next action:** owner approves the PR; then push and open it.
 
 ## Ranked work
 
-Before the owner's next clipping session (2026-10-20: about to start one):
+Before the owner's next clipping session:
 
-1. `fix/stale-transcription-job` (no issue): let a recording be transcribed again after its SRT and session are deleted. Built locally; needs `main` merged in and a PR. Workaround meanwhile: open a copy of the recording under a new name.
+1. Stage time breakdown in Settings (P-09, approved 2026-10-21): shows time per stage (Triage, Polish, Publish) for the open session, so the next session's timing can re-rank work toward speeding up sessions.
 
 After that session:
 
-2. #47 Decide whether generated clips should become the default, based on how fast that session went (results in `doc/app-rebuild-plan.md` step 3).
+2. #47 Decide whether generated clips should become the default, based on how fast that session went and the stage breakdown (results in `doc/app-rebuild-plan.md` step 3).
+3. #78 Keep web API tests out of the real transcription log folder.
 
 ## Pending
 
-- **P-08** Reword the AGENTS.md "Branches and pull requests" rule that moves a late `docs:` commit to a new `docs/<summary>` branch for a small docs PR: the owner said on 2026-10-20 not to open PRs that change only `HANDOFF.md`, so such a fix should wait for the next work branch's `docs:` commit instead. Why: the owner was offered this change and has not answered. Blocks: nothing.
-- **P-09** Write a script that breaks down time per stage (Triage, Polish, Publish) from a session's event log, to run after the owner's next normal clipping session and re-rank work toward speeding up sessions. Why: the owner was offered this and has not answered; see the 2026-10-20 comment on #49 for the rough estimate it would confirm. Blocks: confirming that #47 is the biggest speed-up.
+None.
