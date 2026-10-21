@@ -53,6 +53,26 @@ def pick_review_set(
     }
 
 
+def unit_hash(text: str) -> float:
+    """Map ``text`` to [0, 1) exactly like ``unitHash`` in frontend/src/reviewOrder.ts."""
+    value = 0x811C9DC5
+    data = text.encode("utf-16-le")
+    for position in range(0, len(data), 2):
+        value ^= data[position] | data[position + 1] << 8
+        value = (value * 0x01000193) & 0xFFFFFFFF
+    value ^= value >> 16
+    value = (value * 0x85EBCA6B) & 0xFFFFFFFF
+    value ^= value >> 13
+    value = (value * 0xC2B2AE35) & 0xFFFFFFFF
+    value ^= value >> 16
+    return value / 0x1_0000_0000
+
+
+def set_order_key(seed: str, index: int) -> float:
+    """Where a set clip sits in the set's shuffled order, as ``orderReviewSet`` shows it on every screen."""
+    return unit_hash(f"{seed}:order:{index}")
+
+
 def unprocessed(roles: dict[str, str], clips: Sequence[tuple[int, str]]) -> int:
     """Count set clips, given as (index, status), that are not yet exported or rejected."""
     return sum(1 for index, status in clips if str(index) in roles and status not in {"exported", "rejected"})
