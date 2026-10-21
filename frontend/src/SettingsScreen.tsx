@@ -8,6 +8,7 @@ import {
 } from "./gamepad";
 import type { BadgeMode, UnboundBadgeBehavior } from "./ShortcutBadge";
 import { formatDuration, formatPerClip, formatShare, stageLabels, type StageTimes } from "./stageTimes";
+import { clipSourceLabels, type ClipSource } from "./api";
 import { Button } from "./ui";
 
 const ROW_BASE = "grid items-center gap-x-6 gap-y-2.5 border-b border-[#2a3731] py-3.5 last:border-b-0";
@@ -136,6 +137,33 @@ function ReviewTimeSection({ enabled, onLoad }: { enabled: boolean; onLoad: () =
   </SettingsSection>;
 }
 
+// Replace the open session with a fresh one; the server keeps the old one as a backup.
+function StartOverSection({ enabled, sources, current, busy, message, error, onStartOver }: {
+  enabled: boolean; sources: ClipSource[]; current: ClipSource; busy: boolean; message: string; error: string;
+  onStartOver: (source: ClipSource) => void;
+}) {
+  const [source, setSource] = useState<ClipSource>(sources.includes(current) ? current : sources[0] ?? "lines");
+  const disabled = !enabled || busy || !sources.length;
+  return <SettingsSection title="Start over" tag="This session" description={enabled
+    ? "Clear every decision, edit, title, and the review time, and start this recording again from a saved transcript. The current session is kept as a backup file beside the recording, and exported MP3s stay where they are."
+    : "Open an audio session to start it over."}>
+    <ControlRow title="Clips from" description="Only transcripts saved beside the recording can be chosen.">
+      {(id) => <select id={id} value={source} disabled={disabled}
+        onChange={(event) => setSource(event.target.value as ClipSource)} className={`${FIELD} w-52 disabled:opacity-50`}>
+        {(["lines", "generated"] as const).map((key) =>
+          <option key={key} value={key} disabled={!sources.includes(key)}>{clipSourceLabels[key]}</option>)}
+      </select>}
+    </ControlRow>
+    <div className="flex flex-wrap items-center gap-2.5 py-3.5">
+      <Button variant="danger" disabled={disabled || !sources.includes(source)} onClick={() => onStartOver(source)}>
+        {busy ? "Starting over…" : "Start over…"}
+      </Button>
+      {message && <span role="status" className="accent text-xs break-words">{message}</span>}
+      {error && <p role="alert" className="text-xs text-[#ffb3a8]">{error}</p>}
+    </div>
+  </SettingsSection>;
+}
+
 export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, storageMessage, storageError, onClipDirChange,
   onChooseClipDir, onResetClipDir, onApplyClipDir,
   detectLeadingSilence, showOriginalStart, exploreRanking, onExploreRankingChange,
@@ -143,7 +171,7 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
   gamepadStatus, gamepadMappingButtonRef, onOpenGamepadMapping, focusController = false,
   onDetectLeadingSilenceChange, onShowOriginalStartChange, badgeMode, unboundBadgeBehavior,
   onBadgeModeChange, onUnboundBadgeBehaviorChange, gamepadRepeatDelayMs,
-  onGamepadRepeatDelayChange, snapEdges, onSnapEdgesChange, onLoadStageTimes }: {
+  onGamepadRepeatDelayChange, snapEdges, onSnapEdgesChange, onLoadStageTimes, startOver }: {
   clipDir: string;
   storageEnabled: boolean;
   storageBusy: boolean;
@@ -175,6 +203,10 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
   gamepadRepeatDelayMs: number;
   onGamepadRepeatDelayChange: (delayMs: number) => void;
   onLoadStageTimes: () => Promise<StageTimes>;
+  startOver: {
+    sources: ClipSource[]; current: ClipSource; busy: boolean; message: string; error: string;
+    onStartOver: (source: ClipSource) => void;
+  };
 }) {
   const controllerRef = useRef<HTMLElement>(null);
   const clipDirId = useId();
@@ -281,5 +313,7 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
         {storageMessage && <span role="status" className="accent text-xs">{storageMessage}</span>}
       </div>
     </SettingsSection>
+
+    <StartOverSection enabled={storageEnabled} {...startOver} />
   </div>;
 }
