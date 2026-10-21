@@ -63,7 +63,8 @@ class RecordingStoreTests(unittest.TestCase):
         self.store = RecordingStore(self.path)
         reloaded = self.store.load()
         self.assertEqual((reloaded.revision, reloaded.get_candidate("1").status), (2, "group1"))
-        seqs, label, restored = self.store.undo_target()
+        target = self.store.undo_target()
+        seqs, label, restored = target.seqs, target.label, target.restored
         self.assertEqual((label, restored["1"].status), ("1", "pending"))
 
         def restore(draft):
@@ -108,14 +109,16 @@ class RecordingStoreTests(unittest.TestCase):
             unsure, mark_ready, [{"type": "status", "clip": "1", "from": "unsure", "to": "group2"}],
             label="1", undoable=True,
         )
-        seqs, _, restored = self.store.undo_target()
+        target = self.store.undo_target()
+        seqs, _, restored = target.seqs, target.label, target.restored
         self.assertEqual(restored["1"].status, "pending")
 
         def restore(draft):
             draft.get_candidate("1").status = restored["1"].status
 
         undone = self.change(ready, restore, [{"type": "undo", "targets": seqs}], undoes=seqs)
-        seqs, _, restored = self.store.undo_target()
+        target = self.store.undo_target()
+        seqs, _, restored = target.seqs, target.label, target.restored
         self.assertEqual(restored["1"].status, "pending")
 
         def restore_legacy(draft):
@@ -131,10 +134,55 @@ class RecordingStoreTests(unittest.TestCase):
             draft.duplicate_candidate("2")
         session = self.change(self.session, first, [{"type": "a"}], label="run", undo_group="g", undoable=True)
         self.change(session, second, [{"type": "b"}], label="run", undo_group="g", undoable=True)
-        seqs, _, restored = self.store.undo_target()
+        target = self.store.undo_target()
+        seqs, _, restored = target.seqs, target.label, target.restored
         self.assertEqual(len(seqs), 2)
         self.assertEqual(restored["1"].status, "pending")
         self.assertIsNone(restored["2-2"])
+
+    def test_undo_records_changed_fields_and_skips_background_runs(self):
+        def trim(draft):
+            clip = draft.get_candidate("1")
+            clip.status, clip.title = "group1", "Renamed"
+        session = self.change(self.session, trim, [{"type": "status"}], label="1", undoable=True)
+
+        def detect(draft):
+            draft.get_candidate("2").start = "00:00:03.400"
+        # Older stores saved background runs as undoable; Undo still skips them.
+        self.change(session, detect, [{"type": "detect-silence"}], label="Detect leading silence",
+                    undo_group="leading-silence:job", undoable=True)
+        target = self.store.undo_target()
+        self.assertEqual(target.label, "1")
+        self.assertEqual(target.fields, {"1": {"status", "title"}})
+        self.assertEqual(target.restored["1"].title, "First")
+
+    def test_changes_saved_without_fields_restore_the_whole_clip(self):
+        def decide(draft):
+            draft.get_candidate("1").status = "group1"
+        self.change(self.session, decide, [{"type": "status"}], label="1", undoable=True)
+        self.store._db.execute("UPDATE event SET changes = NULL")
+        target = self.store.undo_target()
+        self.assertEqual((target.fields, target.restored["1"].status), ({}, "pending"))
+
+    def test_older_stores_gain_the_changes_column(self):
+        self.store._db.execute("ALTER TABLE event DROP COLUMN changes")
+        self.store.close()
+        self.store = RecordingStore(self.path)
+        columns = {row[1] for row in self.store._db.execute("PRAGMA table_info(event)")}
+        self.assertIn("changes", columns)
+
+    def test_suggestions_of_one_run_undo_together(self):
+        self.store.record_suggestion("1", None, "Better", {"type": "suggest-title"}, label="Re-transcribe titles",
+                                     undo_group="clip-transcription:a")
+        self.store.record_suggestion("1", "Better", "Best", {"type": "suggest-title"},
+                                     label="Re-transcribe titles", undo_group="clip-transcription:a")
+        self.store.record_suggestion("2", "Old", "New", {"type": "suggest-title"}, label="Re-transcribe titles",
+                                     undo_group="clip-transcription:a")
+        self.assertTrue(self.store.can_undo())
+        target = self.store.undo_target()
+        self.assertEqual(len(target.seqs), 3)
+        self.assertEqual(target.restored, {})
+        self.assertEqual(target.suggestions, {"1": (None, "Best"), "2": ("Old", "New")})
 
     def test_stale_writer_is_rejected(self):
         other = RecordingStore(self.path)

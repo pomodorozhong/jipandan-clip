@@ -763,6 +763,8 @@ export default function App() {
     const mode = publishSettings.mode;
     const { start, stop } = exportAllThresholds;
     exportAllCancelled.current = false;
+    // One ID per run, so Undo takes back the whole run at once.
+    const runId = crypto.randomUUID();
     setError("");
     const run: ExportAllRun = { state: "running", total: clips.length, done: 0, failed: [] };
     setExportAllRun({ ...run });
@@ -780,6 +782,7 @@ export default function App() {
         if (job.state === "completed") {
           const next = await api<Session>("/exports", "POST", {
             preview_id: job.id, expected_revision: sessionRevisionRef.current, context: rankingContext(clip),
+            export_all: runId,
           });
           sessionRevisionRef.current = next.revision;
           setSession(next);
