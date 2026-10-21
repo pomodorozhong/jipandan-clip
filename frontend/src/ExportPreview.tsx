@@ -50,7 +50,7 @@ export type ExportSettings = { mode: ExportMode; startDb: string; stopDb: string
  * dialog from Polish, or ``inline`` as the Publish stage's main panel, where
  * ``onNudge`` adds timing fixes so a clip never has to go back to Polish.
  */
-export default function ExportPreview({ clip, revision, open, nextClipId, onClose, onPublished,
+export default function ExportPreview({ clip, revision, open, nextClipId, onClose, onPublished, trimDisabled = false,
   gamepadAction, onGamepadActionHandled, controllerHandlerRef, inline = false, heading, headingDetail, onNudge, nudgeDisabled = false,
   exportContext, initialSettings, onSettingsChange, onTrim, recordingDurationMs }: {
   clip: Clip; revision: number; open: boolean; onClose: () => void;
@@ -65,6 +65,8 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
   headingDetail?: string;
   onNudge?: (edge: "start" | "end", amountMs: number) => void;
   nudgeDisabled?: boolean;
+  /** Blocks waveform trims; a trim made while a save runs is queued by the parent instead. */
+  trimDisabled?: boolean;
   onTrim?: (start: number, end: number) => void;
   recordingDurationMs?: number;
   /** Ranking context recorded with the export in the review history. */
@@ -515,7 +517,8 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
               else if (mode === "as_is") onTrim(start / candidateDuration * selectedDuration, end / candidateDuration * selectedDuration);
               else if (job?.trim_map) onTrim(...renderedRangeToSource(job.trim_map, start, end, candidateDuration, edge));
             } : undefined}
-            editingDisabled={nudgeDisabled || exporting || requesting || !candidateReady}
+            // On the recording's timeline a trim doesn't need the candidate, so it works while one renders.
+            editingDisabled={recordingDurationMs ? trimDisabled || exporting : nudgeDisabled || exporting || requesting || !candidateReady}
             placeholder={candidatePlaceholder} playShortcut="⇧Space" replayShortcut="Space" playShortcutId="candidate-play-pause" replayShortcutId="candidate-replay"
             alert={job?.state === "failed" && !stale ? <>
               <span className="min-w-0 flex-1">{job.error === NO_AUDIO_LEFT ? `${job.error}.` : `Render failed: ${job.error}. Adjust the settings to retry.`}</span>
