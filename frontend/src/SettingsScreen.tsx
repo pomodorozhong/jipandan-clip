@@ -139,28 +139,39 @@ function ReviewTimeSection({ enabled, onLoad }: { enabled: boolean; onLoad: () =
 }
 
 // A fixed set of clips per session: the top Likely keep clips plus a random sample that keeps the data fair.
-function ReviewSetSection({ enabled, onEnabledChange, size, onSizeChange, reviewSet, onComplete }: {
-  enabled: boolean; onEnabledChange: (enabled: boolean) => void; size: number; onSizeChange: (size: number) => void;
-  reviewSet: ReviewSet | null; onComplete: () => void;
+function ReviewSetSection({ sessionOpen, scoresReady, size, onSizeChange, reviewSet, busy, error, onStart, onComplete }: {
+  sessionOpen: boolean; scoresReady: boolean; size: number; onSizeChange: (size: number) => void;
+  reviewSet: ReviewSet | null; busy: boolean; error: string; onStart: (size: number) => void; onComplete: () => void;
 }) {
   const [draft, setDraft] = useState(String(size));
   const open = Boolean(reviewSet && !reviewSet.completed);
   const random = reviewSet ? Math.round(reviewSet.size * reviewSet.random_share) : 0;
-  return <SettingsSection title="Review set" description="Review a fixed number of clips instead of every candidate: mostly the top Likely keep clips, plus 20% picked at random from all candidates. The random part lets the review log be used to improve the ranking without the bias of reviewing only top clips, so decide each one like any other.">
-    <CheckboxRow title="Review a fixed set of clips" checked={enabled} onChange={onEnabledChange}
-      description="Sessions without a set get one once Likely keep scores are ready. Until you complete it, Triage, Polish, and Publish show only its clips, and Triage hides scores." />
-    <ControlRow title="Clips to review" description={`${REVIEW_SET_MIN_SIZE}–${REVIEW_SET_MAX_SIZE}. Applies to sessions that don't have a set yet.`}>
-      {(id) => <input id={id} type="number" min={REVIEW_SET_MIN_SIZE} max={REVIEW_SET_MAX_SIZE} step={10} value={draft}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={() => { const next = normalizeReviewSetSize(Number(draft)); setDraft(String(next)); onSizeChange(next); }}
-        className={`${FIELD} w-28 font-mono`} />}
+  const commitDraft = () => {
+    const next = normalizeReviewSetSize(Number(draft));
+    setDraft(String(next));
+    onSizeChange(next);
+    return next;
+  };
+  return <SettingsSection title="Review set" tag="This session" description="Review a fixed number of clips instead of every candidate: mostly the top Likely keep clips, plus 20% picked at random from all candidates. The random part lets the review log be used to improve the ranking without the bias of reviewing only top clips, so decide each one like any other.">
+    {!reviewSet ? <ControlRow title="Clips to review" description={!sessionOpen ? "Open an audio session to start a review set."
+      : !scoresReady ? "Waiting for Likely keep scores to finish measuring…"
+        : `${REVIEW_SET_MIN_SIZE}–${REVIEW_SET_MAX_SIZE}. Until you complete the set, Triage, Polish, and Publish show only its clips, and Triage hides scores. A session has one review set.`}>
+      {(id) => <span className="flex items-center gap-2.5">
+        <input id={id} type="number" min={REVIEW_SET_MIN_SIZE} max={REVIEW_SET_MAX_SIZE} step={10} value={draft}
+          disabled={!sessionOpen || busy} onChange={(event) => setDraft(event.target.value)} onBlur={commitDraft}
+          className={`${FIELD} w-24 font-mono disabled:opacity-50`} />
+        <Button variant="primary" disabled={!sessionOpen || !scoresReady || busy} onClick={() => onStart(commitDraft())}>
+          {busy ? "Starting…" : "Start review set"}
+        </Button>
+      </span>}
     </ControlRow>
-    {reviewSet && <div className={ROW}>
-      <RowText title={open ? "This session's set" : "This session's set is completed"} description={open
+    : <div className={ROW}>
+      <RowText title={open ? "Reviewing a set" : "Review set completed"} description={open
         ? `${reviewSet.size} of ${reviewSet.total} clips (${reviewSet.size - random} top, ${random} random); ${reviewSet.unprocessed} not yet exported or rejected.`
         : `${reviewSet.size} of ${reviewSet.total} clips; every clip is shown again.`} />
       {open && <Button onClick={onComplete}>Complete review set…</Button>}
     </div>}
+    {error && <p role="alert" className="pb-3 text-xs text-[#ffb3a8]">{error}</p>}
   </SettingsSection>;
 }
 
@@ -231,8 +242,8 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
   onGamepadRepeatDelayChange: (delayMs: number) => void;
   onLoadStageTimes: () => Promise<StageTimes>;
   reviewSet: {
-    enabled: boolean; onEnabledChange: (enabled: boolean) => void; size: number; onSizeChange: (size: number) => void;
-    reviewSet: ReviewSet | null; onComplete: () => void;
+    sessionOpen: boolean; scoresReady: boolean; size: number; onSizeChange: (size: number) => void;
+    reviewSet: ReviewSet | null; busy: boolean; error: string; onStart: (size: number) => void; onComplete: () => void;
   };
   startOver: {
     sources: ClipSource[]; current: ClipSource; busy: boolean; message: string; error: string;

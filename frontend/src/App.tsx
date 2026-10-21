@@ -57,8 +57,7 @@ type AppSettings = {
   gamepadRepeatDelayMs: number;
   exploreRanking: boolean;
   autoplayClips: boolean;
-  // Work on a fixed review set of this many clips in new sessions.
-  reviewSetEnabled: boolean;
+  // The size last used for a review set.
   reviewSetSize: number;
 };
 
@@ -83,7 +82,6 @@ function loadSettings(): AppSettings {
         gamepadRepeatDelayMs: normalizeGamepadRepeatDelay(parsed.gamepadRepeatDelayMs),
         exploreRanking: typeof parsed.exploreRanking === "boolean" ? parsed.exploreRanking : true,
         autoplayClips: typeof parsed.autoplayClips === "boolean" ? parsed.autoplayClips : true,
-        reviewSetEnabled: parsed.reviewSetEnabled === true,
         reviewSetSize: normalizeReviewSetSize(parsed.reviewSetSize),
       };
     }
@@ -97,7 +95,6 @@ function loadSettings(): AppSettings {
     gamepadRepeatDelayMs: GAMEPAD_REPEAT_DELAY_MS,
     exploreRanking: true,
     autoplayClips: true,
-    reviewSetEnabled: false,
     reviewSetSize: REVIEW_SET_DEFAULT_SIZE,
   };
 }
@@ -294,6 +291,8 @@ export default function App() {
   const [showCompleteReviewSet, setShowCompleteReviewSet] = useState(false);
   const [reviewSetPromptDismissed, setReviewSetPromptDismissed] = useState<string | null>(null);
   const [completingReviewSet, setCompletingReviewSet] = useState(false);
+  const [startingReviewSet, setStartingReviewSet] = useState(false);
+  const [reviewSetError, setReviewSetError] = useState("");
   const [startOverBusy, setStartOverBusy] = useState(false);
   const [startOverMessage, setStartOverMessage] = useState("");
   const [startOverError, setStartOverError] = useState("");
@@ -583,18 +582,6 @@ export default function App() {
   const scopedCandidates = useMemo(() => scopeClips(session?.candidates ?? [], reviewSetOpen),
     [session?.candidates, reviewSetOpen]);
   const scopedCounts = useMemo(() => countStatuses(scopedCandidates), [scopedCandidates]);
-  // Pick the session's review set once its Likely keep scores are ready; a session keeps the set it has.
-  const reviewSetRequest = useRef<string | null>(null);
-  useEffect(() => {
-    if (!settings.reviewSetEnabled || !session?.audio || session.needs_transcription || session.review_set ||
-        !session.clip_features_complete || !session.candidates.length) return;
-    if (reviewSetRequest.current === session.audio) return;
-    reviewSetRequest.current = session.audio;
-    void api<Session>("/session/review-set", "POST", { size: settings.reviewSetSize })
-      .then(setSession)
-      .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
-  }, [settings.reviewSetEnabled, settings.reviewSetSize, session?.audio, session?.needs_transcription,
-    session?.review_set, session?.clip_features_complete, session?.candidates.length]);
   // Once every set clip is exported or rejected, ask whether to complete the set.
   const reviewSetProcessed = reviewSetOpen && isProcessed(scopedCandidates);
   useEffect(() => {
@@ -1151,6 +1138,22 @@ export default function App() {
       setStorageError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setStorageBusy(false);
+    }
+  }
+
+  async function startReviewSet(size: number) {
+    setStartingReviewSet(true);
+    setReviewSetError("");
+    try {
+      const next = await api<Session>("/session/review-set", "POST", { size });
+      setSession(next);
+      setMode("triage");
+      setSelectedId(null);
+      showNotice(`Review set started: ${next.review_set?.size ?? size} clips.`);
+    } catch (cause) {
+      setReviewSetError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setStartingReviewSet(false);
     }
   }
 
@@ -1758,8 +1761,10 @@ export default function App() {
             gamepadStatus={gamepadStatus}
             onLoadStageTimes={loadStageTimes}
             reviewSet={{
-              enabled: settings.reviewSetEnabled, size: settings.reviewSetSize, reviewSet: session?.review_set ?? null,
-              onEnabledChange: (enabled) => setSettings((current) => ({ ...current, reviewSetEnabled: enabled })),
+              sessionOpen: Boolean(session?.audio && !session.needs_transcription),
+              scoresReady: Boolean(session?.clip_features_complete),
+              size: settings.reviewSetSize, reviewSet: session?.review_set ?? null,
+              busy: startingReviewSet, error: reviewSetError, onStart: (size) => void startReviewSet(size),
               onSizeChange: (size) => setSettings((current) => ({ ...current, reviewSetSize: normalizeReviewSetSize(size) })),
               onComplete: () => setShowCompleteReviewSet(true),
             }}
