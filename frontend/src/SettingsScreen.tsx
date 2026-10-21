@@ -8,7 +8,7 @@ import {
 } from "./gamepad";
 import type { BadgeMode, UnboundBadgeBehavior } from "./ShortcutBadge";
 import { formatDuration, formatPerClip, formatShare, stageLabels, type StageTimes } from "./stageTimes";
-import { clipSourceLabels, type ClipSource, type ReviewSet } from "./api";
+import { clipSourceLabels, type ClipFeaturesJob, type ClipSource, type ReviewSet } from "./api";
 import { normalizeReviewSetSize, REVIEW_SET_MAX_SIZE, REVIEW_SET_MIN_SIZE } from "./reviewSet";
 import { Button } from "./ui";
 
@@ -139,9 +139,12 @@ function ReviewTimeSection({ enabled, onLoad }: { enabled: boolean; onLoad: () =
 }
 
 // A fixed set of clips per session: the top Likely keep clips plus a random sample that keeps the data fair.
-function ReviewSetSection({ sessionOpen, scoresReady, size, onSizeChange, reviewSet, busy, error, onStart, onComplete }: {
+function ReviewSetSection({ sessionOpen, scoresReady, size, onSizeChange, reviewSet, busy, error, onStart, onComplete,
+  waiting, onCancelWaiting, measuring }: {
   sessionOpen: boolean; scoresReady: boolean; size: number; onSizeChange: (size: number) => void;
   reviewSet: ReviewSet | null; busy: boolean; error: string; onStart: (size: number) => void; onComplete: () => void;
+  // Start was clicked before scores were final; the set starts when measuring finishes.
+  waiting: boolean; onCancelWaiting: () => void; measuring: ClipFeaturesJob | null;
 }) {
   const [draft, setDraft] = useState(String(size));
   const open = Boolean(reviewSet && !reviewSet.completed);
@@ -154,15 +157,17 @@ function ReviewSetSection({ sessionOpen, scoresReady, size, onSizeChange, review
   };
   return <SettingsSection title="Review set" tag="This session" description="Review a fixed number of clips instead of every candidate: mostly the top Likely keep clips, plus 20% picked at random from all candidates. The random part lets the review log be used to improve the ranking without the bias of reviewing only top clips, so decide each one like any other.">
     {!reviewSet ? <ControlRow title="Clips to review" description={!sessionOpen ? "Open an audio session to start a review set."
-      : !scoresReady ? "Waiting for Likely keep scores to finish measuring…"
-        : `${REVIEW_SET_MIN_SIZE}–${REVIEW_SET_MAX_SIZE}. Until you complete the set, Triage, Polish, and Publish show only its clips, and Triage hides scores. A session has one review set.`}>
+      : waiting ? (measuring?.state === "failed" ? `Measuring loudness failed: ${measuring.error ?? "unknown error"}`
+        : `Measuring loudness${measuring?.total ? ` · ${measuring.progress.toLocaleString()} / ${measuring.total.toLocaleString()} clips` : "…"}. The set starts as soon as every clip has its final Likely keep score.`)
+        : `${REVIEW_SET_MIN_SIZE}–${REVIEW_SET_MAX_SIZE}. Until you complete the set, Triage, Polish, and Publish show only its clips, and Triage hides scores. A session has one review set.${scoresReady ? "" : " If loudness is still being measured, the set starts when it finishes."}`}>
       {(id) => <span className="flex items-center gap-2.5">
         <input id={id} type="number" min={REVIEW_SET_MIN_SIZE} max={REVIEW_SET_MAX_SIZE} step={10} value={draft}
-          disabled={!sessionOpen || busy} onChange={(event) => setDraft(event.target.value)} onBlur={commitDraft}
+          disabled={!sessionOpen || busy || waiting} onChange={(event) => setDraft(event.target.value)} onBlur={commitDraft}
           className={`${FIELD} w-24 font-mono disabled:opacity-50`} />
-        <Button variant="primary" disabled={!sessionOpen || !scoresReady || busy} onClick={() => onStart(commitDraft())}>
-          {busy ? "Starting…" : "Start review set"}
-        </Button>
+        {waiting ? <Button onClick={onCancelWaiting}>Cancel</Button>
+          : <Button variant="primary" disabled={!sessionOpen || busy} onClick={() => onStart(commitDraft())}>
+            {busy ? "Starting…" : "Start review set"}
+          </Button>}
       </span>}
     </ControlRow>
     : <div className={ROW}>
@@ -244,6 +249,7 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
   reviewSet: {
     sessionOpen: boolean; scoresReady: boolean; size: number; onSizeChange: (size: number) => void;
     reviewSet: ReviewSet | null; busy: boolean; error: string; onStart: (size: number) => void; onComplete: () => void;
+    waiting: boolean; onCancelWaiting: () => void; measuring: ClipFeaturesJob | null;
   };
   startOver: {
     sources: ClipSource[]; current: ClipSource; busy: boolean; message: string; error: string;

@@ -293,6 +293,8 @@ export default function App() {
   const [completingReviewSet, setCompletingReviewSet] = useState(false);
   const [startingReviewSet, setStartingReviewSet] = useState(false);
   const [reviewSetError, setReviewSetError] = useState("");
+  // A review set asked for before Likely keep scores were final; it starts as soon as measuring finishes.
+  const [pendingReviewSet, setPendingReviewSet] = useState<{ audio: string; size: number } | null>(null);
   const [startOverBusy, setStartOverBusy] = useState(false);
   const [startOverMessage, setStartOverMessage] = useState("");
   const [startOverError, setStartOverError] = useState("");
@@ -1142,6 +1144,14 @@ export default function App() {
   }
 
   async function startReviewSet(size: number) {
+    if (!session?.audio) return;
+    // Picking the top clips needs every clip's final score, so wait for measuring instead of ranking on partial scores.
+    if (!session.clip_features_complete) {
+      setReviewSetError("");
+      setPendingReviewSet({ audio: session.audio, size });
+      return;
+    }
+    setPendingReviewSet(null);
     setStartingReviewSet(true);
     setReviewSetError("");
     try {
@@ -1156,6 +1166,14 @@ export default function App() {
       setStartingReviewSet(false);
     }
   }
+
+  const startReviewSetRef = useRef(startReviewSet);
+  startReviewSetRef.current = startReviewSet;
+  useEffect(() => {
+    if (!pendingReviewSet) return;
+    if (session?.audio !== pendingReviewSet.audio || session.review_set) setPendingReviewSet(null);
+    else if (session.clip_features_complete) void startReviewSetRef.current(pendingReviewSet.size);
+  }, [pendingReviewSet, session?.audio, session?.review_set, session?.clip_features_complete]);
 
   async function completeReviewSet() {
     setCompletingReviewSet(true);
@@ -1191,6 +1209,7 @@ export default function App() {
       setSelectedId(null);
       setAllOrder("likely-desc");
       setLeadingSilenceJob(null);
+      setPendingReviewSet(null);
       const backupName = next.start_over_backup?.split(/[\\/]/).pop();
       setStartOverMessage(`Started over. The previous session was saved beside the recording as ${backupName}.`);
     } catch (cause) {
@@ -1765,6 +1784,8 @@ export default function App() {
               scoresReady: Boolean(session?.clip_features_complete),
               size: settings.reviewSetSize, reviewSet: session?.review_set ?? null,
               busy: startingReviewSet, error: reviewSetError, onStart: (size) => void startReviewSet(size),
+              waiting: pendingReviewSet?.audio === session?.audio, onCancelWaiting: () => setPendingReviewSet(null),
+              measuring: clipFeaturesJob,
               onSizeChange: (size) => setSettings((current) => ({ ...current, reviewSetSize: normalizeReviewSetSize(size) })),
               onComplete: () => setShowCompleteReviewSet(true),
             }}
