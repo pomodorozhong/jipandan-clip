@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from datetime import datetime
 import threading
 from dataclasses import asdict
 from pathlib import Path
@@ -866,6 +867,45 @@ class SessionService:
             self._replace_recording(session, store, srt)
             return self.snapshot()
 
+    def _clip_source_srts(self) -> dict[str, Path]:
+        """The saved SRTs a new session for the open audio can start from, by clip source."""
+        if self.audio is None:
+            return {}
+        lines = self.audio.with_suffix(".srt")
+        sources = {CLIP_SOURCE_LINES: lines, CLIP_SOURCE_GENERATED: candidates_srt_path(lines)}
+        return {source: path for source, path in sources.items() if path.is_file()}
+
+    def _clip_sources(self) -> list[str]:
+        return list(self._clip_source_srts())
+
+    def start_over(self, expected_revision: int, clip_source: str) -> dict:
+        """Replace the open session with a fresh one from a saved SRT, keeping the old one as a backup.
+
+        Decisions, edits, and the review log start empty; exported files and the export directory stay.
+        """
+        with self._lock:
+            old = self._check_revision(expected_revision)
+            srt = self._clip_source_srts().get(clip_source)
+            if srt is None:
+                raise InvalidEdit("That transcript is not saved beside the recording")
+            database = store_path(old.audio)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            backup = database.with_name(f"{database.name}.{stamp}.bak")
+            session = Session.from_srt(old.audio, srt, old.clip_dir)
+            self.cancel_clip_transcription()
+            # Running jobs check their job id and stop once it is gone.
+            self._leading_silence_job = None
+            self._clip_features_job = None
+            self.store.backup(backup)
+            self.store.close()
+            for path in (database, database.with_name(f"{database.name}-wal"),
+                         database.with_name(f"{database.name}-shm")):
+                path.unlink(missing_ok=True)
+            store = RecordingStore(database)
+            store.create(session, load_snap_points(srt, session.srt_fingerprint))
+            self._replace_recording(session, store, srt)
+            return {**self.snapshot(), "start_over_backup": str(backup)}
+
     def _replace_recording(self, session: Session | None, store: RecordingStore | None, srt: Path) -> None:
         if self.store is not None and self.store is not store:
             self.store.close()
@@ -947,6 +987,7 @@ class SessionService:
                 "counts": counts,
                 "can_undo": bool(self.store and self.store.can_undo()),
                 "merge_preview": self.merge_preview() if session and self.srt and self.srt.exists() else None,
+                "clip_sources": self._clip_sources(),
             }
 
     def event_snapshot(self) -> dict:

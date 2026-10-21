@@ -379,6 +379,50 @@ class WebApiTests(unittest.TestCase):
                          [("triage", 3000), ("polish", 9000), ("publish", 0)])
         self.assertEqual(result["total_ms"], 12000)
 
+    def test_start_over_backs_up_the_session_and_starts_from_the_chosen_srt(self):
+        state = self.open()
+        self.assertEqual(state["clip_sources"], ["lines"])
+        edited = self.client.patch("/api/clips/1", json={
+            "expected_revision": state["revision"], "status": "group1",
+        }, headers=self.headers).json()
+        candidates_srt_path(self.srt).write_text("1\n00:00:00,800 --> 00:00:02,100\nFirst\n\n", encoding="utf-8")
+        self.assertEqual(self.client.get("/api/session").json()["clip_sources"], ["lines", "generated"])
+
+        stale = self.client.post("/api/session/start-over", json={
+            "expected_revision": state["revision"], "clip_source": "generated",
+        }, headers=self.headers)
+        self.assertEqual(stale.status_code, 409)
+        response = self.client.post("/api/session/start-over", json={
+            "expected_revision": edited["revision"], "clip_source": "generated",
+        }, headers=self.headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        fresh = response.json()
+        self.assertEqual(fresh["srt"], str(candidates_srt_path(self.srt.resolve())))
+        self.assertEqual([(c["start"], c["status"]) for c in fresh["candidates"]], [("00:00:00.800", "pending")])
+        self.assertFalse(fresh["can_undo"])
+        self.assertEqual([e["type"] for e in self.events()], ["import"])
+
+        backup = Path(fresh["start_over_backup"])
+        self.assertEqual(backup.parent, self.audio.resolve().parent)
+        old = RecordingStore(backup)
+        self.addCleanup(old.close)
+        self.assertEqual(old.load().get_candidate("1").status, "group1")
+
+        # Reopening keeps the new session and its generated SRT.
+        self.assertEqual(self.open()["srt"], fresh["srt"])
+        again = self.client.post("/api/session/start-over", json={
+            "expected_revision": fresh["revision"], "clip_source": "lines",
+        }, headers=self.headers).json()
+        self.assertEqual(len(again["candidates"]), 2)
+
+    def test_start_over_needs_a_saved_transcript(self):
+        state = self.open()
+        response = self.client.post("/api/session/start-over", json={
+            "expected_revision": state["revision"], "clip_source": "generated",
+        }, headers=self.headers)
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(self.client.get("/api/session").json()["revision"], state["revision"])
+
     def test_clip_features_score_clips_and_persist_without_undo(self):
         self.open()
         path = "/api/session/clip-features"

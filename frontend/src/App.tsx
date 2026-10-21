@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isExploreClip, orderByLikelyKeep } from "./reviewOrder";
 import TriageScreen from "./TriageScreen";
 import { isIdle, viewEvent, type OpenView, type ViewEndReason } from "./reviewViews";
-import { api, applySessionDelta, audioUrl, bootstrap, sendReviewEvents, uploadAudio, type Clip, type ClipFeaturesJob, type ClipTranscriptionJob, type LeadingSilenceJob, type PreviewJob, type Session, type SessionDelta, type SnapPoints, type Status } from "./api";
+import { api, applySessionDelta, audioUrl, bootstrap, sendReviewEvents, uploadAudio, type Clip, type ClipFeaturesJob, type ClipTranscriptionJob, type LeadingSilenceJob, type PreviewJob, type Session, type SessionDelta, type SnapPoints, type Status, type ClipSource, clipSourceLabels } from "./api";
 import WaveformEditor from "./WaveformEditor";
 import { Button, CountBadge, Panel, StageLayout, StatusBadge, statusLabels } from "./ui";
 import { publishClips, type PublishView } from "./publish";
@@ -280,6 +280,11 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsAtController, setSettingsAtController] = useState(false);
   const [showStorageConfirm, setShowStorageConfirm] = useState(false);
+  // The clip source Start over is waiting to confirm, and how it went.
+  const [startOverSource, setStartOverSource] = useState<ClipSource | null>(null);
+  const [startOverBusy, setStartOverBusy] = useState(false);
+  const [startOverMessage, setStartOverMessage] = useState("");
+  const [startOverError, setStartOverError] = useState("");
   const [showGamepadMapping, setShowGamepadMapping] = useState(false);
   const [clipDirDraft, setClipDirDraft] = useState("");
   const [storageMessage, setStorageMessage] = useState("");
@@ -812,7 +817,7 @@ export default function App() {
     setShowDetailMobile(false);
   }, [visible, selectedPosition]);
 
-  const activeDialog = showSettings || showStorageConfirm || showHelp || showJump || showMerge || showExportModal;
+  const activeDialog = showSettings || showStorageConfirm || startOverSource !== null || showHelp || showJump || showMerge || showExportModal;
   const reviewContext = getInputContext({ activeDialog, textEditing: editingTitle });
 
   const undo = useCallback(() => {
@@ -1103,6 +1108,37 @@ export default function App() {
       setStorageError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setStorageBusy(false);
+    }
+  }
+
+  async function startOver(source: ClipSource) {
+    if (!session || session.revision === null) return;
+    setStartOverSource(null);
+    setStartOverBusy(true);
+    setStartOverMessage("");
+    setStartOverError("");
+    // Views of the old session's clips must not land in the new session's review log.
+    viewRef.current = null;
+    pendingViewsRef.current = [];
+    try {
+      const next = await api<Session>("/session/start-over", "POST", {
+        expected_revision: session.revision, clip_source: source,
+      });
+      localStorage.removeItem(`jipandan-review:${next.audio}`);
+      setSession(next);
+      setMode("triage");
+      setFilter("unsorted");
+      setSelectedId(null);
+      setAllOrder("likely-desc");
+      setLeadingSilenceJob(null);
+      const backupName = next.start_over_backup?.split(/[\\/]/).pop();
+      setStartOverMessage(`Started over. The previous session was saved beside the recording as ${backupName}.`);
+    } catch (cause) {
+      const failure = cause as Error & { status?: number; session?: Session };
+      if (failure.status === 409 && failure.session) setSession(failure.session);
+      setStartOverError(failure.message);
+    } finally {
+      setStartOverBusy(false);
     }
   }
 
@@ -1662,6 +1698,12 @@ export default function App() {
             onExploreRankingChange={(enabled) => setSettings((current) => ({ ...current, exploreRanking: enabled }))}
             gamepadStatus={gamepadStatus}
             onLoadStageTimes={loadStageTimes}
+            startOver={{
+              sources: session?.clip_sources ?? [],
+              current: session?.srt?.endsWith(".candidates.srt") ? "generated" : "lines",
+              busy: startOverBusy, message: startOverMessage, error: startOverError,
+              onStartOver: (source) => { setStartOverMessage(""); setStartOverError(""); setStartOverSource(source); },
+            }}
             gamepadRepeatDelayMs={settings.gamepadRepeatDelayMs}
             gamepadMappingButtonRef={gamepadMappingButtonRef}
             onOpenGamepadMapping={openGamepadMapping}
@@ -1690,6 +1732,17 @@ export default function App() {
           className="soft-surface rounded-lg px-4 py-2 text-sm font-medium hover:bg-[#354b3b]">Cancel</button>
         <button type="button" disabled={busy || storageBusy || !clipDirDraft.trim()} onClick={() => void confirmClipDir()}
           className="rounded-lg bg-[#b7d69d] px-4 py-2 text-sm font-semibold text-[#1d2d20] disabled:cursor-not-allowed disabled:opacity-50">Confirm</button>
+      </div>
+    </Dialog>}
+
+    {startOverSource && <Dialog title="Start this session over?"
+      controllerHandlerRef={dialogControllerHandlerRef} onClose={() => setStartOverSource(null)}>
+      <p className="subtle mb-3 text-sm">A fresh session starts from <strong>{clipSourceLabels[startOverSource]}</strong>,
+        with every clip back in Triage. Decisions, edits, titles, undo history, and review time are cleared.</p>
+      <p className="subtle mb-5 text-xs">The current session is saved as a backup file beside the recording. Exported MP3s stay where they are.</p>
+      <div className="flex justify-end gap-2">
+        <Button onClick={() => setStartOverSource(null)}>Cancel</Button>
+        <Button variant="danger" disabled={busy || startOverBusy} onClick={() => void startOver(startOverSource)}>Start over</Button>
       </div>
     </Dialog>}
 

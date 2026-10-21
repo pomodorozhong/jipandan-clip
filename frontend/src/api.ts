@@ -62,6 +62,10 @@ export interface Session {
   counts: Record<Status, number>;
   can_undo: boolean;
   merge_preview: MergePreview | null;
+  /** Saved SRTs a fresh session can start from. */
+  clip_sources: ClipSource[];
+  /** Where Start over saved the previous session. */
+  start_over_backup?: string;
   created_clip_id?: string;
   changed_clip_ids?: string[];
   output_path?: string;
@@ -127,6 +131,9 @@ export interface ClipTranscriptionJob {
 }
 
 export type ClipSource = "lines" | "generated";
+export const clipSourceLabels: Record<ClipSource, string> = {
+  lines: "Transcript lines", generated: "Voice activity (generated)",
+};
 
 export interface TranscriptionJob {
   id: string;
