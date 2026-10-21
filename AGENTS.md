@@ -27,5 +27,5 @@ Jipandan turns long gaming-stream recordings into short soundboard MP3 clips. Se
 - The owner reviews branches locally before anything is pushed. Every PR's title and body are shown in chat for approval before it opens, as the `open-pr` skill requires.
 - PRs are squash-merged. After a PR in a stack merges, rebase the next branch onto the new `main` (`git rebase --onto origin/main <old base commit> <branch>`) before filing it.
 - Before every push, update `Ranked work` in `HANDOFF.md` to read as it will after that branch merges, in the `docs:` commit the handoff rules require before a push.
-- Check the PR's state immediately before each push. If it merged before the branch's last `docs:` commit was pushed, move that commit to a new `docs/<summary>` branch from `main` and open a small docs PR instead.
+- Check the PR's state immediately before each push. If it merged before the branch's last `docs:` commit was pushed, carry that commit's changes into the next work branch's `docs:` commit; never open a PR that changes only `HANDOFF.md`.
 - Use the `commit` skill for every commit.
