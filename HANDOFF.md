@@ -5,12 +5,12 @@
 ### feat/stage-time-breakdown
 
 - **Task:** P-09, approved by the owner on 2026-10-21: break a session's review time down by stage (Triage, Polish, Publish), runnable from Settings on the open session. No issue; local branch, unlinked.
-- **PR:** none yet; its own PR from `main`.
+- **PR:** #80, open; `main` (with #79) was merged in on 2026-10-21.
 - **Code checkpoint:** `9ec1b95 feat(web): show review time per stage in Settings`.
-- **State:** awaiting owner review and approval of the PR title and body.
-- **Verification (2026-10-21):** `uv run python -m unittest discover -s tests` passed, and `npm --prefix frontend run test` (140), `check` and `build` passed. In the app, Settings → Review time → Analyze review time on a copy of the 0511 snap demo session showed Triage 2 min 07 s over 3 clips and Polish 22 min 58 s over 2 clips, with no console errors.
+- **State:** awaiting owner review and merge.
+- **Verification (2026-10-21):** after the merge of `main`, `uv run python -m unittest discover -s tests` passed, and `npm --prefix frontend run test` (140), `check` and `build` passed. In the app, Settings → Review time → Analyze review time on a copy of the 0511 snap demo session showed Triage 2 min 07 s over 3 clips and Polish 22 min 58 s over 2 clips, with no console errors.
 - **Caveat:** views logged before #75 (merged 2026-10-20) can include idle time, so only sessions reviewed since then give clean numbers.
-- **Next action:** owner approves the PR; then push and open it.
+- **Next action:** owner merges #80; then run Review time after the next real clipping session and re-rank work.
 
 ## Ranked work
 
