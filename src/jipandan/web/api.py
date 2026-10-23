@@ -62,8 +62,9 @@ class StartOverRequest(BaseModel):
     clip_source: Literal["lines", "generated"]
 
 
-class ReviewSetRequest(BaseModel):
+class RoundRequest(BaseModel):
     size: int
+    random_share: float
 
 
 class StorageRequest(BaseModel):
@@ -260,13 +261,17 @@ def create_app(
     def start_over(request: StartOverRequest):
         return SessionJSON(app.state.service.start_over(request.expected_revision, request.clip_source))
 
-    @app.post("/api/session/review-set")
-    def create_review_set(request: ReviewSetRequest):
-        return SessionJSON(app.state.service.create_review_set(request.size))
+    @app.get("/api/session/rounds")
+    def review_rounds(size: int = 300, random_share: float = 0.2):
+        return app.state.service.review_rounds(size, random_share)
 
-    @app.post("/api/session/review-set/complete")
-    def complete_review_set():
-        return SessionJSON(app.state.service.complete_review_set())
+    @app.post("/api/session/rounds")
+    def start_round(request: RoundRequest):
+        return SessionJSON(app.state.service.start_round(request.size, request.random_share))
+
+    @app.post("/api/session/rounds/complete")
+    def complete_round():
+        return SessionJSON(app.state.service.complete_round())
 
     @app.post("/api/review-log")
     def record_review_events(request: ReviewEvents):
@@ -312,10 +317,6 @@ def create_app(
     @app.get("/api/session/snap-points")
     def snap_points():
         return app.state.service.snap_points()
-
-    @app.get("/api/session/stage-times")
-    def stage_times():
-        return app.state.service.stage_times()
 
     @app.get("/api/session/leading-silence-detection")
     def leading_silence_detection_status():

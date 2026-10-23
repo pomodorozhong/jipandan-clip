@@ -1,4 +1,4 @@
-// Review time per stage for the open session, from GET /api/session/stage-times.
+// Review time per stage for a round, from the round summaries in GET /api/session/rounds.
 export type Stage = "triage" | "polish" | "publish" | "unknown";
 
 export interface StageRow {
@@ -7,13 +7,6 @@ export interface StageRow {
   views: number;
   clips: number;
   changes: number;
-}
-
-export interface StageTimes {
-  stages: StageRow[];
-  total_ms: number;
-  first_view: string | null;
-  last_view: string | null;
 }
 
 export const stageLabels: Record<Stage, string> = {

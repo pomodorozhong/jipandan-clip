@@ -33,7 +33,7 @@ export default function TriageScreen({
   clip, upNext, durationMs, position, remaining, counts, hideScores = false, audioSrc, autoplay, active, busy, orderNote,
   gamepadAction, onGamepadActionHandled, onPlayback, onDecide, onNavigate, onSelect,
 }: {
-  // Hidden while a review set is open, so scores don't sway decisions or give away its random picks.
+  // Hidden while a review round is open, so scores don't sway decisions or give away its random picks.
   hideScores?: boolean;
   clip: Clip | null;
   upNext: Clip[];
@@ -197,7 +197,7 @@ export default function TriageScreen({
         </div>
       </Panel>
       {upNext.length > 0 && <Panel title="Up next" ariaLabel="Up next clips"
-        aside={<span className="subtle text-xs">{orderNote ? "Clip order ↑" : hideScores ? "Review set" : "Likely keep ↓"}</span>}
+        aside={<span className="subtle text-xs">{orderNote ? "Clip order ↑" : hideScores ? "Round order" : "Likely keep ↓"}</span>}
         className="overflow-hidden">
         <div aria-label="Up next clips">
           {upNext.map((item) => {

@@ -84,3 +84,18 @@ input:focus-visible, button:focus-visible { outline: 2px solid #b4e2b6; outline-
   .topbar-stages { order: 3; flex-basis: 100%; display: flex; justify-content: center; }
   .topbar-side { flex-basis: auto; }
 }
+/* An open review round: named under the app name, with the top bar's bottom edge as its progress bar.
+   Under 600 px it becomes a full-width strip above the stages instead. */
+.topbar { position: relative; }
+.topbar-round-link button { padding: 0; border: 0; background: none; color: #d4ecbe; font: inherit; font-weight: 600; }
+.topbar-round-link button:hover { text-decoration: underline; }
+.topbar-round-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: #22312a; }
+.topbar-round-bar > div { height: 100%; background: #b7d69d; transition: width .2s; }
+.topbar-round-strip { display: none; }
+@container (max-width: 600px) {
+  .topbar-round-link, .topbar-round-bar { display: none; }
+  .topbar-round-strip { order: 2; flex-basis: 100%; display: flex; flex-direction: column; gap: 6px; min-height: 44px; padding: 8px 12px;
+    box-sizing: border-box; border: 1px solid #34423b; border-radius: 10px; background: #1b2723; color: #edf2ee; text-align: left; }
+  .topbar-stages .seg { width: 100%; }
+  .topbar-stages .seg-btn { flex-direction: column; gap: 1px; min-height: 44px; padding: 4px 6px; font-size: 13px; }
+}
