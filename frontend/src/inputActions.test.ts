@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  confirmsTextField,
   actionRepeatPolicy,
   actionForShortcut,
   createCompositionTracker,
   getInputContext,
   isActionAvailable,
   keyboardInputFromEvent,
+  releaseClickedButton,
   resolveKeyboardAction,
   SHORTCUT_DEFINITIONS,
   shouldDispatchAction,
@@ -302,5 +304,24 @@ describe("repeat and availability policy", () => {
     expect(isActionAvailable({ type: "export", advance: false }, {
       context: "active-dialog", candidateReady: true, busy: true,
     })).toBe(false);
+  });
+});
+
+describe("Publish keys after a click or a title edit", () => {
+  it("plays the candidate on Space even when a button has focus", () => {
+    expect(resolveKeyboardAction("export", input({ code: "Space", targetInteractive: true }), "active-dialog"))
+      .toEqual(actionForShortcut("candidate-replay", "keyboard"));
+  });
+
+  it("confirms the title field on Enter but not while composing or with modifiers", () => {
+    expect(confirmsTextField(input({ code: "Enter", targetEditable: true, targetTextEditing: true }))).toBe(true);
+    expect(confirmsTextField(input({ code: "NumpadEnter" }))).toBe(true);
+    expect(confirmsTextField(input({ code: "Enter", isComposing: true }))).toBe(false);
+    expect(confirmsTextField(input({ code: "Enter", metaKey: true }))).toBe(false);
+    expect(confirmsTextField(input({ code: "KeyA" }))).toBe(false);
+  });
+
+  it("leaves focus alone for keyboard and controller activation", () => {
+    expect(releaseClickedButton({ detail: 0, target: null })).toBe(false);
   });
 });

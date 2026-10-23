@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { exportMatchesSettings, publishClips } from "./publish";
+import { DEFAULT_EXPORT_SETTINGS, exportMatchesSettings, initialExportSettings, publishClips } from "./publish";
 import type { Clip } from "./api";
 import { isActionAvailable } from "./inputActions";
 import { defaultGamepadBindingConfig, publishGamepadBindings } from "./gamepad";
@@ -38,5 +38,19 @@ describe("Publish", () => {
     expect(isActionAvailable({ type: "export", advance: false }, { context: "publish", candidateReady: true })).toBe(true);
     expect(isActionAvailable({ type: "export", advance: false }, { context: "publish", candidateReady: false })).toBe(false);
     expect(isActionAvailable({ type: "dialog-close" }, { context: "publish" })).toBe(false);
+  });
+});
+
+describe("Publish export settings", () => {
+  it("opens every clip that was never exported with the defaults", () => {
+    const fresh = { ...saved, last_export_path: null, last_export_mode: "trim_all", last_export_start_threshold_db: -30 } as Clip;
+    expect(initialExportSettings(fresh)).toEqual({ mode: "trim_edges", startDb: "-40", stopDb: "-50" });
+    expect(DEFAULT_EXPORT_SETTINGS).toEqual({ mode: "trim_edges", startDb: "-40", stopDb: "-50" });
+  });
+
+  it("reopens an exported clip with the settings it was exported with", () => {
+    const exported = { ...saved, last_export_mode: "as_is", last_export_start_threshold_db: -35,
+      last_export_stop_threshold_db: -55 } as Clip;
+    expect(initialExportSettings(exported)).toEqual({ mode: "as_is", startDb: "-35", stopDb: "-55" });
   });
 });

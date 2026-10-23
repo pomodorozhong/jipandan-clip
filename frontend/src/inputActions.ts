@@ -268,6 +268,24 @@ export function isInteractiveTarget(target: EventTarget | null): boolean {
   return typeof Element !== "undefined" && target instanceof Element && target.closest("button, a, [role='button']") !== null;
 }
 
+/** Enter in a single-line text field confirms what was typed and leaves the field. */
+export function confirmsTextField(input: KeyboardInput): boolean {
+  return !input.isComposing && !input.shiftKey && !input.altKey && !input.ctrlKey && !input.metaKey
+    && isCode(input, "Enter", "NumpadEnter");
+}
+
+/**
+ * After a mouse or touch click, take focus off the button so it isn't left highlighted
+ * and later keys go to the shortcuts. Keyboard and controller activation (detail 0) keep focus.
+ */
+export function releaseClickedButton(event: Pick<MouseEvent, "detail" | "target">): boolean {
+  if (event.detail === 0 || typeof Element === "undefined" || !(event.target instanceof Element)) return false;
+  const button = event.target.closest("button");
+  if (!(button instanceof HTMLElement) || button !== document.activeElement) return false;
+  button.blur();
+  return true;
+}
+
 export function actionRepeatPolicy(action: InputAction): RepeatPolicy {
   switch (action.type) {
     case "navigate":
