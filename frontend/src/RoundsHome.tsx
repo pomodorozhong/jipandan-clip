@@ -1,5 +1,5 @@
-import { useId } from "react";
-import type { ClipFeaturesJob, RoundSummary, RoundsOverview } from "./api";
+import { useId, useRef } from "react";
+import type { ClipFeaturesJob, RoundImport, RoundSummary, RoundsOverview } from "./api";
 import {
   finishClock, formatPercent, randomShareWarning, ROUND_SIZES, ROUND_RANDOM_SHARE, type ShareWarning,
 } from "./reviewRound";
@@ -36,13 +36,22 @@ function Stat({ label, value, children }: { label: string; value: React.ReactNod
   </div>;
 }
 
+function FileIcon() {
+  return <svg aria-hidden="true" width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7"
+    strokeLinecap="round" strokeLinejoin="round" className="shrink-0"><path d="M5 2.5h6.5L15 6v11.5H5z" /><path d="M11.5 2.5V6H15" />
+    <path d="M7.5 11.5l1.8 1.8 3.4-3.6" /></svg>;
+}
+
 /** The finished round's summary, shown on the rounds home until the next round starts. */
-function RoundDone({ round, stream }: { round: RoundSummary; stream: RoundsOverview["stream"] }) {
+function RoundDone({ round, stream, onSaveFile, onRevealFile }: {
+  round: RoundSummary; stream: RoundsOverview["stream"]; onSaveFile: (number: number) => void;
+  onRevealFile: (number: number) => void;
+}) {
   const captured = formatPercent(round.captured);
   return <section aria-labelledby="round-done-title" className="rounded-2xl border border-[#498c61] bg-[#1a2e24] px-5 py-4">
     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
       <h2 id="round-done-title" className="text-lg font-semibold text-[#e2f8e6]">
-        Round {round.number} {round.completed?.unprocessed ? "ended" : "is done"}
+        Round {round.number} {round.imported ? "imported" : round.completed?.unprocessed ? "ended" : "is done"}
       </h2>
       <span className="subtle text-[13px]">{round.completed?.unprocessed
         ? `Ended with ${round.completed.unprocessed} of ${round.clips} clips not exported or rejected`
@@ -60,6 +69,17 @@ function RoundDone({ round, stream }: { round: RoundSummary; stream: RoundsOverv
         <div className="subtle text-xs">exported, Ready, or Needs work</div>
       </Stat>
     </div>
+    <div className="mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[13px] text-[#c1f3cd]">
+      <FileIcon />
+      {round.imported
+        ? <span>From <span className="mono text-[#edf2ee]">{round.imported.file}</span>, round {round.imported.number} of another project{round.imported.unmatched
+          ? `; ${round.imported.unmatched} of its ${round.imported.clips} clips matched no clip here` : ""}.</span>
+        : round.file
+          ? <><span>Saved <span className="mono text-[#edf2ee]">{round.file}</span> beside the recording; it won't change again.</span>
+            <button type="button" className="accent ml-auto hover:underline" onClick={() => onRevealFile(round.number)}>Show in Finder</button></>
+          : <><span>This round has no round file yet.</span>
+            <button type="button" className="accent ml-auto hover:underline" onClick={() => onSaveFile(round.number)}>Save round file</button></>}
+    </div>
     <StageTable round={round} />
   </section>;
 }
@@ -68,6 +88,7 @@ const CELL = "border-b border-[#2f5440] px-2 py-2 text-right tabular-nums first:
 
 // Time per stage in the round, so the slowest stage can be worked on first.
 function StageTable({ round }: { round: RoundSummary }) {
+  if (!round.stages) return null;
   if (!round.time_ms) return <p className="subtle mt-4 text-[13px]">No clip views recorded in this round.</p>;
   return <div className="mt-4 border-t border-[#2f5440] pt-3">
     <h3 className="subtle mb-1 text-xs font-semibold">Time by stage</h3>
@@ -95,7 +116,7 @@ function StageTable({ round }: { round: RoundSummary }) {
 
 export default function RoundsHome({
   overview, error, size, share, onSizeChange, onShareChange, onStart, starting, waiting, onCancelWaiting, measuring,
-  scoresReady, onReviewAll, now,
+  scoresReady, onReviewAll, now, onSaveFile, onRevealFile, onImport, importing, importResult,
 }: {
   overview: RoundsOverview | null;
   error: string;
@@ -112,8 +133,14 @@ export default function RoundsHome({
   scoresReady: boolean;
   onReviewAll: () => void;
   now: Date;
+  onSaveFile: (number: number) => void;
+  onRevealFile: (number: number) => void;
+  onImport: (files: File[]) => void;
+  importing: boolean;
+  importResult: RoundImport | null;
 }) {
   const shareId = useId();
+  const importRef = useRef<HTMLInputElement>(null);
   const rounds = overview?.rounds ?? [];
   const last = rounds.at(-1);
   const next = overview?.next;
@@ -128,7 +155,8 @@ export default function RoundsHome({
 
   return <main className="panel-scroll flex-1 overflow-auto px-4 py-6 md:px-8 md:py-8">
     <div className="mx-auto flex w-full max-w-[920px] flex-col gap-5">
-      {last?.completed && <RoundDone round={last} stream={overview?.stream ?? null} />}
+      {last?.completed && <RoundDone round={last} stream={overview?.stream ?? null}
+        onSaveFile={onSaveFile} onRevealFile={onRevealFile} />}
 
       <section aria-labelledby="next-round-title" className="panel overflow-hidden">
         <div className="flex flex-wrap items-start justify-between gap-4 px-5 pt-5 pb-4 sm:px-6">
@@ -214,9 +242,23 @@ export default function RoundsHome({
       {error && <p role="alert" className="text-sm text-[#ffb3a8]">{error}</p>}
 
       <section aria-labelledby="earlier-rounds-title">
-        <h2 id="earlier-rounds-title" className="eyebrow mb-2.5">Earlier rounds</h2>
+        <div className="mb-2.5 flex items-center justify-between gap-3">
+          <h2 id="earlier-rounds-title" className="eyebrow">Earlier rounds</h2>
+          <button type="button" className="accent text-[13px] hover:underline disabled:opacity-50" disabled={importing}
+            onClick={() => importRef.current?.click()}>{importing ? "Importing…" : "Import round files…"}</button>
+          <input ref={importRef} type="file" accept=".json,application/json" multiple className="sr-only" tabIndex={-1}
+            aria-label="Round files to import" onChange={(event) => {
+              const files = Array.from(event.target.files ?? []);
+              event.target.value = "";
+              if (files.length) onImport(files);
+            }} />
+        </div>
+        {importResult && <div role="status" className="mb-2.5 rounded-lg border line bg-[#17211d] px-4 py-2.5 text-[13px]">
+          {importResult.imported.map((item) => <p key={item.file}>Imported <span className="mono">{item.file}</span> as round {item.number}: {item.matched} clips matched{item.unmatched ? `, ${item.unmatched} not found here` : ""}.</p>)}
+          {importResult.skipped.map((item) => <p key={item.file} className="text-[#ffcfc4]">Skipped <span className="mono">{item.file}</span>: {item.reason}.</p>)}
+        </div>}
         {rounds.length ? <div className="overflow-x-auto rounded-xl border line bg-[#192420]">
-          <table className="w-full min-w-[560px] border-collapse text-sm">
+          <table className="w-full min-w-[620px] border-collapse text-sm">
             <thead><tr className="subtle text-left text-xs">
               <th scope="col" className="px-4 py-2.5 font-semibold">Round</th>
               <th scope="col" className="px-4 py-2.5 font-semibold">Finished</th>
@@ -224,6 +266,7 @@ export default function RoundsHome({
               <th scope="col" className="px-4 py-2.5 text-right font-semibold">Kept</th>
               <th scope="col" className="px-4 py-2.5 text-right font-semibold">Keepers captured</th>
               <th scope="col" className="px-4 py-2.5 text-right font-semibold">Time</th>
+              <th scope="col" className="px-4 py-2.5 text-right font-semibold">File</th>
             </tr></thead>
             <tbody className="mono">
               {[...rounds].reverse().map((round) => <tr key={round.number} className="border-t line">
@@ -233,10 +276,17 @@ export default function RoundsHome({
                 <td className="px-4 py-3 text-right">{round.kept}</td>
                 <td className="px-4 py-3 text-right">{round.captured === null ? "—" : `+${formatPercent(round.captured)}`}</td>
                 <td className="px-4 py-3 text-right">{formatDuration(round.time_ms)}</td>
+                <td className="px-4 py-3 text-right font-sans">{round.imported
+                  ? <span className="subtle" title={round.imported.file}>Imported</span>
+                  : !round.completed ? "—"
+                    : round.file ? <button type="button" className="accent hover:underline" title={round.file}
+                      onClick={() => onRevealFile(round.number)}>Show</button>
+                      : <button type="button" className="accent hover:underline" onClick={() => onSaveFile(round.number)}>Save</button>}</td>
               </tr>)}
             </tbody>
           </table>
-        </div> : <div className="subtle rounded-xl border border-dashed line px-4 py-5 text-center text-sm">No rounds yet.</div>}
+        </div> : <div className="subtle rounded-xl border border-dashed line px-4 py-5 text-center text-sm">
+          No rounds yet. Picking up from an older project folder? Import its round files to skip the clips they cover.</div>}
       </section>
 
       <p className="subtle text-[13px]">Need something outside a round?{" "}

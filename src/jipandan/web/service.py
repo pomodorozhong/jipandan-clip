@@ -37,8 +37,11 @@ from jipandan.core.paths import AppPaths, default_export_dir, get_app_paths, res
 from jipandan.core.candidates import candidates_srt_path, is_candidates_srt
 from jipandan.core.snap_points import KINDS as SNAP_KINDS, load_snap_points, snap_points_path
 from jipandan.core.review_rounds import (
-    DEFAULT_SIZE, MAX_SIZE, MIN_SIZE, RANDOM_SHARE, STAT_EVENTS, closing_statuses, in_pool, pick_round, set_order_key,
-    unprocessed,
+    DEFAULT_SIZE, MAX_SIZE, MIN_SIZE, RANDOM_SHARE, STAT_EVENTS, clip_times, closing_statuses, effective_clips,
+    in_pool, pick_round, set_order_key, unprocessed,
+)
+from jipandan.core.round_files import (
+    audio_sha256, build_round_file, imported_round, match_clips, parse_round_file, round_file_path, write_round_file,
 )
 from jipandan.core.review_rounds import overview as round_overview
 from jipandan.core.srt import parse_srt, segment_scores_path
@@ -422,6 +425,10 @@ class SessionService:
             allowed_dirs = session.export_dirs or [session.clip_dir]
             if not any(output.is_relative_to(directory.resolve()) for directory in allowed_dirs) or not output.is_file():
                 raise InvalidEdit("Exported file is unavailable")
+        self._reveal(output)
+
+    def _reveal(self, output: Path) -> None:
+        """Show ``output`` in Finder, or open its folder elsewhere."""
         if sys.platform == "darwin":
             try:
                 subprocess.run(["open", "-R", str(output)], check=True, capture_output=True, text=True)
@@ -430,7 +437,7 @@ class SessionService:
                     check=True, capture_output=True, text=True,
                 )
             except (OSError, subprocess.CalledProcessError) as exc:
-                logger.warning("Could not reveal exported file in Finder: %s", exc)
+                logger.warning("Could not reveal file in Finder: %s", exc)
                 raise RevealUnavailable("Could not open Finder from the local server") from exc
         else:
             try:
@@ -935,7 +942,8 @@ class SessionService:
             if not session.clip_features_complete:
                 raise SessionNotReady("Likely keep scores are still being measured")
             scores = self._scores(session)
-            allowed = in_pool(self._rounds, [(c.index, c.status) for c in session.candidates])
+            effective = effective_clips(self._rounds, [(c.clip_id, c.index, c.status, None) for c in session.candidates])
+            allowed = in_pool(self._rounds, [(index, status) for _, index, status, _ in effective])
             pool = [(c.clip_id, c.index, score) for c, score in zip(session.candidates, scores) if c.index in allowed]
             if not pool:
                 raise InvalidEdit("Every clip has been reviewed or is in an earlier round")
@@ -952,7 +960,8 @@ class SessionService:
             return self.snapshot()
 
     def complete_round(self) -> dict:
-        """Close the open round; early if some of its clips are not yet exported or rejected."""
+        """Close the open round, early if some of its clips are not yet exported or rejected, and write its file."""
+        sha = self._audio_sha256()
         with self._lock:
             session = self._ready()
             current = self._open_round
@@ -961,11 +970,129 @@ class SessionService:
             left = unprocessed(current["roles"], [(c.index, c.status) for c in session.candidates])
             completed = {"t": utc_now(), "unprocessed": left}
             closed = closing_statuses(current["roles"], [(c.clip_id, c.index, c.status) for c in session.candidates])
-            rounds = [*self._rounds[:-1], {**current, "completed": completed, "closed_status": closed}]
+            finished = {**current, "completed": completed, "closed_status": closed}
+            finished["file"] = self._write_round_file(session, finished, sha)
+            rounds = [*self._rounds[:-1], finished]
             self.store.save_review_rounds(rounds, {"type": "review-round-complete", "number": current["number"],
-                                                   **completed})
+                                                   "file": finished["file"], **completed})
             self._rounds = rounds
             return self.snapshot()
+
+    def _audio_sha256(self) -> str | None:
+        """The open recording's SHA-256, kept in the session until the audio file changes; None if unreadable."""
+        with self._lock:
+            session = self._ready()
+            audio, store = session.audio, self.store
+            cached = store.audio_hash() if store is not None else None
+        try:
+            stat = audio.stat()
+            key = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+            if cached and all(cached.get(name) == value for name, value in key.items()):
+                return str(cached["sha256"])
+            digest = audio_sha256(audio)
+        except OSError as exc:
+            logger.warning("Could not hash the recording for its round file: %s", exc)
+            return None
+        with self._lock:
+            if self.store is store and store is not None:
+                store.save_audio_hash({**key, "sha256": digest})
+        return digest
+
+    def _write_round_file(self, session: Session, item: dict, sha: str | None) -> str | None:
+        """Write a finished round's file beside the recording; returns its name, or None if it could not be written."""
+        if sha is None:
+            return None
+        scores = self._scores(session)
+        # The file holds each clip as it was when the round ended, not as it is now.
+        closed = item.get("closed_status") or {}
+        clips = [(c.clip_id, c.index, _time_ms(c.original_start), _time_ms(c.original_end),
+                  closed.get(c.clip_id, c.status), score)
+                 for c, score in zip(session.candidates, scores) if not closed or c.clip_id in closed]
+        events = self.store.events(kinds=("view",)) if self.store is not None else []
+        times = clip_times(item, {c.clip_id: c.index for c in session.candidates}, events)
+        recording = {"name": session.audio.name, "sha256": sha, "duration_ms": self.duration_ms}
+        path = round_file_path(session.audio, item["number"])
+        try:
+            write_round_file(path, build_round_file(item, recording, clips, times))
+        except OSError as exc:
+            logger.warning("Could not write the round file %s: %s", path, exc)
+            return None
+        return path.name
+
+    def _finished_round(self, number: int) -> dict:
+        item = next((item for item in self._rounds if item["number"] == number), None)
+        if item is None or not item["completed"]:
+            raise InvalidEdit("That round is not finished")
+        return item
+
+    def save_round_file(self, number: int) -> dict:
+        """Write the file of a finished round that has none, such as one finished before round files."""
+        sha = self._audio_sha256()
+        with self._lock:
+            session = self._ready()
+            item = self._finished_round(number)
+            if item.get("file") or item.get("imported"):
+                return self.snapshot()
+            name = self._write_round_file(session, item, sha)
+            if name is None:
+                raise InvalidEdit("The round file could not be written beside the recording")
+            rounds = [{**entry, "file": name} if entry is item else entry for entry in self._rounds]
+            self.store.save_review_rounds(rounds, {"type": "round-file", "number": number, "file": name})
+            self._rounds = rounds
+            return self.snapshot()
+
+    def reveal_round_file(self, number: int) -> None:
+        with self._lock:
+            session = self._ready()
+            name = self._finished_round(number).get("file")
+            path = session.audio.with_name(name) if name else None
+            if path is None or not path.is_file():
+                raise InvalidEdit("The round file is no longer beside the recording")
+        self._reveal(path)
+
+    def import_round_files(self, files: list[tuple[str, object]]) -> dict:
+        """Add finished rounds from round files of this recording, given as (file name, parsed JSON).
+
+        Clips are matched by time, so the files' clips are skipped by later rounds and their decisions
+        count toward the estimates; the clips here stay Unsorted, as their exports are not carried over.
+        """
+        sha = self._audio_sha256()
+        with self._lock:
+            session = self._ready()
+            if self._open_round is not None:
+                raise InvalidEdit("End the open round before importing round files")
+            rounds = list(self._rounds)
+            imported, skipped = [], []
+            for name, raw in files:
+                try:
+                    data = parse_round_file(raw)
+                except ValueError as exc:
+                    skipped.append({"file": name, "reason": str(exc)})
+                    continue
+                if sha is None or data["recording"]["sha256"] != sha:
+                    skipped.append({"file": name, "reason": "it is from a different recording"})
+                    continue
+                if any(item["seed"] == data["round"]["seed"] for item in rounds):
+                    skipped.append({"file": name, "reason": "this round is already here"})
+                    continue
+                # Like a new round's pool: clips an earlier round left unfinished can still be matched.
+                effective = effective_clips(rounds, [(c.clip_id, c.index, c.status, None) for c in session.candidates])
+                taken = {index for _, index, status, _ in effective if status != "pending"}
+                matches = match_clips(data["clips"], [
+                    (c.index, _time_ms(c.original_start), _time_ms(c.original_end))
+                    for c in session.candidates if c.index not in taken
+                ])
+                if not matches:
+                    skipped.append({"file": name, "reason": "none of its clips match a clip here"})
+                    continue
+                item = imported_round(data, matches, len(rounds) + 1, name)
+                rounds.append(item)
+                imported.append({"file": name, "number": item["number"], "from_number": data["round"]["number"],
+                                 "matched": len(matches), "unmatched": item["imported"]["unmatched"]})
+            if imported:
+                self.store.save_review_rounds(rounds, {"type": "review-round-import", "rounds": imported})
+                self._rounds = rounds
+            return {**self.snapshot(), "round_import": {"imported": imported, "skipped": skipped}}
 
     def _clip_source_srts(self) -> dict[str, Path]:
         """The saved SRTs a new session for the open audio can start from, by clip source."""
@@ -1026,7 +1153,8 @@ class SessionService:
         as of each round's end, once, so later decisions stop changing those rounds' results.
         """
         rounds = store.review_rounds()
-        missing = [item for item in rounds if item.get("completed") and "closed_status" not in item]
+        missing = [item for item in rounds
+                   if item.get("completed") and "closed_status" not in item and not item.get("imported")]
         if session is None or not missing:
             return rounds
         for item in missing:

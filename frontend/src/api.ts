@@ -31,10 +31,19 @@ export interface RoundSummary {
   /** Time on the round's clips while it was open, views from before it left out. */
   time_ms: number;
   stage_ms: Record<RoundStage, number>;
-  /** Time, views, clips, and changes per stage while the round was open. */
-  stages: StageRow[];
+  /** Time, views, clips, and changes per stage while the round was open; null for a round read from a file. */
+  stages: StageRow[] | null;
   /** Share of the stream's estimated keepers this round kept; null until random clips are decided. */
   captured: number | null;
+  /** The round file's name beside the recording, once written. */
+  file: string | null;
+  /** Set for a round read from another project's round file. */
+  imported: { file: string; number: number; clips: number; unmatched: number } | null;
+}
+
+export interface RoundImport {
+  imported: { file: string; number: number; from_number: number; matched: number; unmatched: number }[];
+  skipped: { file: string; reason: string }[];
 }
 
 /** Earlier rounds and estimates for the next one, from GET /session/rounds. */
@@ -120,6 +129,8 @@ export interface Session {
   clip_sources: ClipSource[];
   review_round: ReviewRound | null;
   rounds_done: number;
+  /** What importing round files did. */
+  round_import?: RoundImport;
   /** Where Start over saved the previous session. */
   start_over_backup?: string;
   created_clip_id?: string;
