@@ -7,9 +7,7 @@ import {
   type GamepadStatus,
 } from "./gamepad";
 import type { BadgeMode, UnboundBadgeBehavior } from "./ShortcutBadge";
-import { formatDuration, formatPerClip, formatShare, stageLabels, type StageTimes } from "./stageTimes";
-import { clipSourceLabels, type ClipFeaturesJob, type ClipSource, type ReviewSet } from "./api";
-import { normalizeReviewSetSize, REVIEW_SET_MAX_SIZE, REVIEW_SET_MIN_SIZE } from "./reviewSet";
+import { clipSourceLabels, type ClipSource } from "./api";
 import { Button } from "./ui";
 
 const ROW_BASE = "grid items-center gap-x-6 gap-y-2.5 border-b border-[#2a3731] py-3.5 last:border-b-0";
@@ -73,113 +71,6 @@ function Footnote({ children }: { children: ReactNode }) {
   return <p className="subtle mt-3 mb-3.5 text-xs">{children}</p>;
 }
 
-const CELL = "border-b border-[#2a3731] px-2 py-2 text-right tabular-nums first:pl-0 first:text-left last:pr-0";
-
-function formatDay(iso: string): string {
-  return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-}
-
-// Time per stage for the open session, so the slowest stage can be worked on first.
-function ReviewTimeSection({ enabled, onLoad }: { enabled: boolean; onLoad: () => Promise<StageTimes> }) {
-  const [result, setResult] = useState<StageTimes | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  async function analyze() {
-    setLoading(true);
-    setError("");
-    try {
-      setResult(await onLoad());
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not read the review log");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return <SettingsSection title="Review time" tag="This session" description={enabled
-    ? "Add up how long clips were on screen in each stage, from the session's review log."
-    : "Open an audio session to see its review time."}>
-    <div className="grid gap-3 py-3.5">
-      <div className="flex flex-wrap items-center gap-2.5">
-        <Button disabled={!enabled || loading} onClick={() => void analyze()}>
-          {loading ? "Analyzing…" : result ? "Analyze again" : "Analyze review time"}
-        </Button>
-        {result?.first_view && result.last_view && <span className="subtle text-xs">
-          Views from {formatDay(result.first_view)} to {formatDay(result.last_view)}
-        </span>}
-      </div>
-      {error && <p role="alert" className="text-xs text-[#ffb3a8]">{error}</p>}
-      {result && (result.total_ms
-        ? <table className="w-full border-collapse text-[13px]">
-          <thead className="subtle text-xs">
-            <tr>{["Stage", "Time", "Share", "Clips viewed", "Per clip", "Changes"].map((label) =>
-              <th key={label} scope="col" className={`${CELL} font-medium`}>{label}</th>)}</tr>
-          </thead>
-          <tbody>
-            {result.stages.map((row) => <tr key={row.stage}>
-              <th scope="row" className={`${CELL} font-semibold`}>{stageLabels[row.stage]}</th>
-              <td className={CELL}>{formatDuration(row.ms)}</td>
-              <td className={CELL}>{formatShare(row, result.total_ms)}</td>
-              <td className={CELL}>{row.clips}</td>
-              <td className={CELL}>{formatPerClip(row)}</td>
-              <td className={CELL}>{row.changes}</td>
-            </tr>)}
-            <tr>
-              <th scope="row" className={`${CELL} border-b-0 font-semibold`}>Total</th>
-              <td className={`${CELL} border-b-0 font-semibold`}>{formatDuration(result.total_ms)}</td>
-              <td className={`${CELL} border-b-0`} colSpan={4} />
-            </tr>
-          </tbody>
-        </table>
-        : <p className="subtle text-[13px]">No clip views recorded yet.</p>)}
-    </div>
-    <Footnote>Time counts while a clip is selected and the app is in front; it stops after 60 s without input and leaves out the clip on screen now until you move on. Changes count edits such as status, title, and trim, plus exports in Publish.</Footnote>
-  </SettingsSection>;
-}
-
-// A fixed set of clips per session: the top Likely keep clips plus a random sample that keeps the data fair.
-function ReviewSetSection({ sessionOpen, scoresReady, size, onSizeChange, reviewSet, busy, error, onStart, onComplete,
-  waiting, onCancelWaiting, measuring }: {
-  sessionOpen: boolean; scoresReady: boolean; size: number; onSizeChange: (size: number) => void;
-  reviewSet: ReviewSet | null; busy: boolean; error: string; onStart: (size: number) => void; onComplete: () => void;
-  // Start was clicked before scores were final; the set starts when measuring finishes.
-  waiting: boolean; onCancelWaiting: () => void; measuring: ClipFeaturesJob | null;
-}) {
-  const [draft, setDraft] = useState(String(size));
-  const open = Boolean(reviewSet && !reviewSet.completed);
-  const random = reviewSet ? Math.round(reviewSet.size * reviewSet.random_share) : 0;
-  const commitDraft = () => {
-    const next = normalizeReviewSetSize(Number(draft));
-    setDraft(String(next));
-    onSizeChange(next);
-    return next;
-  };
-  return <SettingsSection title="Review set" tag="This session" description="Review a fixed number of clips instead of every candidate: mostly the top Likely keep clips, plus 20% picked at random from all candidates. The random part lets the review log be used to improve the ranking without the bias of reviewing only top clips, so decide each one like any other.">
-    {!reviewSet ? <ControlRow title="Clips to review" description={!sessionOpen ? "Open an audio session to start a review set."
-      : waiting ? (measuring?.state === "failed" ? `Measuring loudness failed: ${measuring.error ?? "unknown error"}`
-        : `Measuring loudness${measuring?.total ? ` · ${measuring.progress.toLocaleString()} / ${measuring.total.toLocaleString()} clips` : "…"}. The set starts as soon as every clip has its final Likely keep score.`)
-        : `${REVIEW_SET_MIN_SIZE}–${REVIEW_SET_MAX_SIZE}. Until you complete the set, Triage, Polish, and Publish show only its clips, and Triage hides scores. A session has one review set.${scoresReady ? "" : " If loudness is still being measured, the set starts when it finishes."}`}>
-      {(id) => <span className="flex items-center gap-2.5">
-        <input id={id} type="number" min={REVIEW_SET_MIN_SIZE} max={REVIEW_SET_MAX_SIZE} step={10} value={draft}
-          disabled={!sessionOpen || busy || waiting} onChange={(event) => setDraft(event.target.value)} onBlur={commitDraft}
-          className={`${FIELD} w-24 font-mono disabled:opacity-50`} />
-        {waiting ? <Button onClick={onCancelWaiting}>Cancel</Button>
-          : <Button variant="primary" disabled={!sessionOpen || busy} onClick={() => onStart(commitDraft())}>
-            {busy ? "Starting…" : "Start review set"}
-          </Button>}
-      </span>}
-    </ControlRow>
-    : <div className={ROW}>
-      <RowText title={open ? "Reviewing a set" : "Review set completed"} description={open
-        ? `${reviewSet.size} of ${reviewSet.total} clips (${reviewSet.size - random} top, ${random} random); ${reviewSet.unprocessed} not yet exported or rejected.`
-        : `${reviewSet.size} of ${reviewSet.total} clips; every clip is shown again.`} />
-      {open && <Button onClick={onComplete}>Complete review set…</Button>}
-    </div>}
-    {error && <p role="alert" className="pb-3 text-xs text-[#ffb3a8]">{error}</p>}
-  </SettingsSection>;
-}
-
 // Replace the open session with a fresh one; the server keeps the old one as a backup.
 function StartOverSection({ enabled, sources, current, busy, message, error, onStartOver }: {
   enabled: boolean; sources: ClipSource[]; current: ClipSource; busy: boolean; message: string; error: string;
@@ -214,7 +105,7 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
   gamepadStatus, gamepadMappingButtonRef, onOpenGamepadMapping, focusController = false,
   onDetectLeadingSilenceChange, onShowOriginalStartChange, badgeMode, unboundBadgeBehavior,
   onBadgeModeChange, onUnboundBadgeBehaviorChange, gamepadRepeatDelayMs,
-  onGamepadRepeatDelayChange, snapEdges, onSnapEdgesChange, onLoadStageTimes, startOver, reviewSet }: {
+  onGamepadRepeatDelayChange, snapEdges, onSnapEdgesChange, startOver }: {
   clipDir: string;
   storageEnabled: boolean;
   storageBusy: boolean;
@@ -245,12 +136,6 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
   onUnboundBadgeBehaviorChange: (behavior: UnboundBadgeBehavior) => void;
   gamepadRepeatDelayMs: number;
   onGamepadRepeatDelayChange: (delayMs: number) => void;
-  onLoadStageTimes: () => Promise<StageTimes>;
-  reviewSet: {
-    sessionOpen: boolean; scoresReady: boolean; size: number; onSizeChange: (size: number) => void;
-    reviewSet: ReviewSet | null; busy: boolean; error: string; onStart: (size: number) => void; onComplete: () => void;
-    waiting: boolean; onCancelWaiting: () => void; measuring: ClipFeaturesJob | null;
-  };
   startOver: {
     sources: ClipSource[]; current: ClipSource; busy: boolean; message: string; error: string;
     onStartOver: (source: ClipSource) => void;
@@ -289,7 +174,6 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
       <Footnote>Your decisions, which clips you viewed and played, and where each clip ranked are recorded in the session's <code>.jipandan.db</code> file beside the recording, to improve the Likely keep score.</Footnote>
     </SettingsSection>
 
-    <ReviewSetSection {...reviewSet} />
 
     <SettingsSection title="Clip timing">
       <CheckboxRow title="Detect leading silence" checked={detectLeadingSilence} onChange={onDetectLeadingSilenceChange}
@@ -338,7 +222,6 @@ export default function SettingsScreen({ clipDir, storageEnabled, storageBusy, s
       <Footnote>Controller actions pause while typing or this tab is inactive; dialogs use D-pad/left-stick focus, A confirm, and B back. Saving blocks mutating actions while navigation remains available. After reconnecting or changing context, release a held control before pressing it again.</Footnote>
     </SettingsSection>
 
-    <ReviewTimeSection enabled={storageEnabled} onLoad={onLoadStageTimes} />
 
     <SettingsSection title="Storage" tag="This session" description={storageEnabled
       ? "Choose where new audio exports from this session are saved. Existing exported files stay in their current folder."

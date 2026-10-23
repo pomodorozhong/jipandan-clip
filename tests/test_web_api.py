@@ -3,6 +3,7 @@ import os
 import json
 import subprocess
 import shutil
+import sqlite3
 import threading
 import time
 import unittest
@@ -13,7 +14,7 @@ import numpy as np
 from fastapi.testclient import TestClient
 
 from jipandan.core.candidates import candidates_srt_path
-from jipandan.core.review_set import set_order_key
+from jipandan.core.review_rounds import set_order_key
 from jipandan.core.clip_features import ClipFeatures
 from jipandan.core.models import Session
 from jipandan.core.snap_points import SPEECH_END, WORD_START, write_snap_points
@@ -159,12 +160,12 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(revealed.status_code, 200, revealed.text)
         launch.assert_called_once_with(["xdg-open", str(old_output.parent.resolve())])
 
-    def test_leading_silence_checks_an_open_review_set_first_in_its_order(self):
+    def test_leading_silence_checks_an_open_round_first_in_its_order(self):
         self.srt.write_text("".join(
             f"{n}\n00:00:0{n},000 --> 00:00:0{n},500\nLine {n}\n\n" for n in range(1, 7)), encoding="utf-8")
         self.open()
-        self.service._review_set = {"size": 2, "total": 6, "random_share": 0.5, "seed": "a1b2c3d4",
-                                    "roles": {"2": "top", "5": "random"}, "completed": None}
+        self.service._rounds = [{"number": 1, "size": 2, "random_share": 0.5, "seed": "a1b2c3d4",
+                                 "roles": {"2": "top", "5": "random"}, "completed": None}]
         checked = []
 
         def detect(_audio, start, _end):
@@ -462,18 +463,26 @@ class WebApiTests(unittest.TestCase):
         too_many = self.client.post("/api/review-log", json={"events": [{}] * 201}, headers=self.headers)
         self.assertEqual(too_many.status_code, 422)
 
-    def test_stage_times_sum_views_per_stage(self):
-        self.assertEqual(self.client.get("/api/session/stage-times").status_code, 409)
+    def test_round_stats_count_views_and_changes_made_during_the_round(self):
         self.open()
         audio = str(self.audio.resolve())
+        before = {"type": "view", "audio": audio, "clip": "1", "dwell_ms": 50_000, "context": {"filter": "triage"}}
+        self.client.post("/api/review-log", json={"events": [before]}, headers=self.headers)
+        self.measure_clip_features()
+        state = self.client.post("/api/session/rounds", json={"size": 10, "random_share": 0.2},
+                                 headers=self.headers).json()
         self.client.post("/api/review-log", json={"events": [
             {"type": "view", "audio": audio, "clip": "1", "dwell_ms": 3000, "context": {"filter": "triage"}},
-            {"type": "view", "audio": audio, "clip": "1", "dwell_ms": 9000, "context": {"filter": "group1"}},
+            {"type": "view", "audio": audio, "clip": "2", "dwell_ms": 9000, "context": {"filter": "group1"}},
         ]}, headers=self.headers)
-        result = self.client.get("/api/session/stage-times").json()
-        self.assertEqual([(row["stage"], row["ms"]) for row in result["stages"]],
-                         [("triage", 3000), ("polish", 9000), ("publish", 0)])
-        self.assertEqual(result["total_ms"], 12000)
+        self.client.patch("/api/clips/1", json={"expected_revision": state["revision"], "status": "rejected",
+                                                "context": {"filter": "triage"}}, headers=self.headers)
+        summary = self.client.get("/api/session/rounds").json()["rounds"][0]
+        # The view from before the round started is left out.
+        self.assertEqual([(row["stage"], row["ms"], row["clips"], row["changes"]) for row in summary["stages"]],
+                         [("triage", 3000, 1, 1), ("polish", 9000, 1, 0), ("publish", 0, 0, 0)])
+        self.assertEqual(summary["time_ms"], 12000)
+        self.assertEqual(self.client.get("/api/session/stage-times").status_code, 404)
 
     def test_start_over_backs_up_the_session_and_starts_from_the_chosen_srt(self):
         state = self.open()
@@ -526,46 +535,74 @@ class WebApiTests(unittest.TestCase):
             self.client.post(path, headers=self.headers)
             self.wait_for_job(path, "completed")
 
-    def test_review_set_is_picked_once_and_completed(self):
+    def test_rounds_are_picked_in_turn_from_clips_no_round_took(self):
+        self.srt.write_text("".join(
+            f"{n}\n00:00:0{n},000 --> 00:00:0{n},500\nLine {n}\n\n" for n in range(1, 5)), encoding="utf-8")
         self.open()
-        self.assertEqual(self.client.post("/api/session/review-set", json={"size": 10},
-                                          headers=self.headers).status_code, 409)
-        self.measure_clip_features()
-        self.assertEqual(self.client.post("/api/session/review-set", json={"size": 9},
+        start = {"size": 10, "random_share": 0.5}
+        self.assertEqual(self.client.post("/api/session/rounds", json=start, headers=self.headers).status_code, 409)
+        path = "/api/session/clip-features"
+        measured = [ClipFeatures(-12.0, -3.0, -25.0), ClipFeatures(-35.0, -9.0, -6.0),
+                    ClipFeatures(-20.0, -5.0, -15.0), ClipFeatures(-30.0, -8.0, -9.0)]
+        with patch("jipandan.web.service.compute_clip_features", return_value=measured):
+            self.client.post(path, headers=self.headers)
+            self.wait_for_job(path, "completed")
+        self.assertEqual(self.client.post("/api/session/rounds", json={"size": 9, "random_share": 0.2},
                                           headers=self.headers).status_code, 422)
-        state = self.client.post("/api/session/review-set", json={"size": 10}, headers=self.headers).json()
-        # Two clips: the set holds both, so nothing outside it can be missed.
-        self.assertEqual(state["review_set"], {"size": 2, "total": 2, "random_share": 0.2,
-                                               "seed": state["review_set"]["seed"],
-                                               "unprocessed": 2, "completed": None})
-        self.assertRegex(state["review_set"]["seed"], r"^[0-9a-f]{16}$")
-        # 20% of two clips rounds to no random picks.
-        self.assertEqual([c["review_set"] for c in state["candidates"]], ["top", "top"])
-        event = self.events("review-set")[0]
-        self.assertEqual((event["size"], event["score_version"]), (2, "builtin-v1"))
-        self.assertEqual(sorted(event["top"] + event["random"]), ["1", "2"])
-        # Asking again keeps the set it already has.
-        again = self.client.post("/api/session/review-set", json={"size": 50}, headers=self.headers).json()
-        self.assertEqual(again["review_set"]["size"], 2)
-
-        revision = self.client.patch("/api/clips/1", json={
-            "expected_revision": state["revision"], "status": "rejected",
-            "context": {"review_set": "top", "filter": "triage"},
-        }, headers=self.headers).json()["revision"]
-        self.assertEqual(self.events("status")[0]["review_set"], "top")
-        self.assertEqual(self.open()["review_set"]["unprocessed"], 1)
-
-        completed = self.client.post("/api/session/review-set/complete", headers=self.headers).json()
-        self.assertEqual(completed["review_set"]["completed"]["unprocessed"], 1)
-        self.assertEqual([c["review_set"] for c in completed["candidates"]], [None, None])
-        self.assertEqual(self.events("review-set-complete")[0]["unprocessed"], 1)
-        self.assertEqual(self.client.post("/api/session/review-set/complete",
+        self.assertEqual(self.client.post("/api/session/rounds", json={"size": 10, "random_share": 1.5},
                                           headers=self.headers).status_code, 422)
-        # A completed set stays completed after reopening, and no new set is picked.
-        self.assertIsNotNone(self.open()["review_set"]["completed"])
-        self.assertIsNotNone(self.client.post("/api/session/review-set", json={"size": 10},
-                                              headers=self.headers).json()["review_set"]["completed"])
+        plan = self.client.get("/api/session/rounds?size=10&random_share=0.5").json()
+        self.assertEqual((plan["pool"], plan["next"]["number"], plan["next"]["size"], plan["next"]["random_count"]),
+                         (4, 1, 4, 2))
+        self.assertIsNone(plan["stream"])
+
+        state = self.client.post("/api/session/rounds", json={"size": 10, "random_share": 0.5},
+                                 headers=self.headers).json()
+        self.assertEqual({key: state["review_round"][key] for key in ("number", "size", "random_share", "unprocessed")},
+                         {"number": 1, "size": 4, "random_share": 0.5, "unprocessed": 4})
+        self.assertEqual(sorted(c["round_role"] for c in state["candidates"]), ["random", "random", "top", "top"])
+        event = self.events("review-round")[0]
+        self.assertEqual((event["number"], event["pool"], event["score_version"]), (1, 4, "builtin-v1"))
+        # Asking again keeps the open round.
+        again = self.client.post("/api/session/rounds", json={"size": 50, "random_share": 0.2}, headers=self.headers)
+        self.assertEqual(again.json()["review_round"]["size"], 4)
+
+        revision = state["revision"]
+        for clip_id in ("1", "2"):
+            revision = self.client.patch(f"/api/clips/{clip_id}", json={
+                "expected_revision": revision, "status": "rejected",
+                "context": {"review_set": "top", "round": 1, "filter": "triage"},
+            }, headers=self.headers).json()["revision"]
+        self.assertEqual((self.events("status")[0]["review_set"], self.events("status")[0]["round"]), ("top", 1))
+        self.assertEqual(self.open()["review_round"]["unprocessed"], 2)
+
+        completed = self.client.post("/api/session/rounds/complete", headers=self.headers).json()
+        self.assertIsNone(completed["review_round"])
+        self.assertEqual(completed["rounds_done"], 1)
+        self.assertEqual([c["round_role"] for c in completed["candidates"]], [None] * 4)
+        self.assertEqual(self.events("review-round-complete")[0]["unprocessed"], 2)
+        self.assertEqual(self.client.post("/api/session/rounds/complete", headers=self.headers).status_code, 422)
+        summary = self.client.get("/api/session/rounds").json()["rounds"][0]
+        self.assertEqual((summary["number"], summary["processed"], summary["kept"]), (1, 2, 0))
+        self.assertIsNone(self.open()["review_round"])
+        # Round 1 ended with two clips left Unsorted; round 2 takes them, as no other clip is left.
+        self.assertEqual(self.client.get("/api/session/rounds").json()["pool"], 2)
+        second = self.client.post("/api/session/rounds", json=start, headers=self.headers).json()
+        self.assertEqual((second["review_round"]["number"], second["review_round"]["size"]), (2, 2))
+        self.assertEqual(sorted(c["clip_id"] for c in second["candidates"] if c["round_role"]), ["3", "4"])
         self.assertEqual(revision, self.client.get("/api/session").json()["revision"])
+
+    def test_a_review_set_from_before_rounds_opens_as_round_one(self):
+        self.open()
+        legacy = {"size": 2, "total": 2, "random_share": 0.2, "seed": "a1b2c3d4", "score_version": "builtin-v1",
+                  "top": ["1", "2"], "random": [], "roles": {"1": "top", "2": "top"}, "completed": None}
+        db = sqlite3.connect(self.service.store.path)
+        with db:
+            db.execute("INSERT INTO meta (key, value) VALUES ('review_set', ?)", (json.dumps(legacy),))
+        db.close()
+        state = self.open()
+        self.assertEqual((state["review_round"]["number"], state["review_round"]["unprocessed"]), (1, 2))
+        self.assertEqual([c["round_role"] for c in state["candidates"]], ["top", "top"])
 
     def test_clip_features_score_clips_and_persist_without_undo(self):
         self.open()

@@ -38,6 +38,8 @@ def clean_context(raw: object) -> dict:
     for key in ("order", "filter", "score_version", "review_set"):
         if (value := _short(raw.get(key))) is not None:
             context[key] = value
+    if (number := _int(raw.get("round"), 1, 100_000)) is not None:
+        context["round"] = number
     if (rank := _int(raw.get("rank"), 1, 1_000_000)) is not None:
         context["rank"] = rank
     score = raw.get("score")

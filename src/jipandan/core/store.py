@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from jipandan.core.models import ClipCandidate, Session, clip_candidate_from_dict
+from jipandan.core.review_rounds import from_review_set
 
 STORE_VERSION = 1
 
@@ -173,17 +174,23 @@ class RecordingStore:
             self._insert_event("import", None, {"clips": len(session.candidates)}, mutation=None)
         session.revision = 1
 
-    def review_set(self) -> dict | None:
-        """Return the session's review set, or None when it has none."""
+    def review_rounds(self) -> list[dict]:
+        """Return the session's review rounds in order; a review set from before rounds reads as round 1."""
         with self._lock:
-            row = self._db.execute("SELECT value FROM meta WHERE key = 'review_set'").fetchone()
-        return json.loads(row[0]) if row else None
+            row = self._db.execute("SELECT value FROM meta WHERE key = 'review_rounds'").fetchone()
+            if row:
+                return json.loads(row[0])
+            legacy = self._db.execute("SELECT value FROM meta WHERE key = 'review_set'").fetchone()
+            if not legacy:
+                return []
+            started = self._db.execute("SELECT t FROM event WHERE type = 'review-set' ORDER BY seq LIMIT 1").fetchone()
+        return [from_review_set(json.loads(legacy[0]), started[0] if started else None)]
 
-    def save_review_set(self, review_set: dict, event: dict) -> None:
-        """Save the review set and log ``event`` in one transaction; neither changes a clip or can be undone."""
+    def save_review_rounds(self, rounds: list[dict], event: dict) -> None:
+        """Save the rounds and log ``event`` in one transaction; neither changes a clip or can be undone."""
         with self._lock, self._transaction():
-            self._db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('review_set', ?)",
-                             (json.dumps(review_set, ensure_ascii=False),))
+            self._db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('review_rounds', ?)",
+                             (json.dumps(rounds, ensure_ascii=False),))
             fields = dict(event)
             self._insert_event(str(fields.pop("type")), None, fields, mutation=None)
 

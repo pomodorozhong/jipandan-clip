@@ -36,8 +36,10 @@ from jipandan.core.leading_silence import detect_leading_silence_start
 from jipandan.core.paths import AppPaths, default_export_dir, get_app_paths, resolve_export_dir
 from jipandan.core.candidates import candidates_srt_path, is_candidates_srt
 from jipandan.core.snap_points import KINDS as SNAP_KINDS, load_snap_points, snap_points_path
-from jipandan.core.review_set import MAX_SIZE, MIN_SIZE, pick_review_set, set_order_key, unprocessed
-from jipandan.core.stage_times import stage_breakdown
+from jipandan.core.review_rounds import (
+    DEFAULT_SIZE, MAX_SIZE, MIN_SIZE, RANDOM_SHARE, STAT_EVENTS, in_pool, pick_round, set_order_key, unprocessed,
+)
+from jipandan.core.review_rounds import overview as round_overview
 from jipandan.core.srt import parse_srt, segment_scores_path
 from jipandan.core.whisper import describe_transcribe_call
 from jipandan.core.models import ClipCandidate, MIN_CLIP_DURATION_SECONDS, Session
@@ -116,7 +118,7 @@ class SessionService:
         self._clip_dir_override = clip_dir.expanduser().resolve() if clip_dir else None
         self.upload_dir = (upload_dir or self.paths.uploads_dir).expanduser().resolve()
         self._waveforms = WaveformCache()
-        self._review_set: dict | None = None
+        self._rounds: list[dict] = []
         self._leading_silence_job: dict[str, object] | None = None
         self._clip_features_job: dict[str, object] | None = None
         self._clip_transcription_job: dict[str, object] | None = None
@@ -458,13 +460,6 @@ class SessionService:
             store = self.store
             return {kind: store.snap_points(kind) if store is not None else [] for kind in SNAP_KINDS}
 
-    def stage_times(self) -> dict:
-        """Return the open session's review time per stage, from its event log."""
-        with self._lock:
-            self._ready()
-            events = self.store.events() if self.store is not None else []
-        return stage_breakdown(events)
-
     def leading_silence_detection_status(self) -> dict | None:
         with self._lock:
             job = self._leading_silence_job
@@ -499,10 +494,10 @@ class SessionService:
                 "adjusted": 0,
                 "error": None,
             }
-            # While a review set is open its clips go first, in the order the app shows them,
+            # While a review round is open its clips go first, in the order the app shows them,
             # so the clips being reviewed are trimmed before the rest of the session.
-            roles = self._review_set_roles
-            seed = str(self._review_set["seed"]) if roles and self._review_set else ""
+            roles = self._round_roles
+            seed = str(self._open_round["seed"]) if self._open_round else ""
             ordered = sorted(session.candidates, key=lambda candidate: (
                 (0, set_order_key(seed, candidate.index)) if str(candidate.index) in roles else (1, 0.0),
                 candidate.index, candidate.suffix,
@@ -893,56 +888,80 @@ class SessionService:
             return self.snapshot()
 
     @property
-    def _review_set_roles(self) -> dict[str, str]:
-        """Review set role ("top" or "random") by SRT index, while the set is open."""
-        review_set = self._review_set
-        return review_set["roles"] if review_set and not review_set["completed"] else {}
+    def _open_round(self) -> dict | None:
+        """The round being reviewed, or None between rounds."""
+        last = self._rounds[-1] if self._rounds else None
+        return last if last and not last["completed"] else None
 
-    def _review_set_summary(self, session: Session | None) -> dict | None:
-        review_set = self._review_set
-        if review_set is None or session is None:
+    @property
+    def _round_roles(self) -> dict[str, str]:
+        """Round role ("top" or "random") by SRT index, while a round is open."""
+        current = self._open_round
+        return current["roles"] if current else {}
+
+    def _round_summary(self, session: Session | None) -> dict | None:
+        current = self._open_round
+        if current is None or session is None:
             return None
         return {
-            "size": review_set["size"], "total": review_set["total"], "random_share": review_set["random_share"],
-            "seed": review_set["seed"],
-            "unprocessed": unprocessed(review_set["roles"], [(c.index, c.status) for c in session.candidates]),
-            "completed": review_set["completed"],
+            "number": current["number"], "size": current["size"], "random_share": current["random_share"],
+            "seed": current["seed"], "started": current.get("started"),
+            "unprocessed": unprocessed(current["roles"], [(c.index, c.status) for c in session.candidates]),
         }
 
-    def create_review_set(self, size: int) -> dict:
-        """Give the open session its fixed review set; a session that already has one keeps it."""
-        if not MIN_SIZE <= size <= MAX_SIZE:
-            raise InvalidEdit(f"A review set holds {MIN_SIZE} to {MAX_SIZE} clips")
+    def review_rounds(self, size: int = DEFAULT_SIZE, random_share: float = RANDOM_SHARE) -> dict:
+        """Return earlier rounds and estimates for a next round of ``size`` clips with ``random_share`` random."""
+        size = min(MAX_SIZE, max(MIN_SIZE, size))
+        random_share = min(1.0, max(0.0, random_share))
         with self._lock:
             session = self._ready()
-            if self._review_set is not None:
+            scores = self._scores(session)
+            clips = [(c.clip_id, c.index, c.status, score) for c, score in zip(session.candidates, scores)]
+            events = self.store.events(kinds=STAT_EVENTS) if self.store is not None else []
+            rounds = list(self._rounds)
+        return round_overview(rounds, clips, events, size, random_share)
+
+    def start_round(self, size: int, random_share: float) -> dict:
+        """Open the next review round: the top clips no round has taken yet, plus a random share of them."""
+        if not MIN_SIZE <= size <= MAX_SIZE:
+            raise InvalidEdit(f"A round holds {MIN_SIZE} to {MAX_SIZE} clips")
+        if not 0 <= random_share <= 1:
+            raise InvalidEdit("The random share is between 0 and 1")
+        with self._lock:
+            session = self._ready()
+            if self._open_round is not None:
                 return self.snapshot()
             if not session.clip_features_complete:
                 raise SessionNotReady("Likely keep scores are still being measured")
             scores = self._scores(session)
-            review_set = pick_review_set(
-                [(c.clip_id, c.index, score) for c, score in zip(session.candidates, scores)], size,
-            )
-            review_set["score_version"] = LIKELY_KEEP_VERSION
-            self.store.save_review_set(review_set, {
-                "type": "review-set", **{key: review_set[key] for key in (
-                    "size", "total", "random_share", "seed", "score_version", "top", "random")},
+            allowed = in_pool(self._rounds, [(c.index, c.status) for c in session.candidates])
+            pool = [(c.clip_id, c.index, score) for c, score in zip(session.candidates, scores) if c.index in allowed]
+            if not pool:
+                raise InvalidEdit("Every clip has been reviewed or is in an earlier round")
+            picked = pick_round(pool, size, random_share=round(random_share, 2))
+            picked.update(number=len(self._rounds) + 1, total=len(session.candidates),
+                          score_version=LIKELY_KEEP_VERSION, started=utc_now())
+            rounds = [*self._rounds, picked]
+            self.store.save_review_rounds(rounds, {
+                "type": "review-round", **{key: picked[key] for key in (
+                    "number", "size", "pool", "total", "random_share", "seed", "score_version", "top", "random")},
             })
-            self._review_set = review_set
+            self._rounds = rounds
             return self.snapshot()
 
-    def complete_review_set(self) -> dict:
-        """Close the open review set so every clip shows again; early if set clips are still unprocessed."""
+    def complete_round(self) -> dict:
+        """Close the open round; early if some of its clips are not yet exported or rejected."""
         with self._lock:
             session = self._ready()
-            review_set = self._review_set
-            if review_set is None or review_set["completed"]:
-                raise InvalidEdit("This session has no open review set")
-            left = unprocessed(review_set["roles"], [(c.index, c.status) for c in session.candidates])
+            current = self._open_round
+            if current is None:
+                raise InvalidEdit("No review round is open")
+            left = unprocessed(current["roles"], [(c.index, c.status) for c in session.candidates])
             completed = {"t": utc_now(), "unprocessed": left}
-            self.store.save_review_set({**review_set, "completed": completed},
-                                       {"type": "review-set-complete", **completed})
-            self._review_set = {**review_set, "completed": completed}
+            rounds = [*self._rounds[:-1], {**current, "completed": completed}]
+            self.store.save_review_rounds(rounds, {"type": "review-round-complete", "number": current["number"],
+                                                   **completed})
+            self._rounds = rounds
             return self.snapshot()
 
     def _clip_source_srts(self) -> dict[str, Path]:
@@ -991,7 +1010,7 @@ class SessionService:
         self.session = session
         self.store = store
         self._title_suggestions = store.suggestions() if store is not None else {}
-        self._review_set = store.review_set() if store is not None else None
+        self._rounds = store.review_rounds() if store is not None else []
         self._payload_cache.clear()
         self._score_cache = None
         self._merge_preview_cache = None
@@ -1019,7 +1038,7 @@ class SessionService:
         if cached is None or cached[0] is not candidate:
             cached = self._payload_cache[candidate.clip_id] = (candidate, clip_payload(candidate))
         return {**cached[1], "likely_keep": score, "suggested_title": self._title_suggestions.get(candidate.clip_id),
-                "review_set": self._review_set_roles.get(str(candidate.index))}
+                "round_role": self._round_roles.get(str(candidate.index))}
 
     def _counts(self, session: Session | None) -> dict[str, int]:
         counts = {name: 0 for name in ("pending", "group1", "group2", "exported", "rejected")}
@@ -1068,7 +1087,8 @@ class SessionService:
                 "can_undo": bool(self.store and self.store.can_undo()),
                 "merge_preview": self.merge_preview() if session and self.srt and self.srt.exists() else None,
                 "clip_sources": self._clip_sources(),
-                "review_set": self._review_set_summary(session),
+                "review_round": self._round_summary(session),
+                "rounds_done": sum(1 for item in self._rounds if item["completed"]),
             }
 
     def event_snapshot(self) -> dict:

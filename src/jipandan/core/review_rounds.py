@@ -1,0 +1,284 @@
+"""Review rounds: fixed batches of clips, each the top Likely keep clips not yet reviewed plus a random sample.
+
+Reviewing only the top of the ranking would leave no labels on clips the score ranks low,
+so a model retrained on them could not correct its own blind spots. Each round's random part
+is a uniform sample of the clips no earlier round took (its pool), drawn regardless of score:
+every clip in the pool had a known chance of being reviewed, so the review log can be
+reweighted to stand for the whole recording (inverse propensity weighting). The random labels
+also estimate how many keepers the stream holds. See doc/app-rebuild-plan.md, "Review rounds".
+"""
+
+from __future__ import annotations
+
+import math
+import random
+import secrets
+from collections.abc import Iterable, Sequence
+
+from jipandan.core.stage_times import CHANGE_TYPES, STAGES, event_stage, stage_breakdown
+
+DEFAULT_SIZE = 300
+RANDOM_SHARE = 0.2
+MIN_SIZE = 10
+MAX_SIZE = 5000
+TOP, RANDOM = "top", "random"
+# Random labels wanted before refitting Likely keep's weights (about 4–5 rounds of 300 at 20%).
+LABELS_TARGET = 250
+# Seconds per clip, all stages together, until a round has been timed.
+DEFAULT_SECONDS_PER_CLIP = 30
+KEPT = frozenset({"group1", "group2", "exported"})
+PROCESSED = frozenset({"exported", "rejected"})
+
+
+def pick_round(
+    pool: Sequence[tuple[str, int, float | None]], size: int, *, random_share: float = RANDOM_SHARE,
+    seed: str | None = None,
+) -> dict:
+    """Pick a round from ``pool``, given as (clip_id, index, score) for every clip it may take.
+
+    The random part is drawn first from the whole pool; the top part is filled with the highest
+    scores among the rest. Membership is kept by SRT index, so clips later split off a round
+    clip belong to the round too.
+    """
+    seed = seed or secrets.token_hex(8)
+    size = min(size, len(pool))
+    random_count = round(size * random_share)
+    rng = random.Random(seed)
+    sampled = rng.sample(range(len(pool)), random_count)
+    picked = set(sampled)
+    rest = sorted(
+        (position for position in range(len(pool)) if position not in picked),
+        key=lambda position: (pool[position][2] is None, -(pool[position][2] or 0.0), pool[position][1]),
+    )
+    top = rest[: size - random_count]
+    return {
+        "size": size, "pool": len(pool), "random_share": random_share, "seed": seed,
+        "top": [pool[position][0] for position in top],
+        "random": [pool[position][0] for position in sampled],
+        "roles": {
+            **{str(pool[position][1]): TOP for position in top},
+            **{str(pool[position][1]): RANDOM for position in sampled},
+        },
+        "completed": None,
+    }
+
+
+def from_review_set(review_set: dict, started: str | None) -> dict:
+    """Read a session's review set from before rounds (#100) as its round 1, picked from every clip."""
+    return {
+        "number": 1, "size": review_set["size"], "pool": review_set["total"], "total": review_set["total"],
+        "random_share": review_set["random_share"], "seed": review_set["seed"],
+        "score_version": review_set.get("score_version"), "top": review_set["top"],
+        "random": review_set["random"], "roles": review_set["roles"], "started": started,
+        "completed": review_set["completed"],
+    }
+
+
+def unit_hash(text: str) -> float:
+    """Map ``text`` to [0, 1) exactly like ``unitHash`` in frontend/src/reviewOrder.ts."""
+    value = 0x811C9DC5
+    data = text.encode("utf-16-le")
+    for position in range(0, len(data), 2):
+        value ^= data[position] | data[position + 1] << 8
+        value = (value * 0x01000193) & 0xFFFFFFFF
+    value ^= value >> 16
+    value = (value * 0x85EBCA6B) & 0xFFFFFFFF
+    value ^= value >> 13
+    value = (value * 0xC2B2AE35) & 0xFFFFFFFF
+    value ^= value >> 16
+    return value / 0x1_0000_0000
+
+
+def set_order_key(seed: str, index: int) -> float:
+    """Where a round clip sits in the round's shuffled order, as ``orderRound`` shows it on every screen."""
+    return unit_hash(f"{seed}:order:{index}")
+
+
+def unprocessed(roles: dict[str, str], clips: Sequence[tuple[int, str]]) -> int:
+    """Count round clips, given as (index, status), that are not yet exported or rejected."""
+    return sum(1 for index, status in clips if str(index) in roles and status not in PROCESSED)
+
+
+def in_pool(rounds: Sequence[dict], clips: Sequence[tuple[int, str]]) -> set[int]:
+    """SRT indexes a new round may take: every clip with the index still Unsorted, and not in the open round.
+
+    A finished round's clips are all exported or rejected; clips a round ended early left Unsorted
+    go back to the pool, since nobody reviewed them.
+    """
+    taken = {int(index) for item in rounds if not item.get("completed") for index in item["roles"]}
+    decided = {index for index, status in clips if status != "pending"}
+    return {index for index, _ in clips} - taken - decided
+
+
+def keep_curve(samples: Sequence[tuple[float, bool]]) -> tuple[float, float] | None:
+    """Fit P(kept | score) as a logistic curve on random clips' (score, kept) labels.
+
+    Random clips were drawn regardless of score, so their decisions show how the keep rate
+    changes with the score across the whole pool. A small ridge keeps the fit finite when every
+    label agrees. Returns (intercept, slope) on score / 100, or None without labels.
+    """
+    if not samples:
+        return None
+    a = b = 0.0
+    ridge = 0.1
+    for _ in range(50):
+        ga = gb = haa = hab = hbb = 0.0
+        for score, kept in samples:
+            x = score / 100
+            p = 1 / (1 + math.exp(-(a + b * x)))
+            ga += p - kept
+            gb += (p - kept) * x
+            w = p * (1 - p)
+            haa += w
+            hab += w * x
+            hbb += w * x * x
+        ga += ridge * a
+        gb += ridge * b
+        haa += ridge
+        hbb += ridge
+        det = haa * hbb - hab * hab
+        if det <= 1e-12:
+            break
+        step_a = (hbb * ga - hab * gb) / det
+        step_b = (haa * gb - hab * ga) / det
+        a, b = a - step_a, b - step_b
+        if abs(step_a) + abs(step_b) < 1e-9:
+            break
+    return a, b
+
+
+def keep_chance(curve: tuple[float, float], score: float | None, fallback: float) -> float:
+    if score is None:
+        return fallback
+    return 1 / (1 + math.exp(-(curve[0] + curve[1] * score / 100)))
+
+
+def margin_points(labels: int) -> float | None:
+    """How closely ``labels`` random decisions pin a keep rate: the 95% interval at 50%, in points."""
+    return round(98 / math.sqrt(labels), 1) if labels else None
+
+
+# Events a round's review stats count: clip views, and the changes and exports made to its clips.
+STAT_EVENTS = ("view", "export", *sorted(CHANGE_TYPES))
+
+
+def round_events(item: dict, clip_index: dict[str, int], events: Iterable[dict]) -> list[dict]:
+    """The views of and changes to a round's clips made while it was open; earlier ones are left out."""
+    started = item.get("started")
+    ended = (item.get("completed") or {}).get("t")
+    roles = item["roles"]
+    if started is None:
+        return []
+    kept = []
+    for event in events:
+        index = clip_index.get(event.get("clip") or "")
+        if index is None or str(index) not in roles:
+            continue
+        start = event.get("start", event["t"])
+        if start >= started and (ended is None or start <= ended):
+            kept.append(event)
+    return kept
+
+
+def round_time(item: dict, clip_index: dict[str, int], events: Iterable[dict]) -> dict[str, int]:
+    """Milliseconds spent per stage on a round's clips while it was open; earlier views are left out."""
+    totals = dict.fromkeys(STAGES, 0)
+    for event in round_events(item, clip_index, events):
+        if event["type"] != "view":
+            continue
+        stage = event_stage(event)
+        if stage in totals:
+            totals[stage] += event["dwell_ms"]
+    return totals
+
+
+def overview(
+    rounds: Sequence[dict], clips: Sequence[tuple[str, int, str, float | None]], events: Sequence[dict],
+    size: int, random_share: float,
+) -> dict:
+    """Summarize earlier rounds and estimate the next one.
+
+    ``clips`` is every clip as (clip_id, index, status, score). The stream's keepers are the
+    clips already kept plus, for every Unsorted clip, its chance of being kept from the keep
+    curve; the next round adds the expected keepers among the clips it would pick.
+    """
+    clip_index = {clip_id: index for clip_id, index, _, _ in clips}
+    by_index: dict[int, list[tuple[str, float | None]]] = {}
+    for clip_id, index, status, score in clips:
+        by_index.setdefault(index, []).append((status, score))
+
+    labels = [
+        (score, status in KEPT)
+        for item in rounds for index, role in item["roles"].items() if role == RANDOM
+        for status, score in by_index.get(int(index), []) if status != "pending" and score is not None
+    ]
+    curve = keep_curve(labels)
+    fallback = sum(kept for _, kept in labels) / len(labels) if labels else 0.0
+
+    pending = [score for _, _, status, score in clips if status == "pending"]
+    known = sum(1 for _, _, status, _ in clips if status in KEPT)
+    stream = None
+    if curve is not None:
+        chances = [keep_chance(curve, score, fallback) for score in pending]
+        expected = sum(chances)
+        mean = expected / len(chances) if chances else 0.0
+        spread = 1.96 * len(chances) * math.sqrt(mean * (1 - mean) / len(labels))
+        stream = {"keepers": round(known + expected), "low": round(known + max(0.0, expected - spread)),
+                  "high": round(known + min(len(chances), expected + spread))}
+
+    def share_of_stream(count: int) -> float | None:
+        return count / stream["keepers"] if stream and stream["keepers"] else None
+
+    summaries = []
+    for item in rounds:
+        members = [status for index in item["roles"] for status, _ in by_index.get(int(index), [])]
+        kept = sum(status in KEPT for status in members)
+        times = round_time(item, clip_index, events)
+        stages = [row for row in stage_breakdown(round_events(item, clip_index, events))["stages"]
+                  if row["stage"] != "unknown"]
+        summaries.append({
+            "number": item["number"], "size": item["size"], "clips": len(members), "random_share": item["random_share"],
+            "started": item.get("started"), "completed": item["completed"],
+            "kept": kept, "processed": sum(status in PROCESSED for status in members),
+            "decided": sum(status != "pending" for status in members),
+            "time_ms": sum(times.values()), "stage_ms": times, "stages": stages, "captured": share_of_stream(kept),
+        })
+
+    # Pace per decided clip, so a round ended early doesn't look faster than it was.
+    timed = [s for s in summaries if s["completed"] and s["time_ms"] and s["decided"]][-3:]
+    if timed:
+        clips_timed = sum(s["decided"] for s in timed)
+        pace = {"source": "rounds", "rounds": [s["number"] for s in timed],
+                "stage_ms": {stage: round(sum(s["stage_ms"][stage] for s in timed) / clips_timed) for stage in STAGES}}
+        pace["ms"] = sum(pace["stage_ms"].values())
+    else:
+        pace = {"source": "default", "rounds": [], "stage_ms": None, "ms": DEFAULT_SECONDS_PER_CLIP * 1000}
+
+    pool_indexes = in_pool(rounds, [(index, status) for _, index, status, _ in clips])
+    pool = [score for _, index, _, score in clips if index in pool_indexes]
+    next_size = min(size, len(pool))
+    random_count = round(next_size * random_share)
+    adds = None
+    expected_keepers = None
+    if curve is not None and next_size:
+        chances = sorted((keep_chance(curve, score, fallback) for score in pool), reverse=True)
+        top = chances[: next_size - random_count]
+        rest = chances[next_size - random_count:]
+        expected_keepers = sum(top) + (random_count * sum(rest) / len(rest) if rest else 0.0)
+        adds = share_of_stream(round(expected_keepers))
+
+    in_rounds = sum(s["kept"] for s in summaries)
+    return {
+        "rounds": summaries,
+        "stream": stream,
+        "captured": share_of_stream(in_rounds),
+        "pace": pace,
+        "pool": len(pool), "total": len(clips),
+        "labels": {"so_far": len(labels), "target": LABELS_TARGET,
+                   "margin": margin_points(len(labels)), "margin_after": margin_points(len(labels) + random_count)},
+        "next": {
+            "number": len(rounds) + 1, "size": next_size, "random_share": random_share, "random_count": random_count,
+            "expected_keepers": round(expected_keepers) if expected_keepers is not None else None,
+            "adds": adds, "ms": pace["ms"] * next_size,
+        },
+    }

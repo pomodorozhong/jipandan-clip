@@ -1,23 +1,62 @@
+import type { StageRow } from "./stageTimes";
+
 export type Status = "pending" | "group1" | "group2" | "exported" | "rejected";
 
-/** A session's fixed review set; see doc/app-rebuild-plan.md, "Review sets". */
-export interface ReviewSet {
+/** The open review round; see doc/app-rebuild-plan.md, "Review rounds". */
+export interface ReviewRound {
+  number: number;
   size: number;
-  /** Candidates in the session when the set was picked. */
-  total: number;
   random_share: number;
-  /** Seeds the set's random part and the order its clips are shown in. */
+  /** Seeds the round's random part and the order its clips are shown in. */
   seed: string;
-  /** Set clips not yet exported or rejected. */
+  started: string | null;
+  /** Round clips not yet exported or rejected when the session was loaded. */
   unprocessed: number;
+}
+
+export type RoundStage = "triage" | "polish" | "publish";
+
+export interface RoundSummary {
+  number: number;
+  /** SRT lines picked; clips split off one line make `clips` larger. */
+  size: number;
+  clips: number;
+  random_share: number;
+  started: string | null;
   completed: { t: string; unprocessed: number } | null;
+  kept: number;
+  processed: number;
+  /** Clips no longer Unsorted; time per clip divides by this. */
+  decided: number;
+  /** Time on the round's clips while it was open, views from before it left out. */
+  time_ms: number;
+  stage_ms: Record<RoundStage, number>;
+  /** Time, views, clips, and changes per stage while the round was open. */
+  stages: StageRow[];
+  /** Share of the stream's estimated keepers this round kept; null until random clips are decided. */
+  captured: number | null;
+}
+
+/** Earlier rounds and estimates for the next one, from GET /session/rounds. */
+export interface RoundsOverview {
+  rounds: RoundSummary[];
+  stream: { keepers: number; low: number; high: number } | null;
+  captured: number | null;
+  pace: { source: "rounds" | "default"; rounds: number[]; stage_ms: Record<RoundStage, number> | null; ms: number };
+  pool: number;
+  total: number;
+  labels: { so_far: number; target: number; margin: number | null; margin_after: number | null };
+  next: {
+    number: number; size: number; random_share: number; random_count: number;
+    expected_keepers: number | null; adds: number | null; ms: number;
+  };
 }
 
 export interface Clip {
   clip_id: string;
   index: number;
-  /** Role in the open review set; null outside it or once the set is completed. */
-  review_set: "top" | "random" | null;
+  /** Role in the open review round; null outside it or between rounds. */
+  round_role: "top" | "random" | null;
   suffix: number;
   title: string;
   status: Status;
@@ -79,7 +118,8 @@ export interface Session {
   merge_preview: MergePreview | null;
   /** Saved SRTs a fresh session can start from. */
   clip_sources: ClipSource[];
-  review_set: ReviewSet | null;
+  review_round: ReviewRound | null;
+  rounds_done: number;
   /** Where Start over saved the previous session. */
   start_over_backup?: string;
   created_clip_id?: string;
