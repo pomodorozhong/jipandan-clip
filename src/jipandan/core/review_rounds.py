@@ -180,16 +180,42 @@ def round_events(item: dict, clip_index: dict[str, int], events: Iterable[dict])
     return kept
 
 
-def round_time(item: dict, clip_index: dict[str, int], events: Iterable[dict]) -> dict[str, int]:
-    """Milliseconds spent per stage on a round's clips while it was open; earlier views are left out."""
-    totals = dict.fromkeys(STAGES, 0)
+def clip_times(item: dict, clip_index: dict[str, int], events: Iterable[dict]) -> dict[str, dict[str, int]]:
+    """Milliseconds per stage on each of a round's clips, by clip ID, while it was open; earlier views are left out."""
+    times: dict[str, dict[str, int]] = {}
     for event in round_events(item, clip_index, events):
         if event["type"] != "view":
             continue
         stage = event_stage(event)
-        if stage in totals:
-            totals[stage] += event["dwell_ms"]
+        if stage in STAGES:
+            clip = times.setdefault(event["clip"], dict.fromkeys(STAGES, 0))
+            clip[stage] += event["dwell_ms"]
+    return times
+
+
+def round_time(item: dict, clip_index: dict[str, int], events: Iterable[dict]) -> dict[str, int]:
+    """Milliseconds spent per stage on a round's clips while it was open; a round read from a file brings its own."""
+    if item.get("stage_ms") is not None:
+        return dict(item["stage_ms"])
+    totals = dict.fromkeys(STAGES, 0)
+    for clip in clip_times(item, clip_index, events).values():
+        for stage, ms in clip.items():
+            totals[stage] += ms
     return totals
+
+
+# What a round file's outcome stands for when its clip is still Unsorted here.
+OUTCOME_STATUS = {"kept": "exported", "rejected": "rejected", "unfinished": "pending"}
+
+
+def effective_clips(
+    rounds: Sequence[dict], clips: Sequence[tuple[str, int, str, float | None]],
+) -> list[tuple[str, int, str, float | None]]:
+    """Clips with the outcome a round file recorded standing in for Unsorted, so imported decisions count."""
+    outcomes = {int(index): OUTCOME_STATUS[outcome] for item in rounds
+                for index, outcome in (item.get("outcomes") or {}).items()}
+    return [(clip_id, index, outcomes.get(index, status) if status == "pending" else status, score)
+            for clip_id, index, status, score in clips]
 
 
 def overview(
@@ -202,6 +228,7 @@ def overview(
     clips already kept plus, for every Unsorted clip, its chance of being kept from the keep
     curve; the next round adds the expected keepers among the clips it would pick.
     """
+    clips = effective_clips(rounds, clips)
     clip_index = {clip_id: index for clip_id, index, _, _ in clips}
     by_index: dict[int, list[tuple[str, float | None]]] = {}
     for clip_id, index, status, score in clips:
@@ -234,11 +261,13 @@ def overview(
         members = [status for index in item["roles"] for status, _ in by_index.get(int(index), [])]
         kept = sum(status in KEPT for status in members)
         times = round_time(item, clip_index, events)
-        stages = [row for row in stage_breakdown(round_events(item, clip_index, events))["stages"]
-                  if row["stage"] != "unknown"]
+        # A round read from a file has no views or changes here to break down.
+        stages = None if item.get("stage_ms") is not None else [
+            row for row in stage_breakdown(round_events(item, clip_index, events))["stages"] if row["stage"] != "unknown"]
         summaries.append({
             "number": item["number"], "size": item["size"], "clips": len(members), "random_share": item["random_share"],
             "started": item.get("started"), "completed": item["completed"],
+            "file": item.get("file"), "imported": item.get("imported"),
             "kept": kept, "processed": sum(status in PROCESSED for status in members),
             "decided": sum(status != "pending" for status in members),
             "time_ms": sum(times.values()), "stage_ms": times, "stages": stages, "captured": share_of_stream(kept),

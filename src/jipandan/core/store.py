@@ -194,6 +194,16 @@ class RecordingStore:
             fields = dict(event)
             self._insert_event(str(fields.pop("type")), None, fields, mutation=None)
 
+    def audio_hash(self) -> dict | None:
+        """The recording's SHA-256 with the size and modification time it was taken at, or None."""
+        with self._lock:
+            row = self._db.execute("SELECT value FROM meta WHERE key = 'audio_sha256'").fetchone()
+        return json.loads(row[0]) if row else None
+
+    def save_audio_hash(self, value: dict) -> None:
+        with self._lock, self._transaction():
+            self._db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('audio_sha256', ?)", (json.dumps(value),))
+
     def snap_points(self, kind: str) -> list[int]:
         """Return the recording's snap points of ``kind`` in milliseconds, in order."""
         with self._lock:
