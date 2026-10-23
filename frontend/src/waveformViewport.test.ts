@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boundedRange, initialRange, waveformPanDelta } from "./WaveformEditor";
+import { boundedRange, initialRange, snapTabAt, waveformPanDelta } from "./WaveformEditor";
 
 describe("shared waveform panning", () => {
   it("pads the clip with a little recording context and stops at real audio bounds", () => {
@@ -18,5 +18,27 @@ describe("shared waveform panning", () => {
     expect(waveformPanDelta({ deltaX: 20, deltaY: 30, shiftKey: false })).toBe(20);
     expect(waveformPanDelta({ deltaX: 0, deltaY: 30, shiftKey: false })).toBe(0);
     expect(waveformPanDelta({ deltaX: 0, deltaY: 30, shiftKey: true })).toBe(30);
+  });
+});
+
+describe("snap point tabs", () => {
+  const range = { start: 1000, end: 2000 };
+  const snaps = { start: [1200, 1250, 1800], end: [1500] };
+
+  it("finds the nearest start tab along the bottom and the end tab along the top", () => {
+    expect(snapTabAt(snaps, range, { x: 245, y: 155 }, 10)).toEqual({ edge: "start", time: 1250 });
+    expect(snapTabAt(snaps, range, { x: 503, y: 4 }, 10)).toEqual({ edge: "end", time: 1500 });
+  });
+
+  it("reaches a tab from further into the plot than it is drawn", () => {
+    expect(snapTabAt(snaps, range, { x: 245, y: 130 }, 10)).toEqual({ edge: "start", time: 1250 });
+    expect(snapTabAt(snaps, range, { x: 503, y: 30 }, 10)).toEqual({ edge: "end", time: 1500 });
+  });
+
+  it("leaves clicks away from the tabs to the waveform", () => {
+    expect(snapTabAt(snaps, range, { x: 200, y: 80 }, 10)).toBeNull();
+    expect(snapTabAt(snaps, range, { x: 500, y: 155 }, 10)).toBeNull();
+    expect(snapTabAt(snaps, range, { x: 200, y: 4 }, 10)).toBeNull();
+    expect(snapTabAt(undefined, range, { x: 200, y: 155 }, 10)).toBeNull();
   });
 });

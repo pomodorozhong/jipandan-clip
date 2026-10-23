@@ -38,6 +38,14 @@ const MARKER_LINE_HIT_WIDTH = 3;
 const SNAP_DISTANCE_PX = 8;
 // Keyboard and controller jumps ignore snap points further away than this, such as across a long silence.
 const MAX_SNAP_JUMP_MS = 5000;
+// A background drag selects a new range only after moving this many screen pixels; less is a click.
+const RANGE_DRAG_MIN_PX = 4;
+// Each snap point's solid tab (start points at the bottom, end points at the top) is this tall, in plot units.
+const SNAP_TAB_HEIGHT = 12;
+// Clicks reach a tab from further away than it is drawn: this far into the plot, in plot units,
+// and this many screen pixels to either side.
+const SNAP_TAB_HIT_HEIGHT = 36;
+const SNAP_TAB_HIT_PX = 10;
 const START_COLOR = "#f2cf86";
 const END_COLOR = "#e7a6ca";
 
@@ -49,6 +57,29 @@ export function boundedRange(start: number, span: number, duration: number): Tim
   const width = Math.min(duration, Math.max(1, Math.round(span)));
   const boundedStart = clamp(Math.round(start), 0, duration - width);
   return { start: boundedStart, end: boundedStart + width };
+}
+
+/**
+ * The snap point whose tab is under a point on the plot, in plot units: start tabs
+ * sit along the bottom edge, end tabs along the top. ``tolerance`` is in plot units.
+ */
+export function snapTabAt(
+  snaps: { start?: readonly number[]; end?: readonly number[] } | undefined,
+  range: TimeRange, point: { x: number; y: number }, tolerance: number,
+): { edge: Edge; time: number } | null {
+  const span = range.end - range.start;
+  const edge: Edge | null = point.y >= PLOT_HEIGHT - SNAP_TAB_HIT_HEIGHT ? "start" : point.y <= SNAP_TAB_HIT_HEIGHT ? "end" : null;
+  if (!edge || !snaps?.[edge]?.length || span <= 0) return null;
+  let best: { edge: Edge; time: number } | null = null;
+  let bestDistance = tolerance;
+  for (const time of snapsInRange(snaps[edge]!, range.start, range.end)) {
+    const distance = Math.abs((time - range.start) / span * PLOT_WIDTH - point.x);
+    if (distance <= bestDistance) {
+      best = { edge, time };
+      bestDistance = distance;
+    }
+  }
+  return best;
 }
 
 export function waveformPanDelta(event: Pick<WheelEvent, "deltaX" | "deltaY" | "shiftKey">): number {
@@ -144,7 +175,8 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
   onCancel: () => void;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
-  const dragging = useRef<{ kind: "range"; start: number; clientX: number } | { kind: "edge"; edge: Edge }
+  const [overSnapTab, setOverSnapTab] = useState(false);
+  const dragging = useRef<{ kind: "range"; start: number; clientX: number; moved: boolean } | { kind: "edge"; edge: Edge }
     | { kind: "pan"; start: number; span: number; clientX: number } | null>(null);
   const points = useMemo(() => {
     if (!waveform?.mins.length) return "";
@@ -328,16 +360,33 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
       onPreviewEdge(edge, snapped(edge, point.time, event.altKey));
       return;
     }
+    // A snap point's tab moves its edge straight there.
+    const tab = snapTabAt(snaps, range, point, snapTabTolerance());
+    if (tab) {
+      onPreviewEdge(tab.edge, tab.time);
+      onCommitEdge(tab.edge, tab.time);
+      return;
+    }
     if (hitsMarkerLine(point)) return;
     event.currentTarget.setPointerCapture(event.pointerId);
-    const start = snapped("start", point.time, event.altKey);
-    dragging.current = { kind: "range", start, clientX: event.clientX };
-    onPreviewRange(start, endMs);
+    // The new range shows once the pointer moves, so a press doesn't pair the new start
+    // with the old end for a frame, and a plain click (a seek) changes nothing.
+    dragging.current = { kind: "range", start: snapped("start", point.time, event.altKey), clientX: event.clientX, moved: false };
+  }
+
+  function snapTabTolerance(): number {
+    return SNAP_TAB_HIT_PX / Math.max(1, svgRef.current!.getBoundingClientRect().width) * PLOT_WIDTH;
   }
 
   function pointerMove(event: React.PointerEvent<SVGSVGElement>) {
     const drag = dragging.current;
-    if (!drag) return;
+    if (!drag) {
+      if (!canEdit || disabled) return;
+      const point = position(event.clientX, event.clientY);
+      const over = !hitNub(point) && snapTabAt(snaps, range, point, snapTabTolerance()) !== null;
+      if (over !== overSnapTab) setOverSnapTab(over);
+      return;
+    }
     if (drag.kind === "pan") {
       const width = event.currentTarget.getBoundingClientRect().width;
       view.current = onViewportChange(drag.start - (event.clientX - drag.clientX) / width * drag.span, drag.span);
@@ -345,7 +394,11 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
     }
     const point = position(event.clientX, event.clientY);
     if (drag.kind === "edge") onPreviewEdge(drag.edge, snapped(drag.edge, point.time, event.altKey));
-    else onPreviewRange(drag.start, snapped("end", point.time, event.altKey));
+    else {
+      if (!drag.moved && Math.abs(event.clientX - drag.clientX) < RANGE_DRAG_MIN_PX) return;
+      drag.moved = true;
+      onPreviewRange(drag.start, snapped("end", point.time, event.altKey));
+    }
   }
 
   function pointerUp(event: React.PointerEvent<SVGSVGElement>) {
@@ -359,9 +412,9 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
     const time = position(event.clientX, event.clientY).time;
     if (drag.kind === "edge") onCommitEdge(drag.edge, snapped(drag.edge, time, event.altKey));
     else {
-      if (onSeek && Math.abs(event.clientX - drag.clientX) < 4) {
+      if (!drag.moved && Math.abs(event.clientX - drag.clientX) < RANGE_DRAG_MIN_PX) {
         onCancel();
-        onSeek(time);
+        onSeek?.(time);
         return;
       }
       const end = snapped("end", time, event.altKey);
@@ -390,7 +443,8 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
       }}
       preserveAspectRatio="none" onPointerDown={pointerDown} onPointerMove={pointerMove}
       onPointerUp={pointerUp} onPointerCancel={pointerCancel} onLostPointerCapture={pointerCancel}
-      className={`block ${compact ? "h-24" : "h-36"} w-full ${canEdit || onSeek ? "cursor-crosshair" : "cursor-default"} overscroll-x-none rounded-lg border border-[#46584c] bg-[#101a17] touch-none`}>
+      onPointerLeave={() => setOverSnapTab(false)}
+      className={`block ${compact ? "h-24" : "h-36"} w-full ${overSnapTab ? "cursor-pointer" : canEdit || onSeek ? "cursor-crosshair" : "cursor-default"} overscroll-x-none rounded-lg border border-[#46584c] bg-[#101a17] touch-none`}>
       {trimMap && removedRanges(trimMap).map(([start, end]) => <g key={start}>
         <title>{`Removed ${(start / 1000).toFixed(2)}–${(end / 1000).toFixed(2)} s`}</title>
         <rect x={markerX(start)} y="0" width={(end - start) / span * PLOT_WIDTH} height={PLOT_HEIGHT} fill="#e6ad87" fillOpacity=".22" />
@@ -411,7 +465,7 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
           return <g key={time}>
             <line x1={x} x2={x} y1="0" y2={PLOT_HEIGHT} stroke={color} strokeWidth="1.5"
               strokeDasharray={kind === "end" ? "5 4" : undefined} opacity="0.55" vectorEffect="non-scaling-stroke" />
-            <line x1={x} x2={x} y1={kind === "start" ? PLOT_HEIGHT - 12 : 0} y2={kind === "start" ? PLOT_HEIGHT : 12}
+            <line x1={x} x2={x} y1={kind === "start" ? PLOT_HEIGHT - SNAP_TAB_HEIGHT : 0} y2={kind === "start" ? PLOT_HEIGHT : SNAP_TAB_HEIGHT}
               stroke={color} strokeWidth="5" vectorEffect="non-scaling-stroke" />
           </g>;
         })}
@@ -489,6 +543,10 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
   const keyboardNudgeTimer = useRef<number | null>(null);
   const pendingKeyboardBounds = useRef<{ startMs: number; endMs: number } | null>(null);
   const commitBoundsRef = useRef<(startMs: number, endMs: number) => Promise<void>>(async () => {});
+  // A drag that ends while an earlier save is still running waits here instead of being dropped.
+  const queuedBounds = useRef<{ startMs: number; endMs: number } | null>(null);
+  // The bounds being saved right now; until that save lands the clip prop still holds the old ones.
+  const savingBounds = useRef<{ startMs: number; endMs: number } | null>(null);
   const auditionStop = useRef<number | null>(null);
   const cancelOffsetBlur = useRef(false);
   const [startMs, setStartMs] = useState(clip.start_ms);
@@ -514,6 +572,8 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
   const endDetail = useWaveform(clip.clip_id, endDetailRange, 800);
 
   useEffect(() => {
+    // While a save runs or waits, the bounds on screen are newer than the clip; keep them.
+    if (savingRef.current || queuedBounds.current) return;
     setStartMs(clip.start_ms);
     setEndMs(clip.end_ms);
     setStartOffset(String(clip.start_ms - clip.original_start_ms));
@@ -593,7 +653,11 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
     if (keyboardNudgeTimer.current !== null) window.clearTimeout(keyboardNudgeTimer.current);
     keyboardNudgeTimer.current = null;
     pendingKeyboardBounds.current = null;
-    if (savingRef.current || busy) return;
+    if (savingRef.current || busy) {
+      queuedBounds.current = { startMs: nextStart, endMs: nextEnd };
+      previewRange(nextStart, nextEnd);
+      return;
+    }
     if (!Number.isInteger(nextStart) || !Number.isInteger(nextEnd) ||
         nextStart < 0 || nextEnd > durationMs || nextEnd - nextStart < MIN_CLIP_MS) {
       setLocalError("Keep at least 10 ms between the boundaries, within the recording.");
@@ -610,10 +674,12 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
     setEndOffset(String(nextEnd - clip.original_end_ms));
     if (nextStart === clip.start_ms && nextEnd === clip.end_ms) return;
     savingRef.current = true;
+    savingBounds.current = { startMs: nextStart, endMs: nextEnd };
     setSaving(true);
     try {
       const accepted = await onSave(nextStart, nextEnd);
       if (!accepted) {
+        queuedBounds.current = null;
         setStartMs(clip.start_ms);
         setEndMs(clip.end_ms);
         setStartOffset(String(clip.start_ms - clip.original_start_ms));
@@ -621,11 +687,20 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
       }
     } finally {
       savingRef.current = false;
+      savingBounds.current = null;
       setSaving(false);
     }
   }
 
   commitBoundsRef.current = commitBounds;
+
+  // Save a drag that was queued behind an earlier save once that save is done.
+  useEffect(() => {
+    const queued = queuedBounds.current;
+    if (saving || busy || !queued) return;
+    queuedBounds.current = null;
+    void commitBoundsRef.current(queued.startMs, queued.endMs);
+  }, [saving, busy, clip.start_ms, clip.end_ms]);
 
   function commitEdge(edgeToMove: Edge, time: number) {
     const [nextStart, nextEnd] = boundsFor(edgeToMove, time);
@@ -637,10 +712,9 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
   }
 
   function cancelPreview() {
-    setStartMs(clip.start_ms);
-    setEndMs(clip.end_ms);
-    setStartOffset(String(clip.start_ms - clip.original_start_ms));
-    setEndOffset(String(clip.end_ms - clip.original_end_ms));
+    // Go back to what was last placed: a drag still waiting or being saved, else the clip.
+    const placed = queuedBounds.current ?? savingBounds.current;
+    previewRange(placed?.startMs ?? clip.start_ms, placed?.endMs ?? clip.end_ms);
   }
 
   function nudge(which: Edge, amount: number, deferred = false) {
@@ -760,6 +834,7 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
   }
 
   const controlsDisabled = busy || saving;
+  // The waveforms stay usable while a save runs: a drag made meanwhile is queued and saved next (see queuedBounds).
   const hasSnapPoints = Boolean(snapPoints && (snapPoints.word_start.length || snapPoints.speech_end.length));
   const waveformContext = getInputContext({ activeDialog: shortcutsPaused || !active });
 
@@ -900,11 +975,11 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
             range={overviewRange} waveform={overview.window} startMs={startMs} endMs={endMs}
             playheadMs={playheadMs} originalStartMs={showOriginalStart ? clip.original_start_ms : null}
             snapTargets={{ start: snapTargets(snapPoints, "start"), end: snapTargets(snapPoints, "end") }}
-            disabled={controlsDisabled} minSpan={MIN_OVERVIEW_SPAN_MS} maxSpan={maxOverviewSpan}
+            disabled={false} minSpan={MIN_OVERVIEW_SPAN_MS} maxSpan={maxOverviewSpan}
             onViewportChange={viewportSetter(setOverviewRange)} onPreviewRange={previewRange} onCommitRange={commitRange}
             onPreviewEdge={previewEdge} onCommitEdge={commitEdge} onCancel={cancelPreview} />}
       <p className="subtle mt-1 text-xs">Drag a nub or the background to set the edges. {!snapping ? "" : hasSnapPoints
-        ? "Starts snap to amber word starts, ends to pink speech ends; hold Option to place freely. "
+        ? "Starts snap to amber word starts, ends to pink speech ends; click a tick's tab to move the edge there, or hold Option to place freely. "
         : "No snap points: this recording wasn't transcribed in the app. "}Swipe to pan, pinch to zoom.</p>
     </div>
 
@@ -930,7 +1005,7 @@ export default function WaveformEditor({ clip, durationMs, audioSrc, busy, gamep
                   playheadMs={playheadMs} editableEdge={which}
                   snapTargets={{ [which]: snapTargets(snapPoints, which) }}
                   originalStartMs={showOriginalStart ? clip.original_start_ms : null}
-                  disabled={controlsDisabled} minSpan={MIN_FINE_SPAN_MS} maxSpan={maxFineSpan}
+                  disabled={false} minSpan={MIN_FINE_SPAN_MS} maxSpan={maxFineSpan}
                   onViewportChange={viewportSetter(which === "start" ? setStartDetailRange : setEndDetailRange)}
                   onPreviewRange={previewRange} onCommitRange={commitRange}
                   onPreviewEdge={previewEdge} onCommitEdge={commitEdge} onCancel={cancelPreview} />}

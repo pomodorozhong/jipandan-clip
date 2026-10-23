@@ -827,6 +827,23 @@ export default function App() {
     }
   }, []);
 
+  // Publish trims: a drag that ends while another save runs is saved right after it instead of being dropped.
+  const queuedPublishTrim = useRef<{ clipId: string; start: number; end: number } | null>(null);
+  const savePublishTrim = useCallback((clipId: string, start: number, end: number) => {
+    queuedPublishTrim.current = { clipId, start, end };
+    if (busy || !session || session.revision === null) return;
+    queuedPublishTrim.current = null;
+    const clip = session.candidates.find((item) => item.clip_id === clipId);
+    if (!clip || (start === clip.start_ms && end === clip.end_ms)) return;
+    void mutate(() => api<SessionDelta>(`/clips/${encodeURIComponent(clipId)}?delta=true`, "PATCH", {
+      expected_revision: session.revision, start_ms: start, end_ms: end, context: rankingContext(clip),
+    }));
+  }, [busy, session, mutate, rankingContext]);
+  useEffect(() => {
+    const queued = queuedPublishTrim.current;
+    if (!busy && queued) savePublishTrim(queued.clipId, queued.start, queued.end);
+  }, [busy, savePublishTrim]);
+
   const dismissTitleSuggestion = useCallback((clipId: string) => {
     void mutate(() => api<Session>(`/clips/${encodeURIComponent(clipId)}/suggested-title`, "DELETE"));
   }, [mutate]);
@@ -1476,16 +1493,13 @@ export default function App() {
           gamepadAction={gamepadActionRequest}
           onGamepadActionHandled={(id) => setGamepadActionRequest((current) => current?.id === id ? null : current)}
           exportContext={rankingContext(selected)}
-          nudgeDisabled={busy || exportAllRunning}
+          nudgeDisabled={busy || exportAllRunning} trimDisabled={exportAllRunning}
           onTrim={(relativeStart, relativeEnd) => {
-            if (session.revision === null || busy) return;
+            if (session.revision === null) return;
             const start = Math.round(selected.start_ms + relativeStart);
             const end = Math.round(selected.start_ms + relativeEnd);
             if (start < 0 || end - start < 10 || (session.duration_ms !== null && end > session.duration_ms)) return;
-            if (start === selected.start_ms && end === selected.end_ms) return;
-            void mutate(() => api<SessionDelta>(`/clips/${encodeURIComponent(selected.clip_id)}?delta=true`, "PATCH", {
-              expected_revision: session.revision, start_ms: start, end_ms: end, context: rankingContext(selected),
-            }));
+            savePublishTrim(selected.clip_id, start, end);
           }}
           onNudge={(edge, amount) => {
             if (session.revision === null) return;

@@ -287,7 +287,7 @@ const PreviewPlayer = forwardRef<PreviewPlayerHandle, Props>(function PreviewPla
         label={`${reference ? "As is reference" : "Export candidate"} waveform`}
         range={range} waveform={displayWaveform} startMs={selection.start} endMs={selection.end}
         playheadMs={timelinePlayhead} originalStartMs={null} compact
-        sharedPeak={sharedPeak} trimMap={trimMap} disabled={!ready || editingDisabled}
+        sharedPeak={sharedPeak} trimMap={trimMap} disabled={(!sourceContext && !ready) || editingDisabled}
         canEdit={Boolean(onTrim)}
         pinHandles={Boolean(sourceContext && onTrim)}
         gestureTarget={cardRef}
