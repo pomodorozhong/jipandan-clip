@@ -592,6 +592,74 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(sorted(c["clip_id"] for c in second["candidates"] if c["round_role"]), ["3", "4"])
         self.assertEqual(revision, self.client.get("/api/session").json()["revision"])
 
+    def test_a_finished_round_leaves_a_file_a_fresh_session_can_import(self):
+        self.srt.write_text("".join(
+            f"{n}\n00:00:0{n},000 --> 00:00:0{n},500\nLine {n}\n\n" for n in range(1, 5)), encoding="utf-8")
+        self.open()
+        path = "/api/session/clip-features"
+        measured = [ClipFeatures(-12.0, -3.0, -25.0), ClipFeatures(-35.0, -9.0, -6.0),
+                    ClipFeatures(-20.0, -5.0, -15.0), ClipFeatures(-30.0, -8.0, -9.0)]
+        with patch("jipandan.web.service.compute_clip_features", return_value=measured):
+            self.client.post(path, headers=self.headers)
+            self.wait_for_job(path, "completed")
+        state = self.client.post("/api/session/rounds", json={"size": 10, "random_share": 0.5},
+                                 headers=self.headers).json()
+        revision = state["revision"]
+        for clip_id, status in (("1", "rejected"), ("2", "group2"), ("3", "rejected")):
+            revision = self.client.patch(f"/api/clips/{clip_id}", json={
+                "expected_revision": revision, "status": status}, headers=self.headers).json()["revision"]
+        self.client.post("/api/session/rounds/complete", headers=self.headers)
+        written = self.audio.with_name(f"{self.audio.stem}.round-01.json")
+        data = json.loads(written.read_text(encoding="utf-8"))
+        self.assertEqual((data["format"], data["round"]["number"], data["round"]["unprocessed"]),
+                         ("jipandan-round", 1, 2))
+        self.assertEqual(sorted(clip["outcome"] for clip in data["clips"]), ["kept", "rejected", "rejected", "unfinished"])
+        self.assertEqual(self.client.get("/api/session/rounds").json()["rounds"][0]["file"], written.name)
+        self.assertEqual(self.events("review-round-complete")[0]["file"], written.name)
+
+        # A fresh session of the same recording skips the file's decided clips and counts its decisions.
+        fresh = self.client.post("/api/session/start-over", json={
+            "expected_revision": revision, "clip_source": "lines"}, headers=self.headers).json()
+        self.assertEqual(fresh["rounds_done"], 0)
+        body = {"files": [{"name": written.name, "data": data},
+                          {"name": "other.json", "data": {**data, "recording": {**data["recording"], "sha256": "0" * 64}}},
+                          {"name": "junk.json", "data": {"format": "something"}}]}
+        imported = self.client.post("/api/session/rounds/import", json=body, headers=self.headers).json()
+        self.assertEqual(imported["round_import"]["imported"],
+                         [{"file": written.name, "number": 1, "from_number": 1, "matched": 4, "unmatched": 0}])
+        self.assertEqual([item["file"] for item in imported["round_import"]["skipped"]], ["other.json", "junk.json"])
+        self.assertEqual(imported["rounds_done"], 1)
+        self.assertEqual([c["status"] for c in imported["candidates"]], ["pending"] * 4)
+        overview = self.client.get("/api/session/rounds").json()
+        self.assertEqual((overview["pool"], overview["rounds"][0]["kept"], overview["rounds"][0]["imported"]["file"]),
+                         (1, 1, written.name))
+        again = self.client.post("/api/session/rounds/import", json={"files": body["files"][:1]}, headers=self.headers)
+        self.assertEqual(again.json()["round_import"]["skipped"][0]["reason"], "this round is already here")
+        # The next round takes only the clip the file left unfinished.
+        with patch("jipandan.web.service.compute_clip_features", return_value=measured):
+            self.client.post(path, headers=self.headers)
+            self.wait_for_job(path, "completed")
+        second = self.client.post("/api/session/rounds", json={"size": 10, "random_share": 0.2},
+                                  headers=self.headers).json()
+        self.assertEqual((second["review_round"]["number"], second["review_round"]["size"]), (2, 1))
+
+    def test_rounds_finished_before_round_files_can_save_one(self):
+        self.open()
+        legacy = {"size": 2, "total": 2, "random_share": 0.2, "seed": "a1b2c3d4", "score_version": "builtin-v1",
+                  "top": ["1", "2"], "random": [], "roles": {"1": "top", "2": "top"},
+                  "completed": {"t": "2026-10-21T12:00:00.000Z", "unprocessed": 2}}
+        db = sqlite3.connect(self.service.store.path)
+        with db:
+            db.execute("INSERT INTO meta (key, value) VALUES ('review_set', ?)", (json.dumps(legacy),))
+        db.close()
+        self.open()
+        self.assertIsNone(self.client.get("/api/session/rounds").json()["rounds"][0]["file"])
+        self.client.post("/api/session/rounds/1/file", headers=self.headers)
+        name = self.client.get("/api/session/rounds").json()["rounds"][0]["file"]
+        self.assertEqual(name, f"{self.audio.stem}.round-01.json")
+        self.assertTrue(self.audio.with_name(name).is_file())
+        self.assertEqual(self.client.post("/api/session/rounds/2/file", headers=self.headers).status_code, 422)
+
     def test_a_review_set_from_before_rounds_opens_as_round_one(self):
         self.open()
         legacy = {"size": 2, "total": 2, "random_share": 0.2, "seed": "a1b2c3d4", "score_version": "builtin-v1",
