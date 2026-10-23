@@ -303,11 +303,17 @@ const PreviewPlayer = forwardRef<PreviewPlayerHandle, Props>(function PreviewPla
           commit(edge === "start" ? bounded : selection.start, edge === "end" ? bounded : selection.end, edge);
         }}
         onCancel={() => setSelection({ start: 0, end: selectedDuration })} onSeek={seekTimeline} />
-        : <p className="subtle flex h-24 items-center justify-center px-4 text-center text-sm" aria-live="polite">{sourceContext ? "Loading recording waveform…" : placeholder}</p>}
+        : <>
+          <p className="subtle flex h-24 items-center justify-center px-4 text-center text-sm" aria-live="polite">{sourceContext ? "Loading recording waveform…" : placeholder}</p>
+          {/* Holds the height of the waveform's clock row, so the card doesn't grow when the waveform arrives. */}
+          <div aria-hidden="true" className="mono invisible mt-1 text-[11px]">00:00:00.000</div>
+        </>}
       {sourceWaveform.error && sourceContext && <p role="alert" className="text-xs text-[#ffb3a8]">{sourceWaveform.error} <button onClick={sourceWaveform.retry}>Retry</button></p>}
-      {trimMap && <p className="mt-1 flex items-center gap-2 text-[11px] text-[#edbc97]">
+      {/* The legend keeps its line while a render is on its way, so the layout below doesn't jump. */}
+      {(trimMap || sourceContext) && <p aria-hidden={!trimMap}
+        className={`mt-1 flex items-center gap-2 text-[11px] text-[#edbc97] ${trimMap ? "" : "invisible"}`}>
         <span aria-hidden="true" className="h-2.5 w-3 rounded-sm border border-[#edbc97] bg-[#e6ad87]/25" />
-        {removedRanges(trimMap).length ? "Shaded audio is removed from the export" : "No audio removed"}
+        {trimMap && !removedRanges(trimMap).length ? "No audio removed" : "Shaded audio is removed from the export"}
       </p>}
     </div>
     <p className="subtle mt-1 text-[11px] sm:col-span-2">{note}</p>
