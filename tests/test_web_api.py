@@ -197,7 +197,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(cancelled.status_code, 200, cancelled.text)
         self.assertEqual(cancelled.json(), {"path": None, "cancelled": True})
 
-    def test_leading_silence_batches_share_one_undo_and_persist_completion(self):
+    def test_leading_silence_run_persists_completion_and_is_not_undoable(self):
         self.open()
         path = "/api/session/leading-silence-detection"
         with patch("jipandan.web.service.LEADING_SILENCE_BATCH_SIZE", 1), patch(
@@ -211,11 +211,12 @@ class WebApiTests(unittest.TestCase):
         state = self.service.snapshot()
         self.assertEqual([clip["start_ms"] for clip in state["candidates"]], [1400, 3400])
         self.assertTrue(self.stored().leading_silence_detection_complete)
+        # A background run is never an Undo step.
+        self.assertFalse(state["can_undo"])
         undone = self.client.post("/api/session/undo", json={
             "expected_revision": state["revision"],
         }, headers=self.headers)
-        self.assertEqual(undone.status_code, 200, undone.text)
-        self.assertEqual([clip["start_ms"] for clip in undone.json()["candidates"]], [1000, 3000])
+        self.assertEqual(undone.status_code, 422, undone.text)
         with patch("jipandan.web.service.detect_leading_silence_start") as detect:
             self.assertEqual(self.client.post(path, headers=self.headers).json()["state"], "completed")
             detect.assert_not_called()
@@ -255,6 +256,49 @@ class WebApiTests(unittest.TestCase):
         ).json()
         self.assertEqual(accepted["candidates"][0]["title"], "Better first")
         self.assertIsNone(accepted["candidates"][0]["suggested_title"])
+
+    def test_undo_skips_a_background_run_and_keeps_its_trims(self):
+        state = self.open()
+        rejected = self.client.patch("/api/clips/1", json={
+            "expected_revision": state["revision"], "status": "rejected",
+        }, headers=self.headers).json()
+        path = "/api/session/leading-silence-detection"
+        with patch("jipandan.web.service.detect_leading_silence_start",
+                   side_effect=lambda _audio, start, _end: start + 400):
+            self.client.post(path, headers=self.headers)
+            self.wait_for_job(path, "completed")
+        trimmed = self.service.snapshot()
+        self.assertEqual([clip["start_ms"] for clip in trimmed["candidates"]], [1400, 3400])
+        self.assertGreater(trimmed["revision"], rejected["revision"])
+
+        undone = self.client.post("/api/session/undo", json={"expected_revision": trimmed["revision"]},
+                                  headers=self.headers).json()
+        self.assertEqual([clip["status"] for clip in undone["candidates"]], ["pending", "pending"])
+        self.assertEqual([clip["start_ms"] for clip in undone["candidates"]], [1400, 3400])
+        self.assertFalse(undone["can_undo"])
+
+    def test_clip_transcription_run_undoes_as_one_step(self):
+        state = self.open()
+        path = "/api/session/clip-transcription"
+        with patch("jipandan.web.service.transcribe_clips", return_value=iter([("1", "Better"), ("2", "Other")])):
+            self.client.post(path, json={"clip_ids": ["1", "2"]}, headers=self.headers)
+            self.wait_for_job(path, "completed")
+        session = self.client.get("/api/session").json()
+        self.assertTrue(session["can_undo"])
+        self.assertEqual(session["revision"], state["revision"])
+        # A suggestion accepted since is a title edit of its own and stays.
+        accepted = self.client.patch("/api/clips/2", json={
+            "expected_revision": session["revision"], "title": "Other",
+        }, headers=self.headers).json()
+        undone_title = self.client.post("/api/session/undo", json={"expected_revision": accepted["revision"]},
+                                        headers=self.headers).json()
+        self.assertEqual(undone_title["candidates"][1]["title"], "Second")
+        undone = self.client.post("/api/session/undo", json={"expected_revision": undone_title["revision"]},
+                                  headers=self.headers).json()
+        self.assertEqual([clip["suggested_title"] for clip in undone["candidates"]], [None, None])
+        self.assertEqual([clip["title"] for clip in undone["candidates"]], ["First", "Second"])
+        self.assertFalse(undone["can_undo"])
+        self.assertEqual(self.open()["candidates"][0]["suggested_title"], None)
 
     def test_clip_transcription_suggestion_can_be_dismissed(self):
         self.open()
@@ -929,6 +973,44 @@ class WebApiTests(unittest.TestCase):
             }, headers=self.headers)
             self.assertEqual(stale.status_code, 409)
             self.assertEqual(len(list((self.root / "clips").glob("*.mp3"))), 2)
+            # A single export from Publish is not an Undo step; the trim before it is.
+            self.assertEqual(self.events("undo"), [])
+
+    def test_export_all_run_undoes_as_one_step_and_keeps_files(self):
+        state = self.open()
+        for clip_id in ("1", "2"):
+            state = self.client.patch(f"/api/clips/{clip_id}", json={
+                "expected_revision": state["revision"], "status": "group2",
+            }, headers=self.headers).json()
+        valid_mp3 = self.root / "valid.mp3"
+        subprocess.run([
+            "ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+            "sine=frequency=440:duration=0.8", str(valid_mp3),
+        ], check=True)
+
+        def render(_audio, _candidate, _options, output):
+            shutil.copyfile(valid_mp3, output)
+
+        run = "0f8e2c4a-5b1d-4e7f-9a3c-2d6b8e1f0a47"
+        with patch("jipandan.web.preview.render_export_preview", side_effect=render):
+            for clip_id, title in (("1", "First"), ("2", "Second")):
+                job_id = self.client.post("/api/previews", json={
+                    "clip_id": clip_id, "expected_revision": state["revision"], "mode": "as_is", "title": title,
+                }, headers=self.headers).json()["id"]
+                self.wait_for_job(f"/api/previews/{job_id}", "completed")
+                state = self.client.post("/api/exports", json={
+                    "preview_id": job_id, "expected_revision": state["revision"], "export_all": run,
+                }, headers=self.headers).json()
+        self.assertEqual([clip["status"] for clip in state["candidates"]], ["exported", "exported"])
+        undone = self.client.post("/api/session/undo", json={"expected_revision": state["revision"]},
+                                  headers=self.headers).json()
+        self.assertEqual([clip["status"] for clip in undone["candidates"]], ["group2", "group2"])
+        self.assertEqual(len(list((self.root / "clips").glob("*.mp3"))), 2)
+        self.assertEqual(self.events("undo")[0]["label"], "Export all")
+        bad = self.client.post("/api/exports", json={
+            "preview_id": "x", "expected_revision": undone["revision"], "export_all": "../x",
+        }, headers=self.headers)
+        self.assertEqual(bad.status_code, 422)
 
     def test_reveal_export_activates_finder_and_reports_launch_failure(self):
         self.open()

@@ -358,8 +358,14 @@ class SessionService:
                     raise SessionNotReady("Preview is not ready")
             return job.output
 
-    def publish_export(self, job_id: str, expected_revision: int, context: object = None) -> dict:
-        """Publish exactly the reviewed preview and persist its resulting clip state."""
+    def publish_export(
+        self, job_id: str, expected_revision: int, context: object = None, export_all: str | None = None,
+    ) -> dict:
+        """Publish exactly the reviewed preview and persist its resulting clip state.
+
+        ``export_all`` names the Export all run the export belongs to; the run's exports
+        undo together as one step, leaving the exported files in place.
+        """
         with self._lock:
             job = self._previews.get(job_id)
             if job is None:
@@ -394,7 +400,9 @@ class SessionService:
                     "start_threshold_db": job.options.start_threshold_db,
                     "stop_threshold_db": job.options.stop_threshold_db,
                     "title": job.title, "path": str(output), **clean_context(context),
-                }], undoable=False)
+                    **({"export_all": export_all} if export_all else {}),
+                }], label="Export all" if export_all else None,
+                    undo_group=f"export-all:{export_all}" if export_all else None, undoable=bool(export_all))
             except Exception:
                 output.unlink(missing_ok=True)
                 raise
@@ -572,10 +580,10 @@ class SessionService:
                             draft.leading_silence_detection_complete = True
 
                     if eligible_ids or position == len(clips):
-                        # All batches of one run undo together.
+                        # A background run the owner did not start: logged, but never an Undo step.
                         self._mutate(
                             apply_proposals, [{"type": "detect-silence", "job": job_id, "clips": changed}],
-                            label="Detect leading silence", undo_group=f"leading-silence:{job_id}",
+                            label="Detect leading silence", undo_group=f"leading-silence:{job_id}", undoable=False,
                         )
                     job["adjusted"] = int(job["adjusted"]) + len(changed)
                     proposals.clear()
@@ -788,8 +796,15 @@ class SessionService:
                         return
                     if self.audio == audio and text and self.session is not None:
                         candidate = self.session.get_candidate(clip_id)
-                        if candidate is not None and candidate.title != text:
+                        old = self._title_suggestions.get(clip_id)
+                        if candidate is not None and candidate.title != text and old != text:
                             self._set_title_suggestion(clip_id, text)
+                            # One run of suggestions undoes together.
+                            if self.store is not None:
+                                self.store.record_suggestion(
+                                    clip_id, old, text, {"type": "suggest-title", "job": job_id},
+                                    label="Re-transcribe titles", undo_group=f"clip-transcription:{job_id}",
+                                )
                     job["progress"] = int(job["progress"]) + 1
             with self._lock:
                 job = current_job()
@@ -1272,29 +1287,41 @@ class SessionService:
         return snapshot
 
     def undo(self, expected_revision: int, context: object = None, delta: bool = False) -> dict:
-        """Revert the latest undoable change (a whole background run counts as one)."""
+        """Revert the latest change the owner made or started (an Export all run counts as one).
+
+        Only the fields the change set go back, so later edits by background runs survive.
+        """
         with self._lock:
             self._ready()
             target = self.store.undo_target() if self.store is not None else None
             if target is None:
                 raise InvalidEdit("Nothing to undo")
-            seqs, label, restored = target
 
             def restore(session: Session) -> None:
                 by_id = {c.clip_id: c for c in session.candidates}
-                for clip_id, old in restored.items():
+                for clip_id, old in target.restored.items():
                     if old is None:
                         by_id.pop(clip_id, None)
+                    elif clip_id in target.fields and clip_id in by_id:
+                        clip = copy.deepcopy(by_id[clip_id])
+                        for name in target.fields[clip_id]:
+                            setattr(clip, name, copy.deepcopy(getattr(old, name)))
+                        by_id[clip_id] = clip
                     else:
                         by_id[clip_id] = copy.deepcopy(old)
                 session.candidates = sorted(by_id.values(), key=lambda c: (c.index, c.suffix))
 
+            # A suggestion replaced or accepted since stays as it is.
+            for clip_id, (old, new) in target.suggestions.items():
+                if self._title_suggestions.get(clip_id) == new:
+                    self._set_title_suggestion(clip_id, old)
+
             # Record what each clip went back to, so training sees the corrected decision.
             return self._mutate(restore, [{
-                "type": "undo", "label": label, "targets": seqs,
-                "restored": {clip_id: old.status if old else None for clip_id, old in restored.items()},
+                "type": "undo", "label": target.label, "targets": target.seqs,
+                "restored": {clip_id: old.status if old else None for clip_id, old in target.restored.items()},
                 **clean_context(context),
-            }], undoable=False, undoes=seqs, delta=delta)[0]
+            }], undoable=False, undoes=target.seqs, delta=delta)[0]
 
     def merge_preview(self) -> dict | None:
         with self._lock:

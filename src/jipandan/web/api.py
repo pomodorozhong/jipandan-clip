@@ -90,6 +90,8 @@ class PreviewRequest(RevisionRequest):
 
 class ExportRequest(RevisionRequest):
     preview_id: str
+    # Names the Export all run this export belongs to, so the run undoes as one step.
+    export_all: str | None = Field(default=None, pattern=r"^[0-9a-f-]{8,64}$")
 
 
 class TranscriptionRequest(BaseModel):
@@ -367,7 +369,9 @@ def create_app(
 
     @app.post("/api/exports")
     def publish_export(request: ExportRequest):
-        return SessionJSON(app.state.service.publish_export(request.preview_id, request.expected_revision, request.context))
+        return SessionJSON(app.state.service.publish_export(
+            request.preview_id, request.expected_revision, request.context, request.export_all,
+        ))
 
     @app.post("/api/clips/{clip_id}/reveal-export")
     def reveal_export(clip_id: str):

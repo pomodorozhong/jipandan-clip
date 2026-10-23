@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -42,7 +42,9 @@ CREATE TABLE IF NOT EXISTS event (
     undone_by INTEGER,
     -- Affected clips before the change, as {clip_id: clip or null}; set on a change's first event.
     before TEXT,
-    data TEXT NOT NULL
+    data TEXT NOT NULL,
+    -- What an undoable change changed: {"fields": {clip_id: [field]}, "suggestions": {clip_id: [old, new]}}.
+    changes TEXT
 );
 CREATE INDEX IF NOT EXISTS event_undo ON event (undoable, undone_by, seq);
 CREATE TABLE IF NOT EXISTS suggestion (clip_id TEXT PRIMARY KEY, title TEXT NOT NULL);
@@ -72,6 +74,41 @@ def _clip_json(candidate: ClipCandidate | None) -> dict | None:
     return None if candidate is None else asdict(candidate)
 
 
+# Background runs the owner did not start; Undo never reverts them. Older stores saved them as undoable.
+BACKGROUND_UNDO_GROUPS = ("leading-silence:",)
+_UNDOABLE = (
+    "undoable = 1 AND undone_by IS NULL AND (undo_group IS NULL OR NOT ("
+    + " OR ".join("undo_group LIKE ?" for _ in BACKGROUND_UNDO_GROUPS) + "))"
+)
+_UNDOABLE_ARGS = tuple(f"{prefix}%" for prefix in BACKGROUND_UNDO_GROUPS)
+
+
+def _changed_fields(before: dict[str, ClipCandidate | None], draft: Session) -> dict[str, list[str]]:
+    """The fields a change set on each clip that existed before and after it."""
+    current = {c.clip_id: c for c in draft.candidates}
+    fields: dict[str, list[str]] = {}
+    for clip_id, old in before.items():
+        new = current.get(clip_id)
+        if old is not None and new is not None:
+            old_values, new_values = asdict(old), asdict(new)
+            fields[clip_id] = [name for name in new_values if old_values.get(name) != new_values[name]]
+    return fields
+
+
+@dataclass
+class UndoTarget:
+    """The changes one Undo reverts, and how to restore what they changed."""
+
+    seqs: list[int]
+    label: str
+    # Each clip's state before the earliest change (None for clips the changes created).
+    restored: dict[str, ClipCandidate | None]
+    # The fields the changes set on each clip; a clip missing here is restored whole.
+    fields: dict[str, set[str]] = field(default_factory=dict)
+    # Title suggestions the changes set, as {clip_id: (suggestion before, suggestion set)}.
+    suggestions: dict[str, tuple[str | None, str | None]] = field(default_factory=dict)
+
+
 class RecordingStore:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -80,6 +117,8 @@ class RecordingStore:
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA synchronous=NORMAL")
         self._db.executescript(_SCHEMA)
+        if "changes" not in {row[1] for row in self._db.execute("PRAGMA table_info(event)")}:
+            self._db.execute("ALTER TABLE event ADD COLUMN changes TEXT")
 
     def close(self) -> None:
         with self._lock:
@@ -211,6 +250,7 @@ class RecordingStore:
                     first = self._insert_event(
                         kind, clip_id, fields, mutation=None, label=label, undo_group=undo_group,
                         undoable=undoable, before={k: _clip_json(v) for k, v in before.items()},
+                        changes={"fields": _changed_fields(before, draft)} if undoable else None,
                     )
                     self._db.execute("UPDATE event SET mutation = seq WHERE seq = ?", (first,))
                     self._db.executemany("UPDATE event SET undone_by = ? WHERE seq = ?",
@@ -237,15 +277,29 @@ class RecordingStore:
     def _insert_event(
         self, kind: str, clip_id: str | None, data: dict, *, mutation: int | None, label: str | None = None,
         undo_group: str | None = None, undoable: bool = False, before: dict | None = None,
+        changes: dict | None = None,
     ) -> int:
         cursor = self._db.execute(
-            "INSERT INTO event (t, type, clip_id, mutation, label, undo_group, undoable, before, data) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO event (t, type, clip_id, mutation, label, undo_group, undoable, before, data, changes) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (utc_now(), kind, clip_id, mutation, label, undo_group, int(undoable),
              None if before is None else json.dumps(before, ensure_ascii=False),
-             json.dumps(data, ensure_ascii=False)),
+             json.dumps(data, ensure_ascii=False),
+             None if changes is None else json.dumps(changes, ensure_ascii=False)),
         )
         return int(cursor.lastrowid)
+
+    def record_suggestion(
+        self, clip_id: str, old: str | None, new: str | None, event: dict, *, label: str, undo_group: str,
+    ) -> None:
+        """Log an undoable title suggestion change; suggestions sit outside the session revision."""
+        with self._lock, self._transaction():
+            fields = dict(event)
+            seq = self._insert_event(
+                str(fields.pop("type")), clip_id, fields, mutation=None, label=label, undo_group=undo_group,
+                undoable=True, changes={"suggestions": {clip_id: [old, new]}},
+            )
+            self._db.execute("UPDATE event SET mutation = seq WHERE seq = ?", (seq,))
 
     def append_events(self, events: list[dict]) -> None:
         """Record events that change no clip, such as views."""
@@ -277,35 +331,46 @@ class RecordingStore:
     def can_undo(self) -> bool:
         with self._lock:
             return self._db.execute(
-                "SELECT 1 FROM event WHERE undoable = 1 AND undone_by IS NULL LIMIT 1"
+                f"SELECT 1 FROM event WHERE {_UNDOABLE} LIMIT 1", _UNDOABLE_ARGS
             ).fetchone() is not None
 
-    def undo_target(self) -> tuple[list[int], str, dict[str, ClipCandidate | None]] | None:
+    def undo_target(self) -> UndoTarget | None:
         """The latest change still undoable, merged with the earlier changes in its group.
 
-        Returns the changes' sequence numbers, a label, and each clip's state before
-        the earliest of them.
+        Background runs are skipped, so Undo always reverts something the owner did or started.
         """
         with self._lock:
             latest = self._db.execute(
-                "SELECT seq, label, undo_group FROM event WHERE undoable = 1 AND undone_by IS NULL "
-                "ORDER BY seq DESC LIMIT 1"
+                f"SELECT seq, label, undo_group FROM event WHERE {_UNDOABLE} ORDER BY seq DESC LIMIT 1",
+                _UNDOABLE_ARGS,
             ).fetchone()
             if latest is None:
                 return None
             seq, label, group = latest
             if group is None:
-                rows = self._db.execute("SELECT seq, before FROM event WHERE seq = ?", (seq,)).fetchall()
+                rows = self._db.execute("SELECT seq, before, changes FROM event WHERE seq = ?", (seq,)).fetchall()
             else:
                 rows = self._db.execute(
-                    "SELECT seq, before FROM event WHERE undoable = 1 AND undone_by IS NULL AND undo_group = ? "
-                    "ORDER BY seq", (group,),
+                    "SELECT seq, before, changes FROM event WHERE undoable = 1 AND undone_by IS NULL "
+                    "AND undo_group = ? ORDER BY seq", (group,),
                 ).fetchall()
-        restored: dict[str, ClipCandidate | None] = {}
-        for _, before in rows:
+        target = UndoTarget([row[0] for row in rows], label or "change", {})
+        whole: set[str] = set()
+        for _, before, changes in rows:
+            changes = json.loads(changes or "{}")
+            fields = changes.get("fields")
             for clip_id, state in json.loads(before or "{}").items():
-                restored.setdefault(clip_id, None if state is None else clip_candidate_from_dict(state))
-        return [row[0] for row in rows], label or "change", restored
+                target.restored.setdefault(clip_id, None if state is None else clip_candidate_from_dict(state))
+                # Changes saved before fields were recorded restore the whole clip.
+                if fields is None or clip_id not in fields:
+                    whole.add(clip_id)
+                else:
+                    target.fields.setdefault(clip_id, set()).update(fields[clip_id])
+            for clip_id, (old, new) in (changes.get("suggestions") or {}).items():
+                target.suggestions[clip_id] = (target.suggestions.get(clip_id, (old, new))[0], new)
+        for clip_id in whole:
+            target.fields.pop(clip_id, None)
+        return target
 
     def last_seq(self) -> int:
         with self._lock:
