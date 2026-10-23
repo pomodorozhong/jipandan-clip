@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EXPLORE_RATE, isExploreClip, orderByLikelyKeep } from "./reviewOrder";
+import { EXPLORE_RATE, isExploreClip, orderByLikelyKeep, upNext } from "./reviewOrder";
 
 describe("likely keep exploration", () => {
   const ids = Array.from({ length: 4000 }, (_, index) => String(index + 1));
@@ -40,5 +40,22 @@ describe("likely keep exploration", () => {
     expect(ordered.map((clip) => clip.clip_id))
       .toEqual([...clips].sort((a, b) => b.likely_keep - a.likely_keep || byId(a, b)).map((clip) => clip.clip_id));
     expect(orderByLikelyKeep(clips, null, true, byId)).toEqual(ordered);
+  });
+});
+
+describe("Triage Up next", () => {
+  const queue = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"];
+
+  it("shows the current clip and the five after it", () => {
+    expect(upNext(queue, 2)).toEqual(["c", "d", "e", "f", "g", "h"]);
+  });
+
+  it("wraps around to clips passed earlier near the end of the queue", () => {
+    expect(upNext(queue, 8)).toEqual(["i", "j", "a", "b", "c", "d"]);
+  });
+
+  it("shows every remaining clip when fewer than six are left", () => {
+    expect(upNext(["x", "y", "z"], 1)).toEqual(["y", "z", "x"]);
+    expect(upNext(queue, -1)).toEqual([]);
   });
 });

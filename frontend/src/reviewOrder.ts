@@ -53,3 +53,12 @@ export function orderByLikelyKeep<T extends { clip_id: string; likely_keep: numb
   }
   return merged.concat(ordered.slice(next));
 }
+
+/**
+ * Triage's Up next list: the current clip and the ones after it. Near the end of the queue it
+ * wraps around to the clips passed earlier, which Triage serves next once the end is reached.
+ */
+export function upNext<T>(clips: readonly T[], position: number, count = 6): T[] {
+  if (position < 0 || position >= clips.length) return [];
+  return [...clips.slice(position), ...clips.slice(0, position)].slice(0, count);
+}

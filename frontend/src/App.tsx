@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { isExploreClip, orderByLikelyKeep } from "./reviewOrder";
+import { isExploreClip, orderByLikelyKeep, upNext } from "./reviewOrder";
 import TriageScreen from "./TriageScreen";
 import { isIdle, viewEvent, type OpenView, type ViewEndReason } from "./reviewViews";
 import { api, applySessionDelta, audioUrl, bootstrap, sendReviewEvents, uploadAudio, type Clip, type ClipFeaturesJob, type ClipTranscriptionJob, type LeadingSilenceJob, type PreviewJob, type Session, type SessionDelta, type SnapPoints, type Status, type ClipSource, clipSourceLabels } from "./api";
@@ -621,8 +621,7 @@ export default function App() {
     ? selectedId : (visible[0]?.clip_id ?? null);
   const selected = session?.candidates.find((clip) => clip.clip_id === effectiveSelectedId) ?? null;
   const selectedPosition = visible.findIndex((clip) => clip.clip_id === effectiveSelectedId);
-  const triageUpNext = mode === "triage" && selectedPosition >= 0
-    ? visible.slice(selectedPosition, selectedPosition + 6) : [];
+  const triageUpNext = mode === "triage" ? upNext(visible, selectedPosition) : [];
 
   // Where a clip sits in the current ranking, recorded with each decision in the review log.
   const rankingContext = useCallback((clip: Clip) => {
