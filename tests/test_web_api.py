@@ -22,6 +22,7 @@ from jipandan.core.whisper import write_segment_scores
 from jipandan.web.api import create_app
 from jipandan.core.store import RecordingStore, store_path
 from jipandan.core.ffmpeg import ExportOptions
+from jipandan.core.paths import AppPaths
 from jipandan.web.preview import PreviewJobs
 from jipandan.web.service import SessionService
 
@@ -39,9 +40,11 @@ class WebApiTests(unittest.TestCase):
         self.srt.write_text(SRT, encoding="utf-8")
         self.probe = patch("jipandan.web.service.probe_duration_seconds", return_value=10.0)
         self.probe.start()
+        # Logs, uploads and caches stay in the test's folder, not the real application directories.
+        self.paths = AppPaths(self.root / "app-data", self.root / "app-cache", self.root / "app-logs")
         self.service = SessionService(
             self.root / "clips", self.root / "uploads",
-            self.root / "previews", self.root / "transcriptions",
+            self.root / "previews", self.root / "transcriptions", app_paths=self.paths,
         )
         self.client = TestClient(create_app(self.service, allowed_hosts={"testserver"}))
         self.token = self.client.get("/api/bootstrap").json()["token"]
@@ -113,7 +116,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(undone.json()["candidates"][0]["start_ms"], 1000)
         self.assertEqual(undone.json()["candidates"][0]["status"], "group1")
         # Undo history survives a restart of the server.
-        reopened = SessionService(self.root / "clips")
+        reopened = SessionService(self.root / "clips", app_paths=self.paths)
         try:
             state = reopened.open_audio(self.audio)
             self.assertEqual([c["status"] for c in state["candidates"]], ["group1", "group2"])
@@ -726,7 +729,7 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(trimmed.status_code, 200)
         self.assertEqual(trimmed.json()["candidates"][0]["start_ms"], 1101)
         self.assertEqual(trimmed.json()["candidates"][0]["end_ms"], 1907)
-        reopened = SessionService(self.root / "clips")
+        reopened = SessionService(self.root / "clips", app_paths=self.paths)
         self.assertEqual(reopened.open_audio(self.audio)["candidates"][0]["end_ms"], 1907)
         reopened.close()
         invalid = self.client.patch(
@@ -836,7 +839,7 @@ class WebApiTests(unittest.TestCase):
 
     def test_second_server_cannot_overwrite_first_server(self):
         self.open()
-        second_service = SessionService(self.root / "clips")
+        second_service = SessionService(self.root / "clips", app_paths=self.paths)
         second_service.open_audio(self.audio)
         second_client = TestClient(create_app(second_service, allowed_hosts={"testserver"}))
         second_token = second_client.get("/api/bootstrap").json()["token"]
@@ -1093,6 +1096,7 @@ class WebApiTests(unittest.TestCase):
             self.assertEqual(started.status_code, 200, started.text)
             failed = self.wait_for_job(f"/api/transcriptions/{started.json()['id']}", "failed")
             self.assertIn("status 1", failed["error"])
+            self.assertTrue(Path(failed["log_file"]).is_relative_to((self.root / "app-logs").resolve()))
             self.assertFalse(self.srt.exists())
 
         def succeed(_manager, job):
@@ -1235,7 +1239,7 @@ class WebApiTests(unittest.TestCase):
         }), encoding="utf-8")
         recovered = SessionService(
             self.root / "clips", self.root / "uploads",
-            self.root / "other-previews", self.root / "transcriptions",
+            self.root / "other-previews", self.root / "transcriptions", app_paths=self.paths,
         )
         try:
             self.assertEqual(recovered.open_audio(self.audio)["transcription"]["state"], "failed")
