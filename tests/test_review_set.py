@@ -1,6 +1,6 @@
 import unittest
 
-from jipandan.core.review_set import pick_review_set, unprocessed
+from jipandan.core.review_set import pick_review_set, set_order_key, unit_hash, unprocessed
 
 
 class ReviewSetTests(unittest.TestCase):
@@ -51,3 +51,11 @@ class ReviewSetTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_order_matches_the_frontend_hash(self):
+        # Values from unitHash in frontend/src/reviewOrder.ts.
+        self.assertAlmostEqual(unit_hash("a1b2c3d4:order:1"), 0.4212992808315903)
+        self.assertAlmostEqual(unit_hash("a1b2c3d4:order:2"), 0.5049334005452693)
+        self.assertAlmostEqual(unit_hash("a1b2c3d4:order:17"), 0.8219743503723294)
+        self.assertAlmostEqual(set_order_key("seed", 903), 0.033122957684099674)
+

@@ -36,7 +36,7 @@ from jipandan.core.leading_silence import detect_leading_silence_start
 from jipandan.core.paths import AppPaths, default_export_dir, get_app_paths, resolve_export_dir
 from jipandan.core.candidates import candidates_srt_path, is_candidates_srt
 from jipandan.core.snap_points import KINDS as SNAP_KINDS, load_snap_points, snap_points_path
-from jipandan.core.review_set import MAX_SIZE, MIN_SIZE, pick_review_set, unprocessed
+from jipandan.core.review_set import MAX_SIZE, MIN_SIZE, pick_review_set, set_order_key, unprocessed
 from jipandan.core.stage_times import stage_breakdown
 from jipandan.core.srt import parse_srt, segment_scores_path
 from jipandan.core.whisper import describe_transcribe_call
@@ -499,10 +499,18 @@ class SessionService:
                 "adjusted": 0,
                 "error": None,
             }
+            # While a review set is open its clips go first, in the order the app shows them,
+            # so the clips being reviewed are trimmed before the rest of the session.
+            roles = self._review_set_roles
+            seed = str(self._review_set["seed"]) if roles and self._review_set else ""
+            ordered = sorted(session.candidates, key=lambda candidate: (
+                (0, set_order_key(seed, candidate.index)) if str(candidate.index) in roles else (1, 0.0),
+                candidate.index, candidate.suffix,
+            ))
             clips = [
                 (candidate.clip_id, candidate.original_start, _time_ms(candidate.original_start),
                  _time_ms(candidate.end), candidate.start == candidate.original_start)
-                for candidate in session.candidates
+                for candidate in ordered
             ]
             self._leading_silence_job = job
             threading.Thread(

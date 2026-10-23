@@ -96,6 +96,11 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
   const handledGamepadAction = useRef<number | null>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
   const wasOpen = useRef(false);
+  // Previews and exports depend on this clip only. Saves elsewhere, such as background
+  // leading-silence trims of other clips, raise the revision but must not re-render the
+  // preview or hold up Export, so the revision is read through a ref instead of a dependency.
+  const revisionRef = useRef(revision);
+  revisionRef.current = revision;
 
   useEffect(() => {
     if (inline && !clip.last_export_path) onSettingsChange?.({ mode, startDb, stopDb });
@@ -193,7 +198,7 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
     setExportError("");
     try {
       const result = await api<Session>("/exports", "POST", {
-        preview_id: job.id, expected_revision: revision, context: exportContext,
+        preview_id: job.id, expected_revision: revisionRef.current, context: exportContext,
       });
       setOutputPath(result.output_path ?? "");
       onPublished(result, advance);
@@ -203,7 +208,7 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
       exportInFlight.current = false;
       setExporting(false);
     }
-  }, [candidateReady, job, exporting, requesting, nextClipId, revision, onPublished, exportContext]);
+  }, [candidateReady, job, exporting, requesting, nextClipId, onPublished, exportContext]);
 
   async function reveal() {
     setExportError("");
@@ -326,7 +331,7 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       void api<PreviewJob>("/previews", "POST", {
-        clip_id: clip.clip_id, expected_revision: revision, mode,
+        clip_id: clip.clip_id, expected_revision: revisionRef.current, mode,
         start_threshold_db: mode === "as_is" ? -40 : start,
         stop_threshold_db: mode === "as_is" ? -50 : stop,
         title: title.trim(),
@@ -340,7 +345,7 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
       });
     }, delay);
     return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [open, clip.clip_id, clip.start_ms, clip.end_ms, clip.title, revision,
+  }, [open, clip.clip_id, clip.start_ms, clip.end_ms, clip.title,
     mode, startDb, stopDb, title, validThresholds, start, stop]);
 
   const renderReference = useCallback(async () => {
@@ -351,7 +356,7 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
     setReferenceJob(null);
     try {
       const next = await api<PreviewJob>("/previews", "POST", {
-        clip_id: clip.clip_id, expected_revision: revision, mode: "as_is",
+        clip_id: clip.clip_id, expected_revision: revisionRef.current, mode: "as_is",
         start_threshold_db: -40, stop_threshold_db: -50, title: clip.title,
       });
       if (requestId === referenceRequestId.current) setReferenceJob(next);
@@ -360,15 +365,15 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
     } finally {
       if (requestId === referenceRequestId.current) setReferenceRequesting(false);
     }
-  }, [clip.clip_id, clip.title, revision]);
+  }, [clip.clip_id, clip.title]);
 
   useEffect(() => {
     if (!open) { referenceStartedFor.current = ""; return; }
-    const requestKey = `${clip.clip_id}:${clip.start_ms}:${clip.end_ms}:${clip.title}:${revision}`;
+    const requestKey = `${clip.clip_id}:${clip.start_ms}:${clip.end_ms}:${clip.title}`;
     if (referenceStartedFor.current === requestKey) return;
     referenceStartedFor.current = requestKey;
     void renderReference();
-  }, [open, clip.clip_id, clip.start_ms, clip.end_ms, clip.title, revision, renderReference]);
+  }, [open, clip.clip_id, clip.start_ms, clip.end_ms, clip.title, renderReference]);
 
   useEffect(() => {
     if (!open) return;

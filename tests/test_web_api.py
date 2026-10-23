@@ -13,6 +13,7 @@ import numpy as np
 from fastapi.testclient import TestClient
 
 from jipandan.core.candidates import candidates_srt_path
+from jipandan.core.review_set import set_order_key
 from jipandan.core.clip_features import ClipFeatures
 from jipandan.core.models import Session
 from jipandan.core.snap_points import SPEECH_END, WORD_START, write_snap_points
@@ -154,6 +155,54 @@ class WebApiTests(unittest.TestCase):
             )
         self.assertEqual(revealed.status_code, 200, revealed.text)
         launch.assert_called_once_with(["xdg-open", str(old_output.parent.resolve())])
+
+    def test_leading_silence_checks_an_open_review_set_first_in_its_order(self):
+        self.srt.write_text("".join(
+            f"{n}\n00:00:0{n},000 --> 00:00:0{n},500\nLine {n}\n\n" for n in range(1, 7)), encoding="utf-8")
+        self.open()
+        self.service._review_set = {"size": 2, "total": 6, "random_share": 0.5, "seed": "a1b2c3d4",
+                                    "roles": {"2": "top", "5": "random"}, "completed": None}
+        checked = []
+
+        def detect(_audio, start, _end):
+            checked.append(start // 1000)
+            return None
+
+        path = "/api/session/leading-silence-detection"
+        with patch("jipandan.web.service.detect_leading_silence_start", side_effect=detect):
+            self.client.post(path, headers=self.headers)
+            self.wait_for_job(path, "completed")
+        in_set = sorted([2, 5], key=lambda index: set_order_key("a1b2c3d4", index))
+        self.assertEqual(checked, [*in_set, 1, 3, 4, 6])
+
+    def test_export_succeeds_after_detection_saves_other_clips(self):
+        state = self.open()
+        valid_mp3 = self.root / "valid.mp3"
+        subprocess.run([
+            "ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+            "sine=frequency=440:duration=0.8", str(valid_mp3),
+        ], check=True)
+
+        def render(_audio, _candidate, _options, output):
+            shutil.copyfile(valid_mp3, output)
+
+        with patch("jipandan.web.preview.render_export_preview", side_effect=render):
+            job_id = self.client.post("/api/previews", json={
+                "clip_id": "1", "expected_revision": state["revision"], "mode": "as_is", "title": "First",
+            }, headers=self.headers).json()["id"]
+            self.wait_for_job(f"/api/previews/{job_id}", "completed")
+            path = "/api/session/leading-silence-detection"
+            with patch("jipandan.web.service.detect_leading_silence_start",
+                       side_effect=lambda _audio, start, _end: None if start == 1000 else start + 400):
+                self.client.post(path, headers=self.headers)
+                self.wait_for_job(path, "completed")
+            self.assertGreater(self.service.snapshot()["revision"], state["revision"])
+            self.assertFalse(self.client.get(f"/api/previews/{job_id}").json()["stale"])
+            exported = self.client.post("/api/exports", json={
+                "preview_id": job_id, "expected_revision": state["revision"],
+            }, headers=self.headers)
+        self.assertEqual(exported.status_code, 200, exported.text)
+        self.assertEqual(exported.json()["candidates"][0]["status"], "exported")
 
     def test_storage_rejects_a_file_as_export_directory(self):
         self.open()
