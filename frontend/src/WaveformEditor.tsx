@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type Clip, type SnapPoints, type TrimMap, type WaveformWindow } from "./api";
-import { adjacentSnap, nearestSnap, snapsInRange, snapTargets } from "./snapPoints";
+import { adjacentSnap, edgeSnap, nearestSnap, snapsInRange, snapTargets } from "./snapPoints";
 import { removedRanges } from "./trimMap";
 import {
   deactivateTextEditingTarget,
@@ -307,12 +307,12 @@ export function WaveformPlot({ label, range, waveform, startMs, endMs, playheadM
     };
   }
 
-  /** Pull a dragged edge onto a nearby snap point unless Option is held. */
+  /** Pull a dragged edge onto a nearby snap point unless Option is held: a start back, an end forward. */
   function snapped(edge: Edge, time: number, bypass: boolean): number {
     const targets = snaps?.[edge];
     if (bypass || !targets?.length) return time;
     const width = Math.max(1, svgRef.current!.getBoundingClientRect().width);
-    return nearestSnap(targets, time, SNAP_DISTANCE_PX / width * span) ?? time;
+    return edgeSnap(targets, time, SNAP_DISTANCE_PX / width * span, edge) ?? time;
   }
 
   function hitsNub(edge: Edge, point: { x: number; y: number }): boolean {

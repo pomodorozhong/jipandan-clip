@@ -31,6 +31,25 @@ export function nearestSnap(targets: readonly number[], time: number, tolerance:
   return best;
 }
 
+/** How far past the pointer an edge may still snap: a start to a slightly later point, an end to a slightly earlier one. */
+export const SNAP_SLACK_MS = 50;
+
+/**
+ * The target an edge dragged to `time` snaps to, within `tolerance` ms, else null. A start only snaps
+ * to a point at or before the pointer and an end to one at or after it (give or take `SNAP_SLACK_MS`),
+ * so snapping never cuts into speech: a late start or an early end clips the voice, while an early
+ * start or a late end only adds silence, which the export's edge trim removes.
+ */
+export function edgeSnap(targets: readonly number[], time: number, tolerance: number, edge: SnapEdge): number | null {
+  const slack = Math.min(SNAP_SLACK_MS, tolerance);
+  if (edge === "start") {
+    const candidate = targets[lowerBound(targets, time + slack + 1) - 1];
+    return candidate !== undefined && time - candidate <= tolerance ? candidate : null;
+  }
+  const candidate = targets[lowerBound(targets, time - slack)];
+  return candidate !== undefined && candidate - time <= tolerance ? candidate : null;
+}
+
 /** The closest target strictly before (`direction` -1) or after (+1) `time`, else null. */
 export function adjacentSnap(targets: readonly number[], time: number, direction: -1 | 1): number | null {
   if (direction > 0) return targets[lowerBound(targets, time + 1)] ?? null;
