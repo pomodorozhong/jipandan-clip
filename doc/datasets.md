@@ -24,7 +24,7 @@ The same input files always give byte-identical output, whatever order they are 
 
 | File | One row per | Holds |
 |---|---|---|
-| `manifest.json` | dataset | format and rule versions, every input file with its content hash and whether it was used, counts per task and recording, random labels |
+| `manifest.json` | dataset | format and rule versions, every input file with its path from the folder the inputs share, its content hash, and whether it was used, counts per task and recording, random labels |
 | `ranking.jsonl` | round clip | what the round found: role, chance of being picked, score, measurements, outcome |
 | `timing.jsonl` | approved clip | original and final range, export settings |
 | `titles.jsonl` | approved clip | source text and soundboard title |
