@@ -16,6 +16,11 @@ LEAD_MS = 200
 # A Whisper segment edge moves to a voice-activity edge this close to it.
 START_SNAP_MS = 500
 END_SNAP_MS = 1000
+# A start that lands inside speech which began at most this long before moves back to just before
+# that speech, so the clip doesn't open mid-word (#47). Longer runs are left alone: backing off
+# that far would start the clip in a different phrase.
+ONSET_BACKOFF_MS = 600
+ONSET_LEAD_MS = 50
 # 1–99% of kept clips on 0602 are 0.5–5.4 s long.
 MIN_LENGTH_MS = 600
 MAX_LENGTH_MS = 5000
@@ -80,6 +85,17 @@ def _text(words: list[Word], word_starts: list[int], start: int, end: int) -> st
     return "".join(inside).strip()
 
 
+def _back_to_onset(start: int, onsets: list[int], offsets_by_onset: list[int], backoff_ms: int) -> int:
+    """Move ``start`` to just before the speech run it lands in, if that run began within ``backoff_ms``."""
+    index = bisect.bisect_right(onsets, start) - 1
+    if index < 0:
+        return start
+    onset, offset = onsets[index], offsets_by_onset[index]
+    if onset < start < offset and start - onset <= backoff_ms:
+        return max(0, onset - ONSET_LEAD_MS)
+    return start
+
+
 def generate_candidates(
     segments: list[dict],
     speech_runs: list[tuple[int, int]],
@@ -89,13 +105,16 @@ def generate_candidates(
     end_snap_ms: int = END_SNAP_MS,
     min_length_ms: int = MIN_LENGTH_MS,
     max_length_ms: int = MAX_LENGTH_MS,
+    onset_backoff_ms: int = ONSET_BACKOFF_MS,
 ) -> list[Candidate]:
     """Return candidates from voice-activity runs and Whisper ``segments``, in time order.
 
     Each run of voice activity that Whisper heard words in is a candidate, starting
     ``lead_ms`` before the speech. Runs miss clips inside long stretches of speech, so each
     Whisper segment is a candidate too, with its edges moved to nearby voice-activity edges:
-    Whisper word ends trail off, while voice activity ends where kept clips end.
+    Whisper word ends trail off, while voice activity ends where kept clips end. A start that
+    still lands inside speech that began within ``onset_backoff_ms`` moves back to just before it:
+    a start that cuts into the voice gets clips rejected, while extra silence is trimmed on export.
     """
     words = words_from_segments(segments)
     word_starts = [word.start_ms for word in words]
@@ -123,11 +142,14 @@ def generate_candidates(
             _nearest(onsets, segment_words[0].start_ms, start_snap_ms),
             _nearest(offsets, end, end_snap_ms),
         ))
-    return [
-        Candidate(start, end, _text(words, word_starts, start, end))
-        for start, end in sorted(bounds)
+    run_onsets = [start for start, _ in runs]
+    run_offsets = [end for _, end in runs]
+    kept = {
+        (_back_to_onset(start, run_onsets, run_offsets, onset_backoff_ms), end)
+        for start, end in bounds
         if min_length_ms <= end - start <= max_length_ms
-    ]
+    }
+    return [Candidate(start, end, _text(words, word_starts, start, end)) for start, end in sorted(kept)]
 
 
 def best_segments(segments: list[dict], candidates: list[Candidate]) -> list[dict]:
