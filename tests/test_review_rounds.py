@@ -1,7 +1,12 @@
 import unittest
 
+import itertools
+import random
+from unittest.mock import patch
+
 from jipandan.core.review_rounds import (
-    from_review_set, in_pool, keep_curve, keep_chance, overview, pick_round, set_order_key, unit_hash, unprocessed,
+    from_review_set, in_pool, keep_curve, keep_chance, overview, pick_chance, pick_round, set_order_key, unit_hash,
+    unprocessed,
 )
 
 
@@ -19,9 +24,10 @@ class PickTests(unittest.TestCase):
         self.assertEqual((picked["size"], picked["pool"]), (30, 100))
         self.assertEqual((len(picked["random"]), len(picked["top"])), (6, 24))
         self.assertFalse(set(picked["random"]) & set(picked["top"]))
-        # The top part is the highest scores among clips the random draw left.
-        rest = [f"c{i}" for i in range(99, -1, -1) if f"c{i}" not in picked["random"]]
-        self.assertEqual(picked["top"], rest[:24])
+        # The top part is the highest scores in the pool; the random part comes from the other 76.
+        self.assertEqual(picked["top"], [f"c{i}" for i in range(99, 75, -1)])
+        self.assertTrue(all(int(clip_id[1:]) < 76 for clip_id in picked["random"]))
+        self.assertEqual((picked["sampling"], picked["random_chance"]), (2, 6 / 76))
         self.assertEqual(len(picked["roles"]), 30)
         self.assertEqual(picked["roles"][picked["random"][0][1:]], "random")
         self.assertIsNone(picked["completed"])
@@ -31,14 +37,63 @@ class PickTests(unittest.TestCase):
         self.assertNotEqual(pick_round(self.clips, 30, seed="s")["random"],
                             pick_round(self.clips, 30, seed="t")["random"])
 
-    def test_random_part_is_drawn_from_the_whole_pool(self):
-        # Over many seeds, low-scored clips are drawn as often as high-scored ones.
+    def test_random_part_is_drawn_evenly_from_below_the_top_part(self):
+        # Over many seeds, low-scored clips are drawn as often as higher-scored ones below the top part.
         low = high = 0
         for seed in range(400):
             for clip_id in pick_round(self.clips, 30, seed=str(seed))["random"]:
-                low += int(clip_id[1:]) < 50
-                high += int(clip_id[1:]) >= 50
+                low += int(clip_id[1:]) < 38
+                high += int(clip_id[1:]) >= 38
         self.assertLess(abs(low - high) / (low + high), 0.06)
+
+    def every_draw(self, pool, size, share):
+        """Pick a round from ``pool`` once for each of the random draws, all equally likely."""
+        size = min(size, len(pool))
+        count = round(size * share)
+        rest = len(pool) - (size - count)
+        rounds = []
+        for draw in itertools.combinations(range(rest), count):
+            with patch.object(random.Random, "sample", lambda _, population, k, draw=draw: list(draw)):
+                rounds.append(pick_round(pool, size, random_share=share, seed="s"))
+        return rounds
+
+    def test_recorded_chances_match_how_often_each_clip_is_picked(self):
+        cases = [
+            ([(f"c{i}", i, float(100 - i)) for i in range(10)], 4, 0.5),
+            ([(f"c{i}", i, float(100 - i)) for i in range(10)], 4, 0.0),
+            ([(f"c{i}", i, float(100 - i)) for i in range(10)], 4, 1.0),
+            # Tied and missing scores: ties go by index, unscored clips rank last.
+            ([("a", 1, 50.0), ("b", 2, 50.0), ("c", 3, None), ("d", 4, 10.0), ("e", 5, None)], 3, 0.34),
+            # A round that takes the whole pool.
+            ([(f"c{i}", i, float(i)) for i in range(5)], 10, 0.4),
+        ]
+        for pool, size, share in cases:
+            with self.subTest(size=size, share=share, pool=len(pool)):
+                rounds = self.every_draw(pool, size, share)
+                for clip_id, index, _ in pool:
+                    picked = sum(clip_id in item["top"] or clip_id in item["random"] for item in rounds) / len(rounds)
+                    chances = {pick_chance(item, index) for item in rounds if str(index) in item["roles"]}
+                    if picked == 0:
+                        self.assertEqual(chances, set())
+                        continue
+                    # Every round that took the clip records the same chance, and it is how often the clip was taken.
+                    self.assertEqual(len(chances), 1)
+                    self.assertAlmostEqual(chances.pop(), picked)
+
+    def test_weighting_by_the_recorded_chances_recovers_the_pool_keep_rate(self):
+        # Ten clips; only the two best are keepers, so the pool's keep rate is 20%.
+        pool = [(f"c{i}", i, float(100 - i)) for i in range(10)]
+        kept = {"c0", "c1"}
+        estimates = []
+        for item in self.every_draw(pool, 4, 0.5):
+            weights = {clip_id: 1 / pick_chance(item, int(clip_id[1:])) for clip_id in item["top"] + item["random"]}
+            estimates.append(sum(weight for clip_id, weight in weights.items() if clip_id in kept) / len(pool))
+        self.assertAlmostEqual(sum(estimates) / len(estimates), 0.2)
+
+    def test_rounds_picked_the_old_way_have_no_known_chance(self):
+        item = {"roles": {"1": "top", "2": "random"}, "random_share": 0.2}
+        self.assertIsNone(pick_chance(item, 1))
+        self.assertIsNone(pick_chance(item, 2))
 
     def test_random_share_can_be_tuned(self):
         self.assertEqual(len(pick_round(self.clips, 30, random_share=0.5, seed="s")["random"]), 15)
