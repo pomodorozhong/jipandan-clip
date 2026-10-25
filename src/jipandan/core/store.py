@@ -205,6 +205,82 @@ class RecordingStore:
                     statuses[clip_id] = clip["status"] if clip else None
         return statuses
 
+    def seq_at(self, t: str) -> int:
+        """The last event recorded at or before ``t``; 0 when there is none."""
+        with self._lock:
+            row = self._db.execute("SELECT MAX(seq) FROM event WHERE t <= ?", (t,)).fetchone()
+        return int(row[0] or 0)
+
+    def clips_at(self, seq: int) -> dict[str, dict | None]:
+        """Each clip changed after event ``seq`` as it was then, as stored; None for clips created after it.
+
+        Like ``statuses_at``, the first change after ``seq`` that touched a clip holds its state then.
+        Clips not listed are unchanged since. Background measurements are saved without history, so
+        their values are always the latest.
+        """
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT before FROM event WHERE before IS NOT NULL AND seq > ? ORDER BY seq", (seq,)
+            ).fetchall()
+        clips: dict[str, dict | None] = {}
+        for (before,) in rows:
+            for clip_id, clip in json.loads(before).items():
+                clips.setdefault(clip_id, clip)
+        return clips
+
+    def changed_after(self, seq: int) -> list[tuple[int, list[str]]]:
+        """Each change after event ``seq`` as (seq, IDs of the clips it touched), oldest first."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT seq, before FROM event WHERE before IS NOT NULL AND seq > ? ORDER BY seq", (seq,)
+            ).fetchall()
+        return [(row_seq, list(json.loads(before))) for row_seq, before in rows]
+
+    def history(self, from_seq: int, to_seq: int) -> tuple[list[dict], list[dict]]:
+        """The changes and other clip events after ``from_seq`` up to ``to_seq``, oldest first.
+
+        Each change is its first event's seq, time, type, and label, the seqs it undid, its events,
+        and ``after``: every clip it touched as it was right after it (None for a clip it removed).
+        The other events are those about one clip that change none, such as views.
+        """
+        with self._lock:
+            current = {clip_id: json.loads(data) for clip_id, data in self._db.execute("SELECT clip_id, data FROM clip")}
+            mutations = self._db.execute(
+                "SELECT seq, before FROM event WHERE before IS NOT NULL AND seq > ? ORDER BY seq DESC", (from_seq,)
+            ).fetchall()
+            rows = self._db.execute(
+                "SELECT seq, t, type, clip_id, mutation, label, undone_by, data FROM event "
+                "WHERE seq > ? AND seq <= ? ORDER BY seq", (from_seq, to_seq),
+            ).fetchall()
+            undone = self._db.execute(
+                "SELECT seq, undone_by FROM event WHERE undone_by > ? AND undone_by <= ? ORDER BY seq",
+                (from_seq, to_seq),
+            ).fetchall()
+        # Walk back from the clips as they are now: a clip after a change is as the next change found it.
+        after: dict[int, dict[str, dict | None]] = {}
+        state: dict[str, dict | None] = dict(current)
+        for seq, before in mutations:
+            touched = json.loads(before)
+            after[seq] = {clip_id: state.get(clip_id) for clip_id in touched}
+            state.update(touched)
+        changes: dict[int, dict] = {}
+        events: list[dict] = []
+        undoes: dict[int, list[int]] = {}
+        for seq, undone_by in undone:
+            undoes.setdefault(undone_by, []).append(seq)
+        for seq, t, kind, clip_id, mutation, label, undone_by, data in rows:
+            event = {"seq": seq, "t": t, "type": kind, "clip": clip_id, **json.loads(data)}
+            if mutation in after:
+                change = changes.setdefault(mutation, {
+                    "seq": mutation, "t": t, "type": kind, "label": label, "events": [], "after": after[mutation]})
+                change["events"].append(event)
+            elif clip_id is not None:
+                events.append(event)
+        for seq, targets in undoes.items():
+            if seq in changes:
+                changes[seq]["undoes"] = targets
+        return [{"undoes": None, **change} for change in changes.values()], events
+
     def save_review_rounds(self, rounds: list[dict], event: dict) -> None:
         """Save the rounds and log ``event`` in one transaction; neither changes a clip or can be undone."""
         with self._lock, self._transaction():

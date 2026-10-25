@@ -1,0 +1,465 @@
+{
+ "format": "jipandan-round",
+ "version": 2,
+ "recording": {
+  "name": "fixture.mp3",
+  "sha256": "6896d9ea3f73a4434f5832bc65714e7d066f177373f36f34dc8a6f735daa41b1",
+  "duration_ms": 10000
+ },
+ "round": {
+  "number": 1,
+  "size": 4,
+  "pool": 4,
+  "total": 4,
+  "random_share": 0.5,
+  "seed": "90340de37b8b9e12",
+  "score_version": "builtin-v1",
+  "sampling": 2,
+  "random_chance": 1.0,
+  "started": "2026-10-25T06:12:34.028Z",
+  "ended": "2026-10-25T06:12:34.040Z",
+  "unprocessed": 3,
+  "clip_source": "lines",
+  "srt_sha256": "4093007addd2cfb80861e4fe1e1bc797e97f1427b0180081b2052be19ddb43b7",
+  "features_version": 1,
+  "roles": {
+   "1": "top",
+   "3": "top",
+   "2": "random",
+   "4": "random"
+  },
+  "start_seq": 1,
+  "end_seq": 11
+ },
+ "clips_at_start": {
+  "1": {
+   "index": 1,
+   "title": "Line 1",
+   "original_start": "00:00:01.000",
+   "original_end": "00:00:01.500",
+   "start": "00:00:01.000",
+   "duration": "0.500",
+   "status": "pending",
+   "suffix": 0,
+   "source_text": "Line 1",
+   "last_export_title": null,
+   "last_export_mode": null,
+   "last_export_start_threshold_db": null,
+   "last_export_stop_threshold_db": null,
+   "last_export_path": null,
+   "last_export_snapshot": null,
+   "avg_logprob": null,
+   "no_speech_prob": null,
+   "peak_db": -12.0,
+   "mid_share_db": -3.0,
+   "bass_share_db": -25.0,
+   "score": 75.0
+  },
+  "2": {
+   "index": 2,
+   "title": "Line 2",
+   "original_start": "00:00:02.000",
+   "original_end": "00:00:02.500",
+   "start": "00:00:02.000",
+   "duration": "0.500",
+   "status": "pending",
+   "suffix": 0,
+   "source_text": "Line 2",
+   "last_export_title": null,
+   "last_export_mode": null,
+   "last_export_start_threshold_db": null,
+   "last_export_stop_threshold_db": null,
+   "last_export_path": null,
+   "last_export_snapshot": null,
+   "avg_logprob": null,
+   "no_speech_prob": null,
+   "peak_db": -35.0,
+   "mid_share_db": -9.0,
+   "bass_share_db": -6.0,
+   "score": 0.0
+  },
+  "3": {
+   "index": 3,
+   "title": "Line 3",
+   "original_start": "00:00:03.000",
+   "original_end": "00:00:03.500",
+   "start": "00:00:03.000",
+   "duration": "0.500",
+   "status": "pending",
+   "suffix": 0,
+   "source_text": "Line 3",
+   "last_export_title": null,
+   "last_export_mode": null,
+   "last_export_start_threshold_db": null,
+   "last_export_stop_threshold_db": null,
+   "last_export_path": null,
+   "last_export_snapshot": null,
+   "avg_logprob": null,
+   "no_speech_prob": null,
+   "peak_db": -20.0,
+   "mid_share_db": -5.0,
+   "bass_share_db": -15.0,
+   "score": 50.0
+  },
+  "4": {
+   "index": 4,
+   "title": "Line 4",
+   "original_start": "00:00:04.000",
+   "original_end": "00:00:04.500",
+   "start": "00:00:04.000",
+   "duration": "0.500",
+   "status": "pending",
+   "suffix": 0,
+   "source_text": "Line 4",
+   "last_export_title": null,
+   "last_export_mode": null,
+   "last_export_start_threshold_db": null,
+   "last_export_stop_threshold_db": null,
+   "last_export_path": null,
+   "last_export_snapshot": null,
+   "avg_logprob": null,
+   "no_speech_prob": null,
+   "peak_db": -30.0,
+   "mid_share_db": -8.0,
+   "bass_share_db": -9.0,
+   "score": 25.0
+  }
+ },
+ "changes": [
+  {
+   "undoes": null,
+   "seq": 4,
+   "t": "2026-10-25T06:12:34.028Z",
+   "type": "status",
+   "label": "1",
+   "events": [
+    {
+     "seq": 4,
+     "t": "2026-10-25T06:12:34.028Z",
+     "type": "status",
+     "clip": "1",
+     "from": "pending",
+     "to": "group1",
+     "stage": "triage",
+     "round": 1
+    }
+   ],
+   "after": {
+    "1": {
+     "index": 1,
+     "title": "Line 1",
+     "original_start": "00:00:01.000",
+     "original_end": "00:00:01.500",
+     "start": "00:00:01.000",
+     "duration": "0.500",
+     "status": "group1",
+     "suffix": 0,
+     "source_text": "Line 1",
+     "last_export_title": null,
+     "last_export_mode": null,
+     "last_export_start_threshold_db": null,
+     "last_export_stop_threshold_db": null,
+     "last_export_path": null,
+     "last_export_snapshot": null,
+     "avg_logprob": null,
+     "no_speech_prob": null,
+     "peak_db": -12.0,
+     "mid_share_db": -3.0,
+     "bass_share_db": -25.0
+    }
+   }
+  },
+  {
+   "undoes": null,
+   "seq": 5,
+   "t": "2026-10-25T06:12:34.029Z",
+   "type": "title",
+   "label": "1",
+   "events": [
+    {
+     "seq": 5,
+     "t": "2026-10-25T06:12:34.029Z",
+     "type": "title",
+     "clip": "1",
+     "from": "Line 1",
+     "to": "Line one!",
+     "stage": "polish",
+     "round": 1
+    },
+    {
+     "seq": 6,
+     "t": "2026-10-25T06:12:34.029Z",
+     "type": "trim",
+     "clip": "1",
+     "from_ms": [
+      1000,
+      1500
+     ],
+     "to_ms": [
+      1100,
+      1500
+     ],
+     "stage": "polish",
+     "round": 1
+    }
+   ],
+   "after": {
+    "1": {
+     "index": 1,
+     "title": "Line one!",
+     "original_start": "00:00:01.000",
+     "original_end": "00:00:01.500",
+     "start": "00:00:01.100",
+     "duration": "0.400",
+     "status": "group1",
+     "suffix": 0,
+     "source_text": "Line 1",
+     "last_export_title": null,
+     "last_export_mode": null,
+     "last_export_start_threshold_db": null,
+     "last_export_stop_threshold_db": null,
+     "last_export_path": null,
+     "last_export_snapshot": null,
+     "avg_logprob": null,
+     "no_speech_prob": null,
+     "peak_db": -12.0,
+     "mid_share_db": -3.0,
+     "bass_share_db": -25.0
+    }
+   }
+  },
+  {
+   "undoes": null,
+   "seq": 7,
+   "t": "2026-10-25T06:12:34.030Z",
+   "type": "duplicate",
+   "label": "1",
+   "events": [
+    {
+     "seq": 7,
+     "t": "2026-10-25T06:12:34.030Z",
+     "type": "duplicate",
+     "clip": "1",
+     "created": "1-2",
+     "stage": "polish",
+     "round": 1
+    }
+   ],
+   "after": {
+    "1-2": {
+     "index": 1,
+     "title": "Line one!",
+     "original_start": "00:00:01.000",
+     "original_end": "00:00:01.500",
+     "start": "00:00:01.100",
+     "duration": "0.400",
+     "status": "group1",
+     "suffix": 2,
+     "source_text": "Line 1",
+     "last_export_title": null,
+     "last_export_mode": null,
+     "last_export_start_threshold_db": null,
+     "last_export_stop_threshold_db": null,
+     "last_export_path": null,
+     "last_export_snapshot": null,
+     "avg_logprob": null,
+     "no_speech_prob": null,
+     "peak_db": -12.0,
+     "mid_share_db": -3.0,
+     "bass_share_db": -25.0
+    }
+   }
+  },
+  {
+   "undoes": null,
+   "seq": 8,
+   "t": "2026-10-25T06:12:34.038Z",
+   "type": "status",
+   "label": "2",
+   "events": [
+    {
+     "seq": 8,
+     "t": "2026-10-25T06:12:34.038Z",
+     "type": "status",
+     "clip": "2",
+     "from": "pending",
+     "to": "rejected",
+     "stage": "triage",
+     "round": 1
+    }
+   ],
+   "after": {
+    "2": {
+     "index": 2,
+     "title": "Line 2",
+     "original_start": "00:00:02.000",
+     "original_end": "00:00:02.500",
+     "start": "00:00:02.000",
+     "duration": "0.500",
+     "status": "rejected",
+     "suffix": 0,
+     "source_text": "Line 2",
+     "last_export_title": null,
+     "last_export_mode": null,
+     "last_export_start_threshold_db": null,
+     "last_export_stop_threshold_db": null,
+     "last_export_path": null,
+     "last_export_snapshot": null,
+     "avg_logprob": null,
+     "no_speech_prob": null,
+     "peak_db": -35.0,
+     "mid_share_db": -9.0,
+     "bass_share_db": -6.0
+    }
+   }
+  },
+  {
+   "undoes": null,
+   "seq": 9,
+   "t": "2026-10-25T06:12:34.038Z",
+   "type": "status",
+   "label": "3",
+   "events": [
+    {
+     "seq": 9,
+     "t": "2026-10-25T06:12:34.038Z",
+     "type": "status",
+     "clip": "3",
+     "from": "pending",
+     "to": "group2",
+     "stage": "triage",
+     "round": 1
+    }
+   ],
+   "after": {
+    "3": {
+     "index": 3,
+     "title": "Line 3",
+     "original_start": "00:00:03.000",
+     "original_end": "00:00:03.500",
+     "start": "00:00:03.000",
+     "duration": "0.500",
+     "status": "group2",
+     "suffix": 0,
+     "source_text": "Line 3",
+     "last_export_title": null,
+     "last_export_mode": null,
+     "last_export_start_threshold_db": null,
+     "last_export_stop_threshold_db": null,
+     "last_export_path": null,
+     "last_export_snapshot": null,
+     "avg_logprob": null,
+     "no_speech_prob": null,
+     "peak_db": -20.0,
+     "mid_share_db": -5.0,
+     "bass_share_db": -15.0
+    }
+   }
+  },
+  {
+   "undoes": [
+    9
+   ],
+   "seq": 10,
+   "t": "2026-10-25T06:12:34.039Z",
+   "type": "undo",
+   "label": null,
+   "events": [
+    {
+     "seq": 10,
+     "t": "2026-10-25T06:12:34.039Z",
+     "type": "undo",
+     "clip": null,
+     "label": "3",
+     "targets": [
+      9
+     ],
+     "restored": {
+      "3": "pending"
+     }
+    }
+   ],
+   "after": {
+    "3": {
+     "index": 3,
+     "title": "Line 3",
+     "original_start": "00:00:03.000",
+     "original_end": "00:00:03.500",
+     "start": "00:00:03.000",
+     "duration": "0.500",
+     "status": "pending",
+     "suffix": 0,
+     "source_text": "Line 3",
+     "last_export_title": null,
+     "last_export_mode": null,
+     "last_export_start_threshold_db": null,
+     "last_export_stop_threshold_db": null,
+     "last_export_path": null,
+     "last_export_snapshot": null,
+     "avg_logprob": null,
+     "no_speech_prob": null,
+     "peak_db": -20.0,
+     "mid_share_db": -5.0,
+     "bass_share_db": -15.0
+    }
+   }
+  },
+  {
+   "undoes": null,
+   "seq": 11,
+   "t": "2026-10-25T06:12:34.039Z",
+   "type": "status",
+   "label": "3",
+   "events": [
+    {
+     "seq": 11,
+     "t": "2026-10-25T06:12:34.039Z",
+     "type": "status",
+     "clip": "3",
+     "from": "pending",
+     "to": "rejected",
+     "stage": "triage",
+     "round": 1
+    }
+   ],
+   "after": {
+    "3": {
+     "index": 3,
+     "title": "Line 3",
+     "original_start": "00:00:03.000",
+     "original_end": "00:00:03.500",
+     "start": "00:00:03.000",
+     "duration": "0.500",
+     "status": "rejected",
+     "suffix": 0,
+     "source_text": "Line 3",
+     "last_export_title": null,
+     "last_export_mode": null,
+     "last_export_start_threshold_db": null,
+     "last_export_stop_threshold_db": null,
+     "last_export_path": null,
+     "last_export_snapshot": null,
+     "avg_logprob": null,
+     "no_speech_prob": null,
+     "peak_db": -20.0,
+     "mid_share_db": -5.0,
+     "bass_share_db": -15.0
+    }
+   }
+  }
+ ],
+ "events": [
+  {
+   "seq": 3,
+   "t": "2026-10-25T06:12:34.028Z",
+   "type": "view",
+   "clip": "1",
+   "id": "v1",
+   "start": "2026-10-25T06:12:34.028Z",
+   "dwell_ms": 3000,
+   "plays": 0,
+   "stage": "triage",
+   "round": 1
+  }
+ ]
+}
