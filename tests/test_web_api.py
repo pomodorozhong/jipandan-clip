@@ -793,6 +793,22 @@ class WebApiTests(unittest.TestCase):
                                               "reason": "update files are read by jipandan-dataset, not imported"}])
         self.assertEqual(self.round_row()["kept"], 1)
 
+    def test_start_over_stops_when_a_round_update_cannot_be_written(self):
+        revision = self.finish_a_round()
+        revision = self.client.patch("/api/clips/1", json={"expected_revision": revision, "title": "Better"},
+                                     headers=self.headers).json()["revision"]
+        body = {"expected_revision": revision, "clip_source": "lines"}
+        with patch("jipandan.web.service.write_round_file", side_effect=OSError("disk full")):
+            response = self.client.post("/api/session/start-over", json=body, headers=self.headers)
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertNotIn(".bak", " ".join(path.name for path in self.audio.parent.iterdir()))
+        self.assertEqual(self.round_row()["unsaved_changes"], 1)
+        # Once the folder can be written again, starting over saves the change first.
+        response = self.client.post("/api/session/start-over", json=body, headers=self.headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        update = self.audio.with_name(f"{self.audio.stem}.round-01.update-01.json")
+        self.assertEqual(json.loads(update.read_text())["changes"][-1]["after"]["1"]["title"], "Better")
+
     def test_a_round_file_counts_views_delivered_after_the_round_like_its_summary(self):
         self.finish_a_round()
         item = self.service.store.review_rounds()[0]
