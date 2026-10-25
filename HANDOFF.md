@@ -4,17 +4,21 @@
 
 ### feat/generated-clip-timing
 
-- **Task:** #47, improving the timing of generated clips. Not linked to the issue yet: whether one PR resolves it depends on what the owner finds off.
-- **PR:** none.
-- **Code checkpoint:** none; the branch is `main` at `a425d63` (#117 merged) plus this handoff.
-- **State:** not started; waiting for the owner to describe what felt off about generated clips' timing in the 0903 session.
-- **Next action:** ask the owner what felt off (starts too early or late, ends cut off, too long), then plan the change and how `jipandan-dataset`'s timing examples will measure it.
+- **Task:** #47, timing of generated clips. The owner's rule: a start that cuts into the voice is unacceptable; an early start or a late end is fine, since the export trims silence. Not linked to the issue: this PR advances #47 but doesn't resolve it.
+- **PR:** drafted, waiting on P-01.
+- **Code checkpoint:** `724163d` (snap starts back and ends forward), `451997d` (generated starts back off to the voice onset), `7469953` (`evaluate_candidates.py --audio` timing report), then a merge of `main` at `f9713cd` (#118); plus this handoff.
+- **State:** awaiting the owner's approval to push and open the PR.
+- **Verification:** on the merged tip, 168 Python tests and 170 frontend tests, type check and build pass; each timing commit passed on its own before the merge. Snapping was checked by dragging edges in Polish on a disposable session. On 0511, 0526, 0602 and 0903 the start rule raises acoustically clean starts from 79–86% to 85–90%. Not checked: a real clipping session with the new rules.
+- **Pending:**
+  - P-01: push `feat/generated-clip-timing` and open the PR shown in chat ("feat: keep clip edges from cutting into the voice"), `Related to #47`. Blocks the PR.
+- **Next action:** after P-01, wait for review and merge.
 
 ## Ranked work
 
-1. #47 Improve the timing of generated clips. The owner keeps transcript lines as the default because generated clips' timing felt off in the 0903 session; what exactly feels off is still to be described by the owner, so ask first. `jipandan-dataset`'s timing examples (`doc/datasets.md`) can measure edge error against approved ranges once rounds on generated clips have round files.
-2. #98 Decide whether a single export from Publish should be undoable (`needs-decision`).
-3. #108 rest: an action log for UI questions, parked until a specific question needs it.
+1. #47 Judge generated clips on the next real clipping session. Transcribe again first, since only new transcriptions get the start rule. Then compare review speed and rejections with transcript-line sessions. Known gaps: about 40% of the cut-in starts that got rejected in 0903 start inside long running speech, which the rule leaves alone; and generated ends stop before the owner's ends on about half of keeps (rarely cutting the voice itself). `scripts/evaluate_candidates.py --audio` measures both.
+2. On the next real transcription, check #118's `<audio>.words.json` and `<audio>.silero.npy` load in an experiment script, and note their real sizes.
+3. #98 Decide whether a single export from Publish should be undoable (`needs-decision`).
+4. #108 rest: an action log for UI questions, parked until a specific question needs it.
 
 ## Pending
 
