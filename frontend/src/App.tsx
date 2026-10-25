@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isExploreClip, orderByLikelyKeep, upNext } from "./reviewOrder";
 import TriageScreen from "./TriageScreen";
 import { ReviewEventQueue, isIdle, previewWaitEvent, viewChange, viewEvent, type OpenView, type PreviewWait, type ViewEndReason, type ViewSubject } from "./reviewViews";
-import { api, applySessionDelta, audioUrl, bootstrap, sendReviewEvents, uploadAudio, type Clip, type ClipFeaturesJob, type ClipTranscriptionJob, type RoundsOverview, type LeadingSilenceJob, type PreviewJob, type Session, type SessionDelta, type SnapPoints, type Status, type ClipSource, clipSourceLabels } from "./api";
+import { api, applySessionDelta, audioUrl, bootstrap, sendReviewEvents, uploadAudio, type Clip, type ClipFeaturesJob, type ClipTranscriptionJob, type RoundImport, type RoundsOverview, type LeadingSilenceJob, type PreviewJob, type Session, type SessionDelta, type SnapPoints, type Status, type ClipSource, clipSourceLabels } from "./api";
 import WaveformEditor from "./WaveformEditor";
 import { Button, CountBadge, Panel, StageLayout, StatusBadge, statusLabels } from "./ui";
 import { DEFAULT_EXPORT_SETTINGS, publishClips, type PublishView } from "./publish";
@@ -300,6 +300,10 @@ export default function App() {
   const [completingRound, setCompletingRound] = useState(false);
   // Set when ending the round failed, so the round doesn't retry by itself; ending it by hand retries.
   const [roundEndFailed, setRoundEndFailed] = useState(false);
+  const [importingRounds, setImportingRounds] = useState(false);
+  const [roundImport, setRoundImport] = useState<RoundImport | null>(null);
+  // Bumped when round files change, which the session snapshot doesn't show, so the rounds home reloads.
+  const [roundFilesVersion, setRoundFilesVersion] = useState(0);
   // The open round's details, and whether ending it early is waiting for confirmation.
   const [showRoundDetails, setShowRoundDetails] = useState(false);
   const [confirmEndRound, setConfirmEndRound] = useState(false);
@@ -1204,6 +1208,7 @@ export default function App() {
       setMode("triage");
       setSelectedId(null);
       setRoundShare(ROUND_RANDOM_SHARE);
+      setRoundImport(null);
     } catch (cause) {
       setRoundError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -1251,6 +1256,52 @@ export default function App() {
     if (roundProcessed && !completingRound && !roundEndFailed && saveState === "saved") void completeRoundRef.current();
   }, [roundProcessed, completingRound, roundEndFailed, saveState]);
 
+  async function saveRoundFile(number: number) {
+    try {
+      setSession(await api<Session>(`/session/rounds/${number}/file`, "POST"));
+      setRoundFilesVersion((version) => version + 1);
+    } catch (cause) {
+      setRoundError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  async function revealRoundFile(number: number) {
+    try {
+      await api(`/session/rounds/${number}/reveal`, "POST");
+    } catch (cause) {
+      setRoundError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  // Round files come from another project folder of the same recording; the server matches their clips by time.
+  async function importRoundFiles(files: File[]) {
+    setImportingRounds(true);
+    setRoundImport(null);
+    setRoundError("");
+    const parsed: { name: string; data: unknown }[] = [];
+    const unreadable: RoundImport["skipped"] = [];
+    for (const file of files) {
+      try {
+        parsed.push({ name: file.name, data: JSON.parse(await file.text()) });
+      } catch {
+        unreadable.push({ file: file.name, reason: "it is not a JSON file" });
+      }
+    }
+    try {
+      const objects = parsed.filter((item) => item.data && typeof item.data === "object" && !Array.isArray(item.data));
+      const next = objects.length ? await api<Session>("/session/rounds/import", "POST", { files: objects }) : null;
+      if (next) setSession(next);
+      const notObjects = parsed.filter((item) => !objects.includes(item))
+        .map((item) => ({ file: item.name, reason: "not a Jipandan round file" }));
+      setRoundImport({ imported: next?.round_import?.imported ?? [],
+        skipped: [...unreadable, ...notObjects, ...(next?.round_import?.skipped ?? [])] });
+    } catch (cause) {
+      setRoundError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setImportingRounds(false);
+    }
+  }
+
   // The rounds home's estimates follow the planned size and random share, and every finished round.
   const roundsAudio = showRoundsHome || showRoundDetails ? session?.audio : null;
   useEffect(() => {
@@ -1262,7 +1313,8 @@ export default function App() {
         .catch((cause) => { if (alive) setRoundError(cause instanceof Error ? cause.message : String(cause)); });
     }, 150);
     return () => { alive = false; window.clearTimeout(timer); };
-  }, [roundsAudio, settings.roundSize, roundShare, session?.rounds_done, session?.clip_features_complete, session?.revision]);
+  }, [roundsAudio, settings.roundSize, roundShare, session?.rounds_done, session?.clip_features_complete, session?.revision,
+    roundFilesVersion]);
 
   async function startOver(source: ClipSource) {
     if (!session || session.revision === null) return;
@@ -1483,7 +1535,9 @@ export default function App() {
         onShareChange={setRoundShare} onStart={() => void startRound(settings.roundSize, roundShare)}
         starting={startingRound} waiting={pendingRound?.audio === session.audio} onCancelWaiting={() => setPendingRound(null)}
         measuring={clipFeaturesJob} scoresReady={session.clip_features_complete}
-        onReviewAll={() => { setFreeReviewAudio(session.audio); setMode("triage"); setSelectedId(null); }} now={new Date()} />
+        onReviewAll={() => { setFreeReviewAudio(session.audio); setMode("triage"); setSelectedId(null); }} now={new Date()}
+        onSaveFile={(number) => void saveRoundFile(number)} onRevealFile={(number) => void revealRoundFile(number)}
+        onImport={(files) => void importRoundFiles(files)} importing={importingRounds} importResult={roundImport} />
       : mode === "triage" ? <TriageScreen clip={selected} upNext={triageUpNext} durationMs={session.duration_ms ?? 0} position={selectedPosition + 1} remaining={visible.length}
         counts={scopedCounts} hideScores={roundOpen} audioSrc={audioUrl()} autoplay={settings.autoplayClips}
         active={!showExportModal && !showSettings && !showHelp && !showJump && !showMerge}

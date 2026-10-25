@@ -2,31 +2,50 @@
 
 ## In progress
 
-### feat/review-rounds
+### feat/round-files-v2
 
-- **Task:** PR A of a two-PR stack for #100: turn the review set into repeatable review rounds (rounds home, planning with random share and estimates, in-round time and time by stage, top-bar progress). Branch made from `main` (`91f5467`) on 2026-10-23; not linked to #100, since only both PRs together resolve it.
-- **PR:** opened 2026-10-24 against `main` (`gh pr list --head feat/review-rounds`).
-- **Code checkpoint:** `1fff4d1` feat(web): work through a recording in review rounds, on `91f5467`.
-- **Design:** the owner approved the full-flow mockup (rounds home with planning in place, no dialogs between steps; round named under the app name with the top bar's bottom edge as progress, a full-width strip under 600 px; no new accent colors). Behavior and reasons are in `doc/app-rebuild-plan.md`, "Review rounds".
-- **State:** done, awaiting review. The owner's request to move **Analyze review time** out of Settings is folded into `1fff4d1`: each round summary has `stages` (time, views, clips, changes per stage, counting only events made while the round was open), shown as a "Time by stage" table in the finished round's summary; Settings → Review time and `GET /api/session/stage-times` are gone.
-- **Verification:** at `1fff4d1`: `uv run python -m unittest discover -s tests` (115), `npm --prefix frontend run test` (160), `check`, `build` passed; browser-checked on a throwaway copy of 0903 (plan, warnings, start, decide, top bar at 1440/800/375 px, round details, end early, auto-end on the last clip, free review and back; after the move: the stage table at 800 and 375 px, where it scrolls inside the summary, and Settings without Review time).
-- **Next action:** address review; after it squash-merges, rebase `feat/round-files` onto the new `main` (`git rebase --onto origin/main <this branch's tip> feat/round-files`) and retarget its PR to `main`.
+- **Task:** PR 4 of the review-data stack: re-land round files (#100), which #102 never brought to `main` because it merged into its already squash-merged base branch. Cherry-picked from `6ebecba` with fixes folded in: the file holds the round as it ended and how it was picked, and an import counts each file clip once (#103's import part) and may match clips an earlier round left unfinished. Closes #100, #103, #106 once on `main`.
+- **PR:** against `feat/sampling-v2`, opened 2026-10-25 (`gh pr list --head feat/round-files-v2`); unlinked; no CI checks are configured.
+- **Code checkpoint:** `7698814` feat(web): save each finished round to a file a fresh project can import.
+- **Verification:** at `7698814`: `uv run python -m unittest discover -s tests` (138), `npm --prefix frontend run test` (166), `check`, `build` passed. Browser-checked on a throwaway copy of 0903: old rounds' statuses rebuilt once from history (`review-round-outcomes`); Save for round 2 wrote a file whose time equals the summary (78,591 ms); round 3 picked with sampling 2 (`random_chance` 20 ÷ 5,981, every random score below the top cut) wrote its file at the end with matching time (26,419 ms); after Start over, importing both files counted each round from its 100 file clips, one keeper each, and round 3 matched 140 clips with 10 unmatched (80 before the unfinished-clip fix). Not checked: Show in Finder, the import dialog's file picker (import was sent through the API).
+- **State:** awaiting review and merge.
+- **Next action:** after PR 3 merges and this PR retargets to `main`, rebase onto `main` (`git rebase --onto origin/main <old base tip> feat/round-files-v2`), rerun the checks, and force-push with lease.
 
-### feat/round-files
+### feat/sampling-v2
 
-- **Task:** PR B for #100, stacked on `feat/review-rounds`: each finished round writes `<recording>.round-NN.json` once (audio hash, round settings, each clip's time range, role, score, outcome, in-round time per stage); older rounds can **Save** theirs; **Import round files…** matches clips by time into a fresh project. Closes #100 once it targets `main`; not linked.
-- **PR:** opened 2026-10-24 against `feat/review-rounds` (`gh pr list --head feat/round-files`).
-- **Code checkpoint:** `ac2a43f` feat(web): save each finished round to a file a fresh project can import, on `1fff4d1`.
-- **State:** done, awaiting review. Rebased onto the amended PR A commit: `clip_times` now uses `round_events`, and a round imported from a file has `stages: null`, so its summary shows no time by stage (its views and changes stayed in the other project).
-- **Verification:** at `ac2a43f`: Python (122), frontend (160), `check`, `build` passed; browser-checked the round summary with its round-file line and stage table. Earlier, at `951a0e0`: saving files for older rounds and importing round files into a fresh project folder of 0903 cut into transcript lines (269 matched, 49 file clips unmatched, junk file skipped). Not checked: Show in Finder, and an imported round's summary in the browser (covered by a unit test).
-- **Next action:** after PR A merges, rebase onto `main`, rerun the checks, and retarget the PR.
+- **Task:** PR 3: new rounds take the top clips first, then a uniform sample of the rest (sampling 2), and save each random clip's chance; documentation corrected (#104). Closes #104.
+- **PR:** against `fix/round-stats`, opened 2026-10-25 (`gh pr list --head feat/sampling-v2`); unlinked.
+- **Code checkpoint:** `8cef76a` feat(web): pick each round's top clips first and save every clip's chance of being picked.
+- **Verification:** at `8cef76a`, in a detached worktree: Python and frontend tests (166), `check` passed; exact enumeration tests cover the chances and the weighted keep rate.
+- **State:** awaiting review and merge.
+- **Next action:** after PR 2 merges, rebase onto `main`, rerun the checks, and force-push with lease.
+
+### fix/round-stats
+
+- **Task:** PR 2: a finished round keeps the statuses its clips had when it ended (older rounds read back once from history), and random labels count one per draw (#103 except import). Related to #103.
+- **PR:** against `fix/view-timing`, opened 2026-10-25 (`gh pr list --head fix/round-stats`); unlinked.
+- **Code checkpoint:** `ed43e86` fix(web): keep each round's results as they were when it ended.
+- **Verification:** at `ed43e86`, in a detached worktree: Python and frontend tests (166), `check` passed.
+- **State:** awaiting review and merge.
+- **Next action:** after PR 1 merges, rebase onto `main`, rerun the checks, and force-push with lease.
+
+### fix/view-timing
+
+- **Task:** PR 1: views record their stage and split on stage changes and covering dialogs (#105); views stay queued until the server confirms them, with event IDs stored once, and ending a round waits for them; view time is cut to the round's interval (#106's delivery part); Publish counts playback and logs preview waits (part of #108). Closes #105.
+- **PR:** against `main` (from `f849363`), opened 2026-10-25 (`gh pr list --head fix/view-timing`); unlinked.
+- **Code checkpoint:** `5e42f00` fix(web): time each view in the stage it happened and deliver it before a round ends.
+- **Verification:** at `5e42f00`: Python, frontend tests (166), `check`, `build` passed. Browser-checked on the 0903 copy: Polish → Triage on the same clip stored a `polish` view ended by `stage_change` and a separate `triage` view; Settings and round details ended views as `covered`; Publish views counted 2 plays; `preview_wait` events stored (reference 788 ms, candidate 88 ms); ending round 2 stored the last view before `review-round-complete`. Not checked: a failed delivery blocking the round end in the browser (covered by queue unit tests).
+- **State:** awaiting review and merge.
+- **Next action:** address review; merge the stack bottom up, rebasing each next branch before its merge.
 
 ## Ranked work
 
-1. #100 Review rounds and round files: PR A and PR B awaiting review and merge, in that order.
-2. #47 Improve the timing of generated clips. The owner keeps transcript lines as the default because generated clips' timing felt off in the 0903 session; what exactly feels off is still to be described by the owner.
-3. #98 Decide whether a single export from Publish should be undoable (`needs-decision`).
+1. Review-data stack, awaiting review and merge: `fix/view-timing` → `fix/round-stats` → `feat/sampling-v2` → `feat/round-files-v2`. Together they resolve #100, #103, #104, #105, #106. Merged branches are now deleted automatically, which moves the next PR onto `main`.
+2. #107 Export reproducible training datasets from review history; builds on the stack's saved statuses, sampling chances, and import provenance.
+3. #47 Improve the timing of generated clips. The owner keeps transcript lines as the default because generated clips' timing felt off in the 0903 session; what exactly feels off is still to be described by the owner.
+4. #98 Decide whether a single export from Publish should be undoable (`needs-decision`).
+5. #108 rest: an action log for UI questions, parked until a specific question needs it.
 
 ## Pending
 
-None.
+None. The remote branches `cursor/whisper-defaults-e294` (PR #1 closed unmerged) and `sherpa-onnx-paraformer` (no PR) were kept, since they may hold unique work.

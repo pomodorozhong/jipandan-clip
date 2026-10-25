@@ -67,6 +67,15 @@ class RoundRequest(BaseModel):
     random_share: float
 
 
+class RoundFile(BaseModel):
+    name: str = Field(max_length=512)
+    data: dict
+
+
+class RoundImport(BaseModel):
+    files: list[RoundFile] = Field(max_length=100)
+
+
 class StorageRequest(BaseModel):
     expected_revision: int | None = Field(default=None, ge=0)
     clip_dir: str = Field(min_length=1, max_length=4096)
@@ -272,6 +281,19 @@ def create_app(
     @app.post("/api/session/rounds/complete")
     def complete_round():
         return SessionJSON(app.state.service.complete_round())
+
+    @app.post("/api/session/rounds/import")
+    def import_round_files(request: RoundImport):
+        return SessionJSON(app.state.service.import_round_files([(item.name, item.data) for item in request.files]))
+
+    @app.post("/api/session/rounds/{number}/file")
+    def save_round_file(number: int):
+        return SessionJSON(app.state.service.save_round_file(number))
+
+    @app.post("/api/session/rounds/{number}/reveal")
+    def reveal_round_file(number: int):
+        app.state.service.reveal_round_file(number)
+        return {"revealed": True}
 
     @app.post("/api/review-log")
     def record_review_events(request: ReviewEvents):

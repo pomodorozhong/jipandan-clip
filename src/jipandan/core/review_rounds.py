@@ -137,6 +137,19 @@ def closing_statuses(roles: dict[str, str], clips: Iterable[tuple[str, int, str]
     return {clip_id: status for clip_id, index, status in clips if str(index) in roles}
 
 
+# What a round file's outcome stands for when its clip is still Unsorted here.
+OUTCOME_STATUS = {"kept": "exported", "rejected": "rejected", "unfinished": "pending"}
+# A clip here cut from part of a round file's decided clip: out of later rounds, but neither a keeper nor a label.
+COVERED = "covered"
+
+
+def round_statuses(item: dict, clips: Sequence[tuple[str, int, str, float | None]]) -> list[str]:
+    """The statuses a round's summary counts: its saved clips, or for a round read from a file, the file's clips."""
+    if item.get("file_clips") is not None:
+        return [OUTCOME_STATUS[clip["outcome"]] for clip in item["file_clips"]]
+    return [status for _, _, status in round_members(item, clips)]
+
+
 def round_members(item: dict, clips: Sequence[tuple[str, int, str, float | None]]) -> list[tuple[str, int, str]]:
     """A round's clips as (clip_id, index, status): as they were when it ended, or as they are while it is open."""
     closed = item.get("closed_status")
@@ -157,7 +170,13 @@ def random_labels(rounds: Sequence[dict], clips: Sequence[tuple[str, int, str, f
         if index not in scores or clip_id == str(index):
             scores[index] = score
     labels: dict[int, tuple[float, bool]] = {}
+    from_files: list[tuple[float, bool]] = []
     for item in rounds:
+        if item.get("file_clips") is not None:
+            # A round read from a file: one label per random clip the other project decided, with its score there.
+            from_files.extend((clip["score"], clip["outcome"] == "kept") for clip in item["file_clips"]
+                              if clip["role"] == RANDOM and clip["outcome"] != "unfinished" and clip["score"] is not None)
+            continue
         statuses: dict[int, list[str]] = {}
         for _, index, status in round_members(item, clips):
             statuses.setdefault(index, []).append(status)
@@ -167,7 +186,7 @@ def random_labels(rounds: Sequence[dict], clips: Sequence[tuple[str, int, str, f
             if role != RANDOM or index in labels or not decided or scores.get(index) is None:
                 continue
             labels[index] = (scores[index], any(status in KEPT for status in decided))
-    return list(labels.values())
+    return [*labels.values(), *from_files]
 
 
 def keep_curve(samples: Sequence[tuple[float, bool]]) -> tuple[float, float] | None:
@@ -257,16 +276,42 @@ def round_events(item: dict, clip_index: dict[str, int], events: Iterable[dict])
     return kept
 
 
-def round_time(item: dict, clip_index: dict[str, int], events: Iterable[dict]) -> dict[str, int]:
-    """Milliseconds spent per stage on a round's clips while it was open; earlier views are left out."""
-    totals = dict.fromkeys(STAGES, 0)
+def clip_times(item: dict, clip_index: dict[str, int], events: Iterable[dict]) -> dict[str, dict[str, int]]:
+    """Milliseconds per stage on each of a round's clips, by clip ID, while it was open; earlier views are left out."""
+    times: dict[str, dict[str, int]] = {}
     for event in round_events(item, clip_index, events):
         if event["type"] != "view":
             continue
         stage = event_stage(event)
-        if stage in totals:
-            totals[stage] += event["dwell_ms"]
+        if stage in STAGES:
+            clip = times.setdefault(event["clip"], dict.fromkeys(STAGES, 0))
+            clip[stage] += event["dwell_ms"]
+    return times
+
+
+def round_time(item: dict, clip_index: dict[str, int], events: Iterable[dict]) -> dict[str, int]:
+    """Milliseconds spent per stage on a round's clips while it was open; a round read from a file brings its own."""
+    if item.get("stage_ms") is not None:
+        return dict(item["stage_ms"])
+    totals = dict.fromkeys(STAGES, 0)
+    for clip in clip_times(item, clip_index, events).values():
+        for stage, ms in clip.items():
+            totals[stage] += ms
     return totals
+
+
+def effective_clips(
+    rounds: Sequence[dict], clips: Sequence[tuple[str, int, str, float | None]],
+) -> list[tuple[str, int, str, float | None]]:
+    """Clips with the outcome a round file recorded standing in for Unsorted, so imported decisions count.
+
+    Clips only covered by a file clip another clip here took the outcome of read as ``covered``.
+    """
+    outcomes = {int(index): COVERED for item in rounds for index in item.get("covered") or []}
+    outcomes.update({int(index): OUTCOME_STATUS[outcome] for item in rounds
+                     for index, outcome in (item.get("outcomes") or {}).items()})
+    return [(clip_id, index, outcomes.get(index, status) if status == "pending" else status, score)
+            for clip_id, index, status, score in clips]
 
 
 def overview(
@@ -279,6 +324,7 @@ def overview(
     clips already kept plus, for every Unsorted clip, its chance of being kept from the keep
     curve; the next round adds the expected keepers among the clips it would pick.
     """
+    clips = effective_clips(rounds, clips)
     clip_index = {clip_id: index for clip_id, index, _, _ in clips}
     labels = random_labels(rounds, clips)
     curve = keep_curve(labels)
@@ -300,14 +346,16 @@ def overview(
 
     summaries = []
     for item in rounds:
-        members = [status for _, _, status in round_members(item, clips)]
+        members = round_statuses(item, clips)
         kept = sum(status in KEPT for status in members)
         times = round_time(item, clip_index, events)
-        stages = [row for row in stage_breakdown(round_events(item, clip_index, events))["stages"]
-                  if row["stage"] != "unknown"]
+        # A round read from a file has no views or changes here to break down.
+        stages = None if item.get("stage_ms") is not None else [
+            row for row in stage_breakdown(round_events(item, clip_index, events))["stages"] if row["stage"] != "unknown"]
         summaries.append({
             "number": item["number"], "size": item["size"], "clips": len(members), "random_share": item["random_share"],
             "started": item.get("started"), "completed": item["completed"],
+            "file": item.get("file"), "imported": item.get("imported"),
             "kept": kept, "processed": sum(status in PROCESSED for status in members),
             "decided": sum(status != "pending" for status in members),
             "time_ms": sum(times.values()), "stage_ms": times, "stages": stages, "captured": share_of_stream(kept),
