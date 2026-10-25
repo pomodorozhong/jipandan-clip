@@ -809,6 +809,24 @@ class WebApiTests(unittest.TestCase):
         update = self.audio.with_name(f"{self.audio.stem}.round-01.update-01.json")
         self.assertEqual(json.loads(update.read_text())["changes"][-1]["after"]["1"]["title"], "Better")
 
+    def test_importing_a_round_file_with_a_malformed_change_skips_it(self):
+        self.finish_a_round()
+        data = json.loads(self.audio.with_name(f"{self.audio.stem}.round-01.json").read_text())
+        data["changes"][-1]["after"] = {clip_id: {} for clip_id in data["changes"][-1]["after"]}
+        data["round"]["seed"] = "other"
+        body = {"files": [{"name": "r.json", "data": data}]}
+        response = self.client.post("/api/session/rounds/import", json=body, headers=self.headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["round_import"]["skipped"],
+                         [{"file": "r.json", "reason": "a change in the file is malformed"}])
+        data["changes"][-1]["after"] = {clip_id: {**clip, "duration": 10 ** 400} for clip_id, clip in
+                                        json.loads(self.audio.with_name(f"{self.audio.stem}.round-01.json").read_text())
+                                        ["changes"][-1]["after"].items()}
+        response = self.client.post("/api/session/rounds/import", json={"files": [{"name": "r.json", "data": data}]},
+                                    headers=self.headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["round_import"]["skipped"][0]["reason"], "a change in the file is malformed")
+
     def test_a_round_file_counts_views_delivered_after_the_round_like_its_summary(self):
         self.finish_a_round()
         item = self.service.store.review_rounds()[0]

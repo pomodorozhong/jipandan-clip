@@ -118,6 +118,30 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(reasons["junk.json"], "not a Jipandan round file")
         self.assertEqual(reasons["broken.json"], "not a Jipandan round file")
 
+    def test_files_with_malformed_history_are_skipped_without_stopping_the_build(self):
+        data, update = round_two()
+        broken = copy.deepcopy(update)
+        broken["changes"][0]["after"]["1-2"] = {}
+        dataset = self.build([("r.json", data), ("u.json", broken)])
+        self.assertEqual(len(dataset["ranking"]), 5)
+        reasons = {entry["file"]: entry.get("reason") for entry in dataset["manifest"]["inputs"]}
+        self.assertEqual(reasons["u.json"], "a change in the file is malformed")
+        # An update naming a clip outside its round is skipped on its own; the round still counts.
+        outside = copy.deepcopy(update)
+        outside["changes"][0]["after"] = {"9": outside["changes"][0]["after"]["1-2"]}
+        dataset = self.build([("r.json", data), ("u.json", update), ("v.json", outside)])
+        self.assertEqual(len(dataset["ranking"]), 5)
+        inputs = {entry["file"]: entry for entry in dataset["manifest"]["inputs"]}
+        self.assertEqual([inputs[name]["used"] for name in ("r.json", "u.json", "v.json")], [True, True, False])
+        self.assertEqual(inputs["v.json"]["reason"], "the file's history names a clip outside its round")
+        self.assertEqual(dataset["ranking"][0]["sources"], ["r.json", "u.json"])
+        # A number too large for a float is malformed too.
+        huge = copy.deepcopy(update)
+        huge["changes"][0]["after"]["1-2"]["duration"] = 10 ** 400
+        dataset = self.build([("r.json", data), ("u.json", huge)])
+        self.assertEqual(len(dataset["ranking"]), 5)
+        self.assertEqual(dataset["manifest"]["inputs"][1]["reason"], "a change in the file is malformed")
+
     def test_copies_sharing_a_name_give_the_same_bytes_in_any_order(self):
         data, _ = round_two()
         other = copy.deepcopy(data)

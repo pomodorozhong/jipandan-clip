@@ -16,8 +16,8 @@ from pathlib import Path
 from jipandan.core.models import clip_candidate_from_dict
 from jipandan.core.review_rounds import LABELS_TARGET, RANDOM, pick_chance
 from jipandan.core.round_files import (
-    VERSION as ROUND_FILE_VERSION, RoundHistory, clip_index, file_kind, outcome, parse_round_file, parse_update_file,
-    time_ms,
+    VERSION as ROUND_FILE_VERSION, RoundHistory, check_in_round, clip_index, file_kind, outcome, parse_round_file,
+    parse_update_file, time_ms,
 )
 
 FORMAT = "jipandan-dataset"
@@ -87,7 +87,16 @@ def build_dataset(files: Sequence[tuple[str, object]]) -> dict:
         version, name, data, entry = candidates[0]
         for _, _, _, other_entry in candidates[1:]:
             other_entry.update(used=False, reason=f"another copy of this round, {name}, is used")
-        round_updates = sorted(updates.get(key, {}).values(), key=lambda item: (item[0], item[2]["content_sha256"]))
+        round_updates = []
+        for update_name, update, update_entry in sorted(updates.get(key, {}).values(),
+                                                        key=lambda item: (item[0], item[2]["content_sha256"])):
+            # An update that fails is skipped on its own; the round and its other updates still count.
+            try:
+                check_in_round(data["round"]["roles"], update["changes"], update["events"])
+            except ValueError as exc:
+                update_entry.update(used=False, reason=str(exc))
+                continue
+            round_updates.append((update_name, update, update_entry))
         try:
             history = RoundHistory(data, [update for _, update, _ in round_updates])
         except ValueError as exc:
