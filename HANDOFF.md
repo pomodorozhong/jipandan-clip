@@ -5,12 +5,11 @@
 ### fix/nested-clip-matching
 
 - **Task:** #115: importing a round file matched a clip nested inside another to the outer file clip, leaving the file clip with its own range unmatched, and could give a file clip's outcome to a nested clip. Ties are now broken by overlap over the union. Closes #115; the branch is linked to it.
-- **PR:** not opened; see P-02.
+- **PR:** #116 against `main`, opened 2026-10-25 after the owner approved its title and body (`gh pr list --head fix/nested-clip-matching`); no CI checks are configured.
 - **Code checkpoint:** `0d3cc40` fix: match nested clips to the file clip with the same range when importing round files.
 - **Verification:** at `0d3cc40`: `uv run python -m unittest discover -s tests` (156) passed; the new test fails without the fix. On 0903 round 1 (version 1 and version 2 files) against the generated clips' SRT, with nothing taken as in a fresh session: unmatched file clips 38 → 3, and outcomes on a clip of a different range 44 → 0. The 3 are copies: the file holds 2 clips at one range and 3 at another, and the SRT has one at each. Not checked: an import through the app on a cloned project (the functions were run directly); frontend checks (no frontend change).
-- **State:** awaiting the owner's review before push.
-- **Pending:** **P-02:** push `fix/nested-clip-matching` and open its PR against `main` with the title and body shown in chat; blocks the PR.
-- **Next action:** after P-02 is approved, push and open the PR.
+- **State:** awaiting review and merge.
+- **Next action:** address review; after merge, remove this subsection in the next work branch's `docs:` commit.
 
 ## Ranked work
 
