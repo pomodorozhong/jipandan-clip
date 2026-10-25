@@ -481,6 +481,45 @@ class WebApiTests(unittest.TestCase):
                          [("view", "v-1", "triage"), ("preview_wait", "w-1", "publish")])
         self.assertEqual((events[1]["wait_ms"], events[1]["preview"], events[1]["outcome"]), (1800, "candidate", "ready"))
 
+    def test_a_finished_round_keeps_its_clips_as_they_were_when_it_ended(self):
+        self.open()
+        self.measure_clip_features()
+        state = self.client.post("/api/session/rounds", json={"size": 10, "random_share": 0.5},
+                                 headers=self.headers).json()
+        self.client.patch("/api/clips/1", json={"expected_revision": state["revision"], "status": "group1"},
+                          headers=self.headers)
+        done = self.client.post("/api/session/rounds/complete", headers=self.headers).json()
+        self.client.patch("/api/clips/1", json={"expected_revision": done["revision"], "status": "rejected"},
+                          headers=self.headers)
+        summary = self.client.get("/api/session/rounds").json()["rounds"][0]
+        self.assertEqual((summary["kept"], summary["decided"]), (1, 1))
+
+    def test_rounds_finished_before_saving_their_clips_are_read_back_from_the_history(self):
+        self.open()
+        self.measure_clip_features()
+        state = self.client.post("/api/session/rounds", json={"size": 10, "random_share": 0.5},
+                                 headers=self.headers).json()
+        self.client.patch("/api/clips/1", json={"expected_revision": state["revision"], "status": "group1"},
+                          headers=self.headers)
+        done = self.client.post("/api/session/rounds/complete", headers=self.headers).json()
+        self.client.patch("/api/clips/1", json={"expected_revision": done["revision"], "status": "rejected"},
+                          headers=self.headers)
+        # An older app saved the round without its clips' statuses.
+        database = store_path(self.audio.resolve())
+        with sqlite3.connect(database) as db:
+            rounds = json.loads(db.execute("SELECT value FROM meta WHERE key = 'review_rounds'").fetchone()[0])
+            del rounds[0]["closed_status"]
+            db.execute("UPDATE meta SET value = ? WHERE key = 'review_rounds'", (json.dumps(rounds),))
+        self.service.close()
+        reopened = SessionService(self.root / "clips", app_paths=self.paths)
+        try:
+            reopened.open_audio(self.audio)
+            summary = reopened.review_rounds()["rounds"][0]
+            self.assertEqual((summary["kept"], summary["decided"]), (1, 1))
+            self.assertEqual(reopened.store.review_rounds()[0]["closed_status"], {"1": "group1", "2": "pending"})
+        finally:
+            reopened.close()
+
     def test_round_stats_count_views_and_changes_made_during_the_round(self):
         self.open()
         audio = str(self.audio.resolve())

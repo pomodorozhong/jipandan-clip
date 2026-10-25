@@ -37,7 +37,8 @@ from jipandan.core.paths import AppPaths, default_export_dir, get_app_paths, res
 from jipandan.core.candidates import candidates_srt_path, is_candidates_srt
 from jipandan.core.snap_points import KINDS as SNAP_KINDS, load_snap_points, snap_points_path
 from jipandan.core.review_rounds import (
-    DEFAULT_SIZE, MAX_SIZE, MIN_SIZE, RANDOM_SHARE, STAT_EVENTS, in_pool, pick_round, set_order_key, unprocessed,
+    DEFAULT_SIZE, MAX_SIZE, MIN_SIZE, RANDOM_SHARE, STAT_EVENTS, closing_statuses, in_pool, pick_round, set_order_key,
+    unprocessed,
 )
 from jipandan.core.review_rounds import overview as round_overview
 from jipandan.core.srt import parse_srt, segment_scores_path
@@ -958,7 +959,8 @@ class SessionService:
                 raise InvalidEdit("No review round is open")
             left = unprocessed(current["roles"], [(c.index, c.status) for c in session.candidates])
             completed = {"t": utc_now(), "unprocessed": left}
-            rounds = [*self._rounds[:-1], {**current, "completed": completed}]
+            closed = closing_statuses(current["roles"], [(c.clip_id, c.index, c.status) for c in session.candidates])
+            rounds = [*self._rounds[:-1], {**current, "completed": completed, "closed_status": closed}]
             self.store.save_review_rounds(rounds, {"type": "review-round-complete", "number": current["number"],
                                                    **completed})
             self._rounds = rounds
@@ -1010,10 +1012,29 @@ class SessionService:
         self.session = session
         self.store = store
         self._title_suggestions = store.suggestions() if store is not None else {}
-        self._rounds = store.review_rounds() if store is not None else []
+        self._rounds = self._with_closing_statuses(session, store) if store is not None else []
         self._payload_cache.clear()
         self._score_cache = None
         self._merge_preview_cache = None
+
+    @staticmethod
+    def _with_closing_statuses(session: Session | None, store: RecordingStore) -> list[dict]:
+        """The store's rounds, after saving how each round finished before #103 left its clips.
+
+        Rounds finished before then saved no statuses; they are read back from the review history
+        as of each round's end, once, so later decisions stop changing those rounds' results.
+        """
+        rounds = store.review_rounds()
+        missing = [item for item in rounds if item.get("completed") and "closed_status" not in item]
+        if session is None or not missing:
+            return rounds
+        for item in missing:
+            then = store.statuses_at(item["completed"]["t"])
+            clips = [(c.clip_id, c.index, then.get(c.clip_id, c.status) if c.clip_id in then else c.status)
+                     for c in session.candidates]
+            item["closed_status"] = closing_statuses(item["roles"], [clip for clip in clips if clip[2] is not None])
+        store.save_review_rounds(rounds, {"type": "review-round-outcomes", "rounds": [item["number"] for item in missing]})
+        return rounds
 
     def _scores(self, session: Session) -> list[float | None]:
         signals = tuple(

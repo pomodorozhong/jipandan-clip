@@ -111,6 +111,48 @@ def in_pool(rounds: Sequence[dict], clips: Sequence[tuple[int, str]]) -> set[int
     return {index for index, _ in clips} - taken - decided
 
 
+def closing_statuses(roles: dict[str, str], clips: Iterable[tuple[str, int, str]]) -> dict[str, str]:
+    """The round's clips, given as (clip_id, index, status), as {clip_id: status} to save when it ends.
+
+    A finished round reports what it found while it was open: a clip it left Unsorted and that is
+    decided later, in another round or in free review, doesn't count toward it.
+    """
+    return {clip_id: status for clip_id, index, status in clips if str(index) in roles}
+
+
+def round_members(item: dict, clips: Sequence[tuple[str, int, str, float | None]]) -> list[tuple[str, int, str]]:
+    """A round's clips as (clip_id, index, status): as they were when it ended, or as they are while it is open."""
+    closed = item.get("closed_status")
+    if item.get("completed") and closed is not None:
+        return [(clip_id, int(clip_id.split("-")[0]), status) for clip_id, status in closed.items()]
+    return [(clip_id, index, status) for clip_id, index, status, _ in clips if str(index) in item["roles"]]
+
+
+def random_labels(rounds: Sequence[dict], clips: Sequence[tuple[str, int, str, float | None]]) -> list[tuple[float, bool]]:
+    """One (score, kept) label per random clip decided in its round.
+
+    A label stands for one random draw: a clip drawn again after a round left it Unsorted counts once,
+    in the round that decided it, and clips later split from it add no labels of their own. It is kept
+    when any part of it was kept, and scored as the clip was first cut.
+    """
+    scores: dict[int, float | None] = {}
+    for clip_id, index, _, score in clips:
+        if index not in scores or clip_id == str(index):
+            scores[index] = score
+    labels: dict[int, tuple[float, bool]] = {}
+    for item in rounds:
+        statuses: dict[int, list[str]] = {}
+        for _, index, status in round_members(item, clips):
+            statuses.setdefault(index, []).append(status)
+        for key, role in item["roles"].items():
+            index = int(key)
+            decided = [status for status in statuses.get(index, []) if status != "pending"]
+            if role != RANDOM or index in labels or not decided or scores.get(index) is None:
+                continue
+            labels[index] = (scores[index], any(status in KEPT for status in decided))
+    return list(labels.values())
+
+
 def keep_curve(samples: Sequence[tuple[float, bool]]) -> tuple[float, float] | None:
     """Fit P(kept | score) as a logistic curve on random clips' (score, kept) labels.
 
@@ -221,15 +263,7 @@ def overview(
     curve; the next round adds the expected keepers among the clips it would pick.
     """
     clip_index = {clip_id: index for clip_id, index, _, _ in clips}
-    by_index: dict[int, list[tuple[str, float | None]]] = {}
-    for clip_id, index, status, score in clips:
-        by_index.setdefault(index, []).append((status, score))
-
-    labels = [
-        (score, status in KEPT)
-        for item in rounds for index, role in item["roles"].items() if role == RANDOM
-        for status, score in by_index.get(int(index), []) if status != "pending" and score is not None
-    ]
+    labels = random_labels(rounds, clips)
     curve = keep_curve(labels)
     fallback = sum(kept for _, kept in labels) / len(labels) if labels else 0.0
 
@@ -249,7 +283,7 @@ def overview(
 
     summaries = []
     for item in rounds:
-        members = [status for index in item["roles"] for status, _ in by_index.get(int(index), [])]
+        members = [status for _, _, status in round_members(item, clips)]
         kept = sum(status in KEPT for status in members)
         times = round_time(item, clip_index, events)
         stages = [row for row in stage_breakdown(round_events(item, clip_index, events))["stages"]
