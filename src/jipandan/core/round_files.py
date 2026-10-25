@@ -393,30 +393,35 @@ class RoundHistory:
         return marks
 
 
-def match_clips(file_clips: Sequence[dict], clips: Sequence[tuple[int, int, int]]) -> dict[int, tuple[float, dict]]:
+Fit = tuple[float, float]
+
+
+def match_clips(file_clips: Sequence[dict], clips: Sequence[tuple[int, int, int]]) -> dict[int, tuple[Fit, dict]]:
     """Map SRT indexes here, from ``clips`` as (index, start_ms, end_ms), to the file clip each overlaps most.
 
     Clips are matched by time, not index, so a project cut into different clips still finds them.
-    Each match comes with its overlap as a share of the shorter clip; several clips here can match
-    one file clip when this project cut it into parts.
+    Each match comes with its fit: the overlap as a share of the shorter clip, then as a share of
+    both clips together, which breaks ties between nested clips in favor of the same range. Several
+    clips here can match one file clip when this project cut it into parts.
     """
     ordered = sorted(file_clips, key=lambda clip: clip["start_ms"])
     starts = [clip["start_ms"] for clip in ordered]
-    matches: dict[int, tuple[float, dict]] = {}
+    matches: dict[int, tuple[Fit, dict]] = {}
     for index, start, end in clips:
         position = max(0, bisect.bisect_left(starts, start) - 1)
         while position < len(ordered) and ordered[position]["start_ms"] < end:
             clip = ordered[position]
             overlap = min(end, clip["end_ms"]) - max(start, clip["start_ms"])
             shorter = min(end - start, clip["end_ms"] - clip["start_ms"])
-            share = overlap / shorter if shorter > 0 else 0.0
-            if share >= MIN_OVERLAP and share > matches.get(index, (0.0, {}))[0]:
-                matches[index] = (share, clip)
+            union = max(end, clip["end_ms"]) - min(start, clip["start_ms"])
+            fit = (overlap / shorter if shorter > 0 else 0.0, overlap / union if union > 0 else 0.0)
+            if fit[0] >= MIN_OVERLAP and fit > matches.get(index, ((0.0, 0.0), {}))[0]:
+                matches[index] = (fit, clip)
             position += 1
     return matches
 
 
-def imported_round(history: RoundHistory, matches: dict[int, tuple[float, dict]], number: int, file_name: str) -> dict:
+def imported_round(history: RoundHistory, matches: dict[int, tuple[Fit, dict]], number: int, file_name: str) -> dict:
     """A finished round here built from a round file's clips matched by ``match_clips``.
 
     Each file clip was one decision, so it counts once: its outcome goes to the clip here that
@@ -431,10 +436,10 @@ def imported_round(history: RoundHistory, matches: dict[int, tuple[float, dict]]
         for stage in STAGES:
             stage_ms[stage] += clip[stage]
     matched_clips = {id(clip) for _, clip in matches.values()}
-    best: dict[int, tuple[float, int]] = {}
-    for index, (share, clip) in sorted(matches.items()):
-        if share > best.get(id(clip), (0.0, 0))[0]:
-            best[id(clip)] = (share, index)
+    best: dict[int, tuple[Fit, int]] = {}
+    for index, (fit, clip) in sorted(matches.items()):
+        if fit > best.get(id(clip), ((0.0, 0.0), 0))[0]:
+            best[id(clip)] = (fit, index)
     primary = {index for _, index in best.values()}
     return {
         "number": number, "size": len(file_clips), "pool": info.get("pool"), "total": info.get("total"),
