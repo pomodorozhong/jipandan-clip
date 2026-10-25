@@ -945,7 +945,8 @@ class SessionService:
             rounds = [*self._rounds, picked]
             self.store.save_review_rounds(rounds, {
                 "type": "review-round", **{key: picked[key] for key in (
-                    "number", "size", "pool", "total", "random_share", "seed", "score_version", "top", "random")},
+                    "number", "size", "pool", "total", "random_share", "seed", "score_version", "sampling",
+                    "random_chance", "top", "random")},
             })
             self._rounds = rounds
             return self.snapshot()

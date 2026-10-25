@@ -1,11 +1,12 @@
 """Review rounds: fixed batches of clips, each the top Likely keep clips not yet reviewed plus a random sample.
 
 Reviewing only the top of the ranking would leave no labels on clips the score ranks low,
-so a model retrained on them could not correct its own blind spots. Each round's random part
-is a uniform sample of the clips no earlier round took (its pool), drawn regardless of score:
-every clip in the pool had a known chance of being reviewed, so the review log can be
-reweighted to stand for the whole recording (inverse propensity weighting). The random labels
-also estimate how many keepers the stream holds. See doc/app-rebuild-plan.md, "Review rounds".
+so a model retrained on them could not correct its own blind spots. Each round takes the
+highest-scored clips of its pool (the clips no round has decided) and then a uniform sample
+of the rest, drawn regardless of score: top clips were certain to be reviewed and every other
+pool clip had the same recorded chance, so the review log can be reweighted to stand for the
+pool (inverse propensity weighting). The random labels also estimate how many keepers the
+stream holds. See doc/app-rebuild-plan.md, "Review rounds".
 """
 
 from __future__ import annotations
@@ -23,6 +24,10 @@ RANDOM_SHARE = 0.2
 MIN_SIZE = 10
 MAX_SIZE = 5000
 TOP, RANDOM = "top", "random"
+# How rounds are picked. 1 (rounds without a ``sampling`` field): the random part was drawn from the
+# whole pool first and the top part filled from what it left, so a top clip's chance depended on how
+# many better clips the draw took. 2: the top part first, then a uniform sample of the rest (#104).
+SAMPLING = 2
 # Random labels wanted before refitting Likely keep's weights (about 4–5 rounds of 300 at 20%).
 LABELS_TARGET = 250
 # Seconds per clip, all stages together, until a round has been timed.
@@ -37,23 +42,23 @@ def pick_round(
 ) -> dict:
     """Pick a round from ``pool``, given as (clip_id, index, score) for every clip it may take.
 
-    The random part is drawn first from the whole pool; the top part is filled with the highest
-    scores among the rest. Membership is kept by SRT index, so clips later split off a round
-    clip belong to the round too.
+    The top part is the highest scores in the pool (unscored clips last, ties by index); the random
+    part is a uniform sample of the rest, each of which had ``random_chance`` of being drawn.
+    Membership is kept by SRT index, so clips later split off a round clip belong to the round too.
     """
     seed = seed or secrets.token_hex(8)
     size = min(size, len(pool))
     random_count = round(size * random_share)
-    rng = random.Random(seed)
-    sampled = rng.sample(range(len(pool)), random_count)
-    picked = set(sampled)
-    rest = sorted(
-        (position for position in range(len(pool)) if position not in picked),
+    ranked = sorted(
+        range(len(pool)),
         key=lambda position: (pool[position][2] is None, -(pool[position][2] or 0.0), pool[position][1]),
     )
-    top = rest[: size - random_count]
+    top, rest = ranked[: size - random_count], ranked[size - random_count:]
+    rng = random.Random(seed)
+    sampled = [rest[position] for position in rng.sample(range(len(rest)), random_count)]
     return {
-        "size": size, "pool": len(pool), "random_share": random_share, "seed": seed,
+        "size": size, "pool": len(pool), "random_share": random_share, "seed": seed, "sampling": SAMPLING,
+        "random_chance": random_count / len(rest) if rest else None,
         "top": [pool[position][0] for position in top],
         "random": [pool[position][0] for position in sampled],
         "roles": {
@@ -62,6 +67,18 @@ def pick_round(
         },
         "completed": None,
     }
+
+
+def pick_chance(item: dict, index: int) -> float | None:
+    """The chance clip ``index`` had of joining round ``item``, given that it was in the round's pool.
+
+    Known for rounds picked with sampling 2: 1 for top clips and the round's ``random_chance`` for
+    random ones. Rounds picked before (sampling 1) saved too little to tell, so this is None.
+    """
+    if item.get("sampling") != SAMPLING:
+        return None
+    role = item["roles"].get(str(index))
+    return 1.0 if role == TOP else item["random_chance"] if role == RANDOM else None
 
 
 def from_review_set(review_set: dict, started: str | None) -> dict:
