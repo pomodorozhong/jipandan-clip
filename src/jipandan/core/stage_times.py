@@ -1,9 +1,9 @@
 """Break a session's review time down by stage (Triage, Polish, Publish) from its event log.
 
 Time is the sum of clip views: how long each clip was on screen while the app had focus and
-input, so idle stretches and time outside review are left out. A view's stage comes from the
-``filter`` the browser recorded with it; changes are attributed the same way, and exports
-always belong to Publish.
+input, so idle stretches and time outside review are left out. A view's stage is the ``stage``
+the browser recorded with it, or for views from before stages were recorded, its ``filter``;
+changes are attributed the same way, and exports always belong to Publish.
 """
 
 from __future__ import annotations
@@ -17,6 +17,8 @@ def event_stage(event: dict) -> str | None:
     """Return the stage an event was recorded in, or None for events from before stages were logged."""
     if event["type"] == "export":
         return "publish"
+    if event.get("stage") in STAGES:
+        return event["stage"]
     stage = event.get("filter")
     if stage in ("triage", "publish"):
         return stage

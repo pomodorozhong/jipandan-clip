@@ -48,6 +48,8 @@ CREATE TABLE IF NOT EXISTS event (
     changes TEXT
 );
 CREATE INDEX IF NOT EXISTS event_undo ON event (undoable, undone_by, seq);
+-- IDs of events the browser sent, so a batch sent again after a lost reply is stored once.
+CREATE TABLE IF NOT EXISTS client_event (id TEXT PRIMARY KEY) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS suggestion (clip_id TEXT PRIMARY KEY, title TEXT NOT NULL);
 -- Clip edge snap points (word starts, speech ends) measured once per recording.
 CREATE TABLE IF NOT EXISTS snap_point (kind TEXT NOT NULL, ms INTEGER NOT NULL, PRIMARY KEY (kind, ms)) WITHOUT ROWID;
@@ -308,15 +310,25 @@ class RecordingStore:
             )
             self._db.execute("UPDATE event SET mutation = seq WHERE seq = ?", (seq,))
 
-    def append_events(self, events: list[dict]) -> None:
-        """Record events that change no clip, such as views."""
+    def append_events(self, events: list[dict]) -> int:
+        """Record events that change no clip, such as views; returns how many were new.
+
+        An event with an ``id`` already recorded is skipped, so a batch sent twice is stored once.
+        """
         if not events:
-            return
+            return 0
+        added = 0
         with self._lock, self._transaction():
             for event in events:
                 fields = dict(event)
+                if "id" in fields and not self._db.execute(
+                    "INSERT OR IGNORE INTO client_event (id) VALUES (?)", (fields["id"],)
+                ).rowcount:
+                    continue
                 kind = str(fields.pop("type"))
                 self._insert_event(kind, fields.pop("clip", None), fields, mutation=None)
+                added += 1
+        return added
 
     def events(self, *, kinds: tuple[str, ...] | None = None) -> list[dict]:
         """Every event in order, as dicts (for tests and offline training)."""

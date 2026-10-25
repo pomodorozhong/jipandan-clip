@@ -5,6 +5,7 @@ import { ShortcutBadge } from "./ShortcutBadge";
 import { SectionHeader } from "./ui";
 import type { GamepadActionRequest } from "./gamepad";
 import { exportMatchesSettings, initialExportSettings } from "./publish";
+import type { PreviewWait, PreviewWaitOutcome } from "./reviewViews";
 import { renderedRangeToSource } from "./trimMap";
 import {
   confirmsTextField,
@@ -52,7 +53,7 @@ function peak(waveform: WaveformWindow | null): number {
  */
 export default function ExportPreview({ clip, revision, open, nextClipId, onClose, onPublished, trimDisabled = false,
   gamepadAction, onGamepadActionHandled, controllerHandlerRef, inline = false, heading, headingDetail, onNudge, nudgeDisabled = false,
-  exportContext, onTrim, recordingDurationMs, titleFocusRequest = 0, onTitleSave }: {
+  exportContext, onTrim, recordingDurationMs, titleFocusRequest = 0, onTitleSave, onPlayback, onPreviewWait }: {
   clip: Clip; revision: number; open: boolean; onClose: () => void;
   nextClipId: string | null;
   onPublished: (session: Session, advance: boolean) => void;
@@ -75,6 +76,10 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
   titleFocusRequest?: number;
   /** Saves an edited export title to the clip when the field is confirmed or left, so it survives switching clips. */
   onTitleSave?: (title: string) => void;
+  /** Called each time either player starts playing, to count it in the clip's view. */
+  onPlayback?: () => void;
+  /** Reports how long each preview kept the viewer waiting, so waiting can be told apart from editing. */
+  onPreviewWait?: (wait: PreviewWait) => void;
 }) {
   // Settings belong to this clip only; the next clip starts from the defaults again.
   const [mode, setMode] = useState<ExportMode>(() => initialExportSettings(clip).mode);
@@ -107,6 +112,36 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
   // preview or hold up Export, so the revision is read through a ref instead of a dependency.
   const revisionRef = useRef(revision);
   revisionRef.current = revision;
+
+  // When each preview was first requested and is not yet ready; a newer request replacing it keeps the wait going.
+  const waitStarted = useRef<Record<PreviewWait["preview"], number | null>>({ candidate: null, reference: null });
+  const onPreviewWaitRef = useRef(onPreviewWait);
+  onPreviewWaitRef.current = onPreviewWait;
+  const beginWait = useCallback((preview: PreviewWait["preview"]) => {
+    waitStarted.current[preview] ??= Date.now();
+  }, []);
+  const endWait = useCallback((preview: PreviewWait["preview"], outcome: PreviewWaitOutcome) => {
+    const started = waitStarted.current[preview];
+    if (started === null) return;
+    waitStarted.current[preview] = null;
+    onPreviewWaitRef.current?.({ preview, started, waitMs: Date.now() - started, outcome });
+  }, []);
+  const settleWait = useCallback((preview: PreviewWait["preview"], state: PreviewJob["state"] | undefined) => {
+    if (state === "completed") endWait(preview, "ready");
+    else if (state === "failed") endWait(preview, "failed");
+  }, [endWait]);
+  useEffect(() => { settleWait("candidate", job?.state); }, [job?.id, job?.state, settleWait]);
+  useEffect(() => { settleWait("reference", referenceJob?.state); }, [referenceJob?.id, referenceJob?.state, settleWait]);
+  // Closing Publish or moving to another clip leaves any wait unfinished.
+  useEffect(() => {
+    if (open) return;
+    endWait("candidate", "cancelled");
+    endWait("reference", "cancelled");
+  }, [open, endWait]);
+  useEffect(() => () => {
+    endWait("candidate", "cancelled");
+    endWait("reference", "cancelled");
+  }, [endWait]);
 
   useEffect(() => { setTitle(clip.title); }, [clip.clip_id, clip.title]);
 
@@ -336,9 +371,11 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
     setError("");
     if (!validThresholds || !title.trim()) {
       setRequesting(false);
+      endWait("candidate", "cancelled");
       return;
     }
     setRequesting(true);
+    beginWait("candidate");
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       void api<PreviewJob>("/previews", "POST", {
@@ -347,22 +384,28 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
         stop_threshold_db: mode === "as_is" ? -50 : stop,
         title: title.trim(),
       }, controller.signal).then((next) => {
-        if (!controller.signal.aborted) setJob((previous) => previous && previous.id === next.id && previous.waveform
+        if (controller.signal.aborted) return;
+        setJob((previous) => previous && previous.id === next.id && previous.waveform
           ? { ...next, waveform: previous.waveform } : next);
+        // A preview already rendered comes back completed, without a state change to notice.
+        settleWait("candidate", next.state);
       }).catch((cause) => {
-        if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : String(cause));
+        if (controller.signal.aborted) return;
+        setError(cause instanceof Error ? cause.message : String(cause));
+        endWait("candidate", "failed");
       }).finally(() => {
         if (!controller.signal.aborted) setRequesting(false);
       });
     }, delay);
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [open, clip.clip_id, clip.start_ms, clip.end_ms, clip.title,
-    mode, startDb, stopDb, title, validThresholds, start, stop]);
+    mode, startDb, stopDb, title, validThresholds, start, stop, beginWait, endWait, settleWait]);
 
   const renderReference = useCallback(async () => {
     const requestId = ++referenceRequestId.current;
     referencePlayer.current?.pause();
     setReferenceRequesting(true);
+    beginWait("reference");
     setReferenceError("");
     setReferenceJob(null);
     try {
@@ -370,13 +413,19 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
         clip_id: clip.clip_id, expected_revision: revisionRef.current, mode: "as_is",
         start_threshold_db: -40, stop_threshold_db: -50, title: clip.title,
       });
-      if (requestId === referenceRequestId.current) setReferenceJob(next);
+      if (requestId === referenceRequestId.current) {
+        setReferenceJob(next);
+        settleWait("reference", next.state);
+      }
     } catch (cause) {
-      if (requestId === referenceRequestId.current) setReferenceError(cause instanceof Error ? cause.message : String(cause));
+      if (requestId === referenceRequestId.current) {
+        setReferenceError(cause instanceof Error ? cause.message : String(cause));
+        endWait("reference", "failed");
+      }
     } finally {
       if (requestId === referenceRequestId.current) setReferenceRequesting(false);
     }
-  }, [clip.clip_id, clip.title]);
+  }, [clip.clip_id, clip.title, beginWait, endWait, settleWait]);
 
   useEffect(() => {
     if (!open) { referenceStartedFor.current = ""; return; }
@@ -526,7 +575,7 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
             trimMap={referenceReady && waveformReady && !recordingDurationMs ? job?.trim_map : null}
             src={referenceReady ? previewUrl(referenceJob!.id) : undefined} placeholder={referencePlaceholder}
             playShortcut="⇧Q" replayShortcut="Q" playShortcutId="reference-play-pause" replayShortcutId="reference-replay" onActivate={() => candidatePlayer.current?.pause()}
-            onAction={dispatchAction} />
+            onAction={dispatchAction} onPlayback={onPlayback} />
           {(referenceError || referenceJob?.state === "failed") && <div role="alert" className="flex flex-wrap items-center gap-2 text-xs text-[#ffb3a8]">
             <span>{referenceError || `Reference render failed: ${referenceJob?.error ?? "Unknown error"}`}</span>
             <button type="button" onClick={() => void renderReference()} disabled={referenceRequesting}
@@ -557,7 +606,7 @@ export default function ExportPreview({ clip, revision, open, nextClipId, onClos
               {mode !== "as_is" && <button type="button" onClick={() => dispatchAction({ type: "export-mode", mode: "as_is" })}
                 className="shrink-0 rounded-md bg-[#ffd6cc] px-2.5 py-1 text-xs font-semibold text-[#3b211d]">Use As is</button>}
             </> : undefined}
-            onActivate={() => referencePlayer.current?.pause()} onAction={dispatchAction} />
+            onActivate={() => referencePlayer.current?.pause()} onAction={dispatchAction} onPlayback={onPlayback} />
         </div>
       </div>
 

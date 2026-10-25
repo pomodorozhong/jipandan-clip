@@ -1179,15 +1179,18 @@ class SessionService:
             self._commit(lambda store, d: store.update_clips(d, changed), draft)
 
     def record_review_events(self, events: list[object]) -> int:
-        """Store clip views reported by the browser; returns how many were accepted."""
+        """Store clip views and preview waits reported by the browser; returns how many were new.
+
+        Events already stored under the same ``id`` are skipped, so the browser can send a batch again.
+        """
         if len(events) > MAX_CLIENT_EVENTS:
             raise InvalidEdit(f"Send at most {MAX_CLIENT_EVENTS} events at a time")
         with self._lock:
             self._ready()
             cleaned = [event for raw in events if (event := clean_client_event(raw, self.audio)) is not None]
-            if self.store is not None:
-                self.store.append_events(cleaned)
-        return len(cleaned)
+            if self.store is None:
+                return len(cleaned)
+            return self.store.append_events(cleaned)
 
     def patch_clip(
         self, clip_id: str, expected_revision: int, *,

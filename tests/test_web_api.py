@@ -463,6 +463,24 @@ class WebApiTests(unittest.TestCase):
         too_many = self.client.post("/api/review-log", json={"events": [{}] * 201}, headers=self.headers)
         self.assertEqual(too_many.status_code, 422)
 
+    def test_review_log_stores_a_resent_batch_once(self):
+        self.open()
+        audio = str(self.audio.resolve())
+        batch = {"events": [
+            {"type": "view", "id": "v-1", "audio": audio, "clip": "1", "dwell_ms": 2000,
+             "context": {"stage": "triage", "filter": "unsorted"}},
+            {"type": "preview_wait", "id": "w-1", "audio": audio, "clip": "1", "wait_ms": 1800,
+             "preview": "candidate", "outcome": "ready", "context": {"stage": "publish"}},
+            {"type": "preview_wait", "audio": audio, "clip": "1", "wait_ms": 10, "preview": "both", "outcome": "ready"},
+        ]}
+        self.assertEqual(self.client.post("/api/review-log", json=batch, headers=self.headers).json(), {"accepted": 2})
+        # The reply was lost and the browser sends the same batch again.
+        self.assertEqual(self.client.post("/api/review-log", json=batch, headers=self.headers).json(), {"accepted": 0})
+        events = [e for e in self.review_log() if e["type"] in ("view", "preview_wait")]
+        self.assertEqual([(e["type"], e["id"], e["stage"]) for e in events],
+                         [("view", "v-1", "triage"), ("preview_wait", "w-1", "publish")])
+        self.assertEqual((events[1]["wait_ms"], events[1]["preview"], events[1]["outcome"]), (1800, "candidate", "ready"))
+
     def test_round_stats_count_views_and_changes_made_during_the_round(self):
         self.open()
         audio = str(self.audio.resolve())
@@ -471,9 +489,12 @@ class WebApiTests(unittest.TestCase):
         self.measure_clip_features()
         state = self.client.post("/api/session/rounds", json={"size": 10, "random_share": 0.2},
                                  headers=self.headers).json()
+        now = int(time.time() * 1000)
         self.client.post("/api/review-log", json={"events": [
-            {"type": "view", "audio": audio, "clip": "1", "dwell_ms": 3000, "context": {"filter": "triage"}},
-            {"type": "view", "audio": audio, "clip": "2", "dwell_ms": 9000, "context": {"filter": "group1"}},
+            {"type": "view", "audio": audio, "clip": "1", "dwell_ms": 3000, "started_at": now,
+             "context": {"filter": "triage"}},
+            {"type": "view", "audio": audio, "clip": "2", "dwell_ms": 9000, "started_at": now,
+             "context": {"filter": "group1"}},
         ]}, headers=self.headers)
         self.client.patch("/api/clips/1", json={"expected_revision": state["revision"], "status": "rejected",
                                                 "context": {"filter": "triage"}}, headers=self.headers)

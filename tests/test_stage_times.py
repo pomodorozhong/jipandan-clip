@@ -33,6 +33,11 @@ class StageBreakdownTests(unittest.TestCase):
         self.assertEqual((result["first_view"], result["last_view"]),
                          ("2026-10-21T09:59:30.000Z", "2026-10-21T10:05:00.000Z"))
 
+    def test_a_recorded_stage_wins_over_the_filter(self):
+        # A view in Triage started while Polish's Unsorted filter was still set.
+        event = {**view("1", 2000, "unsorted"), "stage": "triage"}
+        self.assertEqual(stage_breakdown([event])["stages"][0], {"stage": "triage", "ms": 2000, "views": 1, "clips": 1, "changes": 0})
+
     def test_views_without_a_stage_are_reported_separately(self):
         result = stage_breakdown([view("1", 2000)])
         self.assertEqual(result["stages"][-1], {"stage": "unknown", "ms": 2000, "views": 1, "clips": 1, "changes": 0})
