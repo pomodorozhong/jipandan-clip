@@ -1,4 +1,5 @@
 import hashlib
+import json
 import sys
 import tempfile
 import types
@@ -96,7 +97,8 @@ class SessionSafetyTests(unittest.TestCase):
             calls.append(kwargs)
             return {"segments": [
                 {"start": 1, "end": 2, "text": "First",
-                 "words": [{"start": 1.0, "end": 1.4}, {"start": 1.5, "end": 2.0}]},
+                 "words": [{"word": "First", "start": 1.0, "end": 1.4, "probability": 0.9},
+                           {"start": 1.5, "end": 2.0}]},
                 {"start": 3, "end": 4, "text": "Second", "words": [{"start": 3.0004, "end": 4.0}]},
             ]}
 
@@ -142,8 +144,40 @@ class SessionSafetyTests(unittest.TestCase):
 
         stale = candidates_srt_path(self.srt)
         stale.write_text(SRT, encoding="utf-8")
+        stale_speech = whisper.speech_probabilities_path(self.srt)
+        np.save(stale_speech, np.zeros(3, np.float16))
         self.assertEqual(self.transcribe_with_words(fail), {"word_start": [1000, 1500, 3000]})
         self.assertFalse(stale.exists())
+        self.assertFalse(stale_speech.exists())
+        self.assertTrue(whisper.whisper_words_path(self.srt).is_file())
+
+    def test_transcription_saves_whisper_words_beside_the_srt(self):
+        self.transcribe_with_words(self.speech((31, 66)))
+        path = whisper.whisper_words_path(self.srt)
+        self.assertEqual(path.name, "audio.words.json")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(data["version"], whisper.WHISPER_WORDS_VERSION)
+        self.assertEqual(data["srt_sha256"], hashlib.sha256(self.srt.read_bytes()).hexdigest())
+        self.assertEqual(data["segments"][0], {
+            "start": 1.0, "end": 2.0, "text": "First",
+            "words": [
+                {"word": "First", "start": 1.0, "end": 1.4, "probability": 0.9},
+                {"word": "", "start": 1.5, "end": 2.0, "probability": None},
+            ],
+        })
+        self.assertEqual(data["segments"][1]["words"],
+                         [{"word": "", "start": 3.0004, "end": 4.0, "probability": None}])
+        self.assertEqual(list(self.root.glob(".audio.words.json.*.tmp")), [])
+
+    def test_transcription_saves_speech_probabilities_as_float16(self):
+        self.transcribe_with_words(self.speech((31, 66)))
+        path = whisper.speech_probabilities_path(self.srt)
+        self.assertEqual(path.name, "audio.silero.npy")
+        saved = np.load(path)
+        self.assertEqual(saved.dtype, np.float16)
+        self.assertEqual(saved.shape, (200,))
+        self.assertAlmostEqual(float(saved[40]), 0.9, places=2)
+        self.assertEqual(float(saved[0]), 0.0)
 
     def test_snap_points_from_another_srt_are_ignored(self):
         self.transcribe_with_words(self.speech((31, 66)))

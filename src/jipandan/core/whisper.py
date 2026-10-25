@@ -30,6 +30,8 @@ from jipandan.core.srt import (
     srt_time_to_seconds,
 )
 
+WHISPER_WORDS_VERSION = 1
+
 # Transcription runs in workers with redirected output. Disable download
 # progress bars and use thread locks to avoid multiprocessing-lock setup in
 # those workers.
@@ -234,7 +236,9 @@ def transcribe_to_text(
             temporary_path.unlink(missing_ok=True)
     if output_format == "srt":
         write_segment_scores(output_text, segments)
+        write_whisper_words(output_text, segments)
         probabilities = _result_or_none(speech)
+        write_speech_probabilities(output_text, probabilities)
         points = _snap_points(segments, probabilities)
         write_snap_points(output_text, points)
         _write_candidates(output_text, segments, probabilities, points)
@@ -329,6 +333,68 @@ def write_segment_scores(srt_path: Path, segments: list[dict]) -> None:
         prefix=f".{destination.name}.", suffix=".tmp", delete=False,
     ) as handle:
         json.dump(payload, handle)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(handle.name, destination)
+
+
+def whisper_words_path(srt_path: Path) -> Path:
+    """Sidecar holding Whisper's segments with word-level timings for ``srt_path``."""
+    return srt_path.with_suffix(".words.json")
+
+
+def speech_probabilities_path(srt_path: Path) -> Path:
+    """Sidecar holding Silero's per-frame speech probabilities from transcribing ``srt_path``."""
+    return srt_path.with_suffix(".silero.npy")
+
+
+def write_whisper_words(srt_path: Path, segments: list[dict]) -> None:
+    """Save Whisper's segments and their words beside ``srt_path``, tied to its exact contents."""
+    payload = {
+        "version": WHISPER_WORDS_VERSION,
+        "srt_sha256": hashlib.sha256(srt_path.read_bytes()).hexdigest(),
+        "segments": [
+            {
+                "start": float(segment["start"]),
+                "end": float(segment["end"]),
+                "text": str(segment["text"]),
+                "words": [
+                    {
+                        "word": str(word.get("word", "")),
+                        "start": _finite_or_none(word.get("start")),
+                        "end": _finite_or_none(word.get("end")),
+                        "probability": _finite_or_none(word.get("probability")),
+                    }
+                    for word in segment.get("words") or []
+                ],
+            }
+            for segment in segments
+        ],
+    }
+    destination = whisper_words_path(srt_path)
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=destination.parent,
+        prefix=f".{destination.name}.", suffix=".tmp", delete=False,
+    ) as handle:
+        json.dump(payload, handle, ensure_ascii=False)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(handle.name, destination)
+
+
+def write_speech_probabilities(srt_path: Path, probabilities) -> None:
+    """Save Silero's speech probabilities as float16 beside ``srt_path``, or remove a stale copy."""
+    destination = speech_probabilities_path(srt_path)
+    if probabilities is None:
+        destination.unlink(missing_ok=True)
+        return
+    import numpy as np
+
+    with tempfile.NamedTemporaryFile(
+        mode="wb", dir=destination.parent,
+        prefix=f".{destination.name}.", suffix=".tmp", delete=False,
+    ) as handle:
+        np.save(handle, np.asarray(probabilities, dtype=np.float16))
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(handle.name, destination)

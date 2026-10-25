@@ -10,14 +10,14 @@
 - **State:** not started; waiting for the owner to describe what felt off about generated clips' timing in the 0903 session.
 - **Next action:** ask the owner what felt off (starts too early or late, ends cut off, too long), then plan the change and how `jipandan-dataset`'s timing examples will measure it.
 
-### fix/round-file-review-findings
+### feat/keep-whisper-words
 
-- **Task:** three review findings on #114, fixed as bugs already on `main`: Start over replaced the session when a round's update file could not be written; `jipandan-dataset` named inputs by file name only, so folder order changed the dataset; round and update files with incomplete clip snapshots passed the checks and then crashed import (500) and the dataset build (KeyError). No issue filed.
-- **PR:** #117, open against `main`, awaiting the owner's review and merge. A review of `367af2b` found two more bugs in the history checks, folded into `ec2cafe`: an update naming a clip outside its round dropped its whole round from the dataset, and numbers too large for a float crashed import (500) and the dataset build.
-- **Code checkpoint:** `ec2cafe`, three `fix` commits on `main` at `5dbcfdf`: `187e74e` (Start over), `a2aa872` (dataset inputs chosen by content, named from their shared folder), `ec2cafe` (history validation); plus this handoff.
+- **Task:** save Whisper's full word-level output (`<audio>.words.json`) and Silero's speech probabilities (`<audio>.silero.npy`) beside the SRT when transcribing, so experiments on new recordings never re-run Whisper. No issue filed.
+- **PR:** opened against `main` with the owner's approval; awaiting review and merge.
+- **Code checkpoint:** `9788053`, one `feat` commit on `main` at `a425d63`; plus this handoff.
 - **State:** awaiting review and merge.
-- **Verification:** 163 Python tests and 167 frontend tests pass; each commit passes the Python suite on its own; the new tests and checks fail on the code before the fixes.
-- **Next action:** after #117 merges, rebase `feat/generated-clip-timing` onto the new `main` and drop this subsection. This branch's `docs:` commit also carries the `feat/generated-clip-timing` handoff, which has no PR of its own.
+- **Verification:** 165 Python tests pass. Not checked on a real transcription, so the file sizes are estimates.
+- **Next action:** after it merges, transcribe a real recording and load both files with an experiment script in `tmp/`; then drop this subsection.
 
 ## Ranked work
 
