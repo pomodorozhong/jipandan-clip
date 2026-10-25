@@ -162,6 +162,37 @@ class EstimateTests(unittest.TestCase):
         item = self.make_round(1, roles, started="2026-10-21T10:00:00.000Z")
         self.assertEqual(overview([item], clips, [logged], 10, 0.2)["rounds"][0]["time_ms"], 5_000)
 
+    def test_a_clip_drawn_again_after_an_early_end_counts_once(self):
+        # Round 1 drew clip 5 at random and ended early with it Unsorted; round 2 drew it again and kept it.
+        first = {**self.make_round(1, {"5": "random"}), "closed_status": {"5": "pending"}}
+        second = {**self.make_round(2, {"5": "random"}, started="2026-10-21T13:00:00.000Z",
+                                    completed="2026-10-21T14:00:00.000Z"), "closed_status": {"5": "exported"}}
+        clips = [("5", 5, "exported", 60.0)] + [(f"c{i}", i, "pending", float(i)) for i in range(10, 30)]
+        result = overview([first, second], clips, [], 10, 0.2)
+        self.assertEqual(result["labels"]["so_far"], 1)
+        self.assertEqual([r["kept"] for r in result["rounds"]], [0, 1])
+        self.assertLessEqual(result["captured"], 1.0)
+
+    def test_a_finished_round_keeps_what_it_found_when_it_ended(self):
+        # Clip 1 was Ready when the round ended and rejected afterwards; clip 2 was decided after it ended.
+        item = {**self.make_round(1, {"1": "top", "2": "random"}), "closed_status": {"1": "group1", "2": "pending"}}
+        clips = [("1", 1, "rejected", 80.0), ("2", 2, "exported", 30.0)]
+        summary = overview([item], clips, [], 10, 0.2)
+        self.assertEqual((summary["rounds"][0]["kept"], summary["rounds"][0]["decided"]), (1, 1))
+        self.assertEqual(summary["labels"]["so_far"], 0)
+
+    def test_clips_split_from_a_random_clip_add_no_labels(self):
+        item = {**self.make_round(1, {"5": "random"}), "closed_status": {"5": "group1", "5-1": "rejected"}}
+        clips = [("5", 5, "group1", 60.0), ("5-1", 5, "rejected", 20.0)]
+        result = overview([item], clips, [], 10, 0.2)
+        self.assertEqual(result["labels"]["so_far"], 1)
+        self.assertEqual(result["rounds"][0]["clips"], 2)
+
+    def test_an_open_round_reads_its_clips_as_they_are(self):
+        item = self.make_round(1, {"1": "random"}, completed=None)
+        result = overview([item], [("1", 1, "group2", 50.0)], [], 10, 0.2)
+        self.assertEqual((result["rounds"][0]["kept"], result["labels"]["so_far"]), (1, 1))
+
 
 if __name__ == "__main__":
     unittest.main()

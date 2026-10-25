@@ -188,6 +188,23 @@ class RecordingStore:
             started = self._db.execute("SELECT t FROM event WHERE type = 'review-set' ORDER BY seq LIMIT 1").fetchone()
         return [from_review_set(json.loads(legacy[0]), started[0] if started else None)]
 
+    def statuses_at(self, t: str) -> dict[str, str | None]:
+        """Each clip changed since ``t`` with its status at ``t``; None for clips created after ``t``.
+
+        Every change stores the clips it touched as they were before it, so the first change after
+        ``t`` that touched a clip holds its status at ``t``. Clips not listed are unchanged since.
+        """
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT before FROM event WHERE before IS NOT NULL AND t > ? ORDER BY seq", (t,)
+            ).fetchall()
+        statuses: dict[str, str | None] = {}
+        for (before,) in rows:
+            for clip_id, clip in json.loads(before).items():
+                if clip_id not in statuses:
+                    statuses[clip_id] = clip["status"] if clip else None
+        return statuses
+
     def save_review_rounds(self, rounds: list[dict], event: dict) -> None:
         """Save the rounds and log ``event`` in one transaction; neither changes a clip or can be undone."""
         with self._lock, self._transaction():
