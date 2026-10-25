@@ -151,6 +151,29 @@ class RoundFileTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_update_file({**update, "to_seq": None})
 
+    def test_history_with_clips_the_readers_cannot_use_is_refused(self):
+        good = round_file(changes=[change(2, {"1": clip(1, 1000, 2000, "group2")})])
+        broken = [{}, {**clip(1, 1000, 2000), "original_start": 5}, {**clip(1, 1000, 2000), "duration": "long"},
+                  {key: value for key, value in clip(1, 1000, 2000).items() if key != "status"},
+                  {**clip(1, 1000, 2000), "duration": 10 ** 400}, {**clip(1, 1000, 2000), "start": f"00:00:01,{10 ** 400}"}]
+        for snapshot in broken:
+            with self.subTest(snapshot=snapshot), self.assertRaises(ValueError):
+                parse_round_file({**good, "changes": [change(2, {"1": snapshot})]})
+        for bad in ({**good, "changes": [change(2, {"x": clip(1, 1000, 2000)})]},
+                    {**good, "changes": [change(2, {"9": clip(9, 1000, 2000)})]},
+                    {**good, "events": [view(1, "9", "triage", 100)]},
+                    {**good, "events": [{**view(1, "1", "triage", 100), "dwell_ms": None}]}):
+            with self.assertRaises(ValueError):
+                parse_round_file(bad)
+        update = build_update_file(finished_round(), RECORDING["sha256"], 1, 20, 40, [change(30, {"1": {}})], [])
+        with self.assertRaises(ValueError):
+            parse_update_file(update)
+        outside = build_update_file(finished_round(), RECORDING["sha256"], 1, 20, 40, [], [])
+        outside["changes"] = [change(30, {"9": clip(9, 1000, 2000)})]
+        parse_update_file(outside)
+        with self.assertRaises(ValueError):
+            RoundHistory(parse_round_file(good), [outside])
+
     def test_every_frozen_file_reads_in_the_current_version(self):
         for path in sorted(FIXTURES.glob("version-*.json")):
             with self.subTest(path.name):

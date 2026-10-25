@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from jipandan.cli.dataset import _inputs
 from jipandan.core.datasets import build_dataset, write_dataset
 from jipandan.core.round_files import build_round_file, build_update_file
 
@@ -116,6 +117,71 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(reasons["orphan.json"], "its round file is not among the inputs")
         self.assertEqual(reasons["junk.json"], "not a Jipandan round file")
         self.assertEqual(reasons["broken.json"], "not a Jipandan round file")
+
+    def test_files_with_malformed_history_are_skipped_without_stopping_the_build(self):
+        data, update = round_two()
+        broken = copy.deepcopy(update)
+        broken["changes"][0]["after"]["1-2"] = {}
+        dataset = self.build([("r.json", data), ("u.json", broken)])
+        self.assertEqual(len(dataset["ranking"]), 5)
+        reasons = {entry["file"]: entry.get("reason") for entry in dataset["manifest"]["inputs"]}
+        self.assertEqual(reasons["u.json"], "a change in the file is malformed")
+        # An update naming a clip outside its round is skipped on its own; the round still counts.
+        outside = copy.deepcopy(update)
+        outside["changes"][0]["after"] = {"9": outside["changes"][0]["after"]["1-2"]}
+        dataset = self.build([("r.json", data), ("u.json", update), ("v.json", outside)])
+        self.assertEqual(len(dataset["ranking"]), 5)
+        inputs = {entry["file"]: entry for entry in dataset["manifest"]["inputs"]}
+        self.assertEqual([inputs[name]["used"] for name in ("r.json", "u.json", "v.json")], [True, True, False])
+        self.assertEqual(inputs["v.json"]["reason"], "the file's history names a clip outside its round")
+        self.assertEqual(dataset["ranking"][0]["sources"], ["r.json", "u.json"])
+        # A number too large for a float is malformed too.
+        huge = copy.deepcopy(update)
+        huge["changes"][0]["after"]["1-2"]["duration"] = 10 ** 400
+        dataset = self.build([("r.json", data), ("u.json", huge)])
+        self.assertEqual(len(dataset["ranking"]), 5)
+        self.assertEqual(dataset["manifest"]["inputs"][1]["reason"], "a change in the file is malformed")
+
+    def test_copies_sharing_a_name_give_the_same_bytes_in_any_order(self):
+        data, _ = round_two()
+        other = copy.deepcopy(data)
+        other["changes"] = other["changes"][:-1]
+        folders = []
+        with tempfile.TemporaryDirectory() as root:
+            for position, files in enumerate(([("r.json", data), ("r.json", other)], [("r.json", other), ("r.json", data)])):
+                folder = Path(root) / str(position)
+                write_dataset(folder, self.build(files))
+                folders.append({path.name: path.read_bytes() for path in folder.iterdir()})
+        self.assertEqual(folders[0], folders[1])
+
+    def test_the_command_names_files_from_folders_by_their_paths(self):
+        data, _ = round_two()
+        with tempfile.TemporaryDirectory() as root:
+            folders = [Path(root) / name for name in ("a", "b")]
+            for folder, number in zip(folders, (1, 2)):
+                folder.mkdir()
+                other = {**data, "round": {**data["round"], "seed": f"s{number}"}}
+                (folder / "audio.round-02.json").write_text(json.dumps(other), encoding="utf-8")
+            (folders[0] / "snap-points.json").write_text("{}", encoding="utf-8")
+            # Named from the folder they share, which is left out, so moving them all changes nothing.
+            self.assertEqual([name for name, _ in _inputs(folders)], ["a/audio.round-02.json", "b/audio.round-02.json"])
+            self.assertEqual([name for name, _ in _inputs(folders[:1])], ["audio.round-02.json"])
+            self.assertEqual([name for name, _ in _inputs([folders[0] / "snap-points.json"])], ["snap-points.json"])
+            manifests = [build_dataset(_inputs(order))["manifest"] for order in (folders, folders[::-1])]
+        self.assertEqual(manifests[0], manifests[1])
+
+    def test_renaming_copies_does_not_change_which_one_is_used(self):
+        data, update = round_two()
+        other = copy.deepcopy(data)
+        other["changes"] = other["changes"][:-1]
+        used = []
+        for names in (("a.json", "b.json"), ("b.json", "a.json")):
+            dataset = self.build([(names[0], data), (names[1], other), ("u.json", update), ("u.json", copy.deepcopy(update))])
+            [entry] = [entry for entry in dataset["manifest"]["inputs"] if entry["used"] and entry["kind"] == "round"]
+            used.append((entry["content_sha256"], dataset["ranking"]))
+            self.assertEqual(sum(entry["used"] for entry in dataset["manifest"]["inputs"] if entry["kind"] == "update"), 1)
+        self.assertEqual(used[0][0], used[1][0])
+        self.assertEqual([row["outcome"] for row in used[0][1]], [row["outcome"] for row in used[1][1]])
 
     def test_a_missing_update_file_between_two_others_is_counted(self):
         data, update = round_two()

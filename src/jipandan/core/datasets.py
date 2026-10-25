@@ -16,8 +16,8 @@ from pathlib import Path
 from jipandan.core.models import clip_candidate_from_dict
 from jipandan.core.review_rounds import LABELS_TARGET, RANDOM, pick_chance
 from jipandan.core.round_files import (
-    VERSION as ROUND_FILE_VERSION, RoundHistory, clip_index, file_kind, outcome, parse_round_file, parse_update_file,
-    time_ms,
+    VERSION as ROUND_FILE_VERSION, RoundHistory, check_in_round, clip_index, file_kind, outcome, parse_round_file,
+    parse_update_file, time_ms,
 )
 
 FORMAT = "jipandan-dataset"
@@ -49,16 +49,18 @@ def _export(clip: dict) -> dict | None:
 
 
 def build_dataset(files: Sequence[tuple[str, object]]) -> dict:
-    """Build the dataset from round and update files, given as (file name, parsed JSON).
+    """Build the dataset from round and update files, given as (file name or path, parsed JSON).
 
     Returns ``manifest`` and the ``ranking``, ``timing``, and ``titles`` example lists.
     """
     inputs: list[dict] = []
     bases: dict[tuple[str, str], list[tuple[int, str, dict, dict]]] = {}
-    updates: dict[tuple[str, str], dict[str, tuple[str, dict]]] = {}
-    for name, raw in sorted(files, key=lambda pair: pair[0]):
-        entry = {"file": name, "kind": file_kind(raw), "content_sha256": hashlib.sha256(
-            _canonical(raw).encode("utf-8")).hexdigest()}
+    updates: dict[tuple[str, str], dict[str, tuple[str, dict, dict]]] = {}
+    hashed = [(name, raw, hashlib.sha256(_canonical(raw).encode("utf-8")).hexdigest()) for name, raw in files]
+    # Names only label inputs for people: which copy is used depends on content alone, and inputs
+    # sharing a name are listed in the same order however they were given.
+    for name, raw, sha in sorted(hashed, key=lambda item: (item[0], item[2])):
+        entry = {"file": name, "kind": file_kind(raw), "content_sha256": sha}
         inputs.append(entry)
         try:
             data = parse_update_file(raw) if entry["kind"] == "update" else parse_round_file(raw)
@@ -69,7 +71,7 @@ def build_dataset(files: Sequence[tuple[str, object]]) -> dict:
         entry.update(recording=key[0], round=data["round"]["number"], seed=key[1], version=raw.get("version"))
         if entry["kind"] == "update":
             # A copy of an update already read adds nothing.
-            updates.setdefault(key, {}).setdefault(entry["content_sha256"], (name, data))
+            updates.setdefault(key, {}).setdefault(entry["content_sha256"], (name, data, entry))
         else:
             bases.setdefault(key, []).append((raw.get("version"), name, data, entry))
 
@@ -79,23 +81,32 @@ def build_dataset(files: Sequence[tuple[str, object]]) -> dict:
     recordings: dict[str, dict] = {}
     draws: set[tuple[str, str, int]] = set()
     gaps = 0
-    used_updates: set[str] = set()
     for key in sorted(bases):
         # The copy in the newest format, written from the most history, stands for the round.
-        candidates = sorted(bases[key], key=lambda item: (-item[0], item[1]))
+        candidates = sorted(bases[key], key=lambda item: (-item[0], item[3]["content_sha256"]))
         version, name, data, entry = candidates[0]
         for _, _, _, other_entry in candidates[1:]:
             other_entry.update(used=False, reason=f"another copy of this round, {name}, is used")
-        round_updates = sorted(updates.get(key, {}).values())
+        round_updates = []
+        for update_name, update, update_entry in sorted(updates.get(key, {}).values(),
+                                                        key=lambda item: (item[0], item[2]["content_sha256"])):
+            # An update that fails is skipped on its own; the round and its other updates still count.
+            try:
+                check_in_round(data["round"]["roles"], update["changes"], update["events"])
+            except ValueError as exc:
+                update_entry.update(used=False, reason=str(exc))
+                continue
+            round_updates.append((update_name, update, update_entry))
         try:
-            history = RoundHistory(data, [update for _, update in round_updates])
+            history = RoundHistory(data, [update for _, update, _ in round_updates])
         except ValueError as exc:
             entry.update(used=False, reason=str(exc))
             continue
         entry["used"] = True
-        used_updates.update(update_name for update_name, _ in round_updates)
+        for _, _, update_entry in round_updates:
+            update_entry["used"] = True
         gaps += history.gaps
-        sources = [name, *(update_name for update_name, _ in round_updates)]
+        sources = [name, *(update_name for update_name, _, _ in round_updates)]
         recording = recordings.setdefault(key[0], {"name": history.recording.get("name"), "rounds": 0,
                                                     "ranking": 0, "timing": 0, "titles": 0})
         recording["rounds"] += 1
@@ -166,9 +177,8 @@ def build_dataset(files: Sequence[tuple[str, object]]) -> dict:
 
     for entry in inputs:
         if entry.get("kind") == "update" and "reason" not in entry:
-            used = entry["file"] in used_updates
-            entry["used"] = used
-            if not used:
+            entry.setdefault("used", False)
+            if not entry["used"]:
                 entry["reason"] = ("a copy of another update file" if entry.get("seed") and
                                    (entry["recording"], entry["seed"]) in bases else "its round file is not among the inputs")
     order = lambda row: (row["recording"], row["round"], row["seed"], row["index"], row["suffix"])

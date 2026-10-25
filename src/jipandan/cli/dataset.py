@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -15,18 +16,25 @@ def _read(path: Path) -> object:
 
 
 def _inputs(paths: list[Path]) -> list[tuple[str, object]]:
-    """Each file named, and each round or update file directly in a folder named, as (file name, parsed JSON).
+    """Each file named, and each round or update file directly in a folder named, as (name, parsed JSON).
 
     A folder beside a recording also holds its other JSON files, such as snap points, so only round
-    and update files are taken from folders; a file named directly is always reported.
+    and update files are taken from folders; a file named directly is always reported. Files are
+    named by their path from the folder all of them share: folders for different recordings often
+    hold the same file names, and moving the files together leaves the dataset unchanged.
     """
-    files: list[tuple[str, object]] = []
+    found: list[tuple[Path, bool]] = []
     for path in paths:
         if path.is_dir():
-            files += [(item.name, data) for item in sorted(path.glob("*.json"))
-                      if file_kind(data := _read(item)) is not None]
+            found += [(item.resolve(), False) for item in sorted(path.glob("*.json"))]
         else:
-            files.append((path.name, _read(path)))
+            found.append((path.resolve(), True))
+    root = Path(os.path.commonpath([path.parent for path, _ in found])) if found else Path()
+    files: list[tuple[str, object]] = []
+    for path, named in found:
+        data = _read(path)
+        if named or file_kind(data) is not None:
+            files.append((path.relative_to(root).as_posix(), data))
     return files
 
 

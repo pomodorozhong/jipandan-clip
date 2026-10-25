@@ -1239,7 +1239,8 @@ class SessionService:
         """Replace the open session with a fresh one from a saved SRT, keeping the old one as a backup.
 
         Decisions, edits, and the review log start empty; exported files and the export directory stay.
-        Finished rounds' changes not yet in their files are written to update files first.
+        Finished rounds' changes not yet in their files are written to update files first; if any
+        cannot be written, the session stays open so nothing is lost.
         """
         sha = self._audio_sha256()
         with self._lock:
@@ -1250,6 +1251,12 @@ class SessionService:
             rounds, updates = self._write_updates(old, sha, list(self._rounds))
             if updates:
                 self.store.save_review_rounds(rounds, {"type": "round-update", "updates": updates})
+                self._rounds = rounds
+            watched = [item["written_seq"] for item in rounds if item.get("file_version") == 2]
+            changed = self.store.changed_after(min(watched)) if watched else []
+            if any(self._unsaved_changes(item, changed) for item in rounds):
+                raise InvalidEdit("A finished round's changes could not be saved to its update file; "
+                                  "check the recording's folder and try again")
             database = store_path(old.audio)
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             backup = database.with_name(f"{database.name}.{stamp}.bak")

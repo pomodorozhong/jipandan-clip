@@ -227,16 +227,48 @@ def v1_to_v2(data: dict) -> dict:
 UPGRADES: dict[int, Callable[[dict], dict]] = {1: v1_to_v2}
 
 
+def _valid_clip_id(clip_id: object) -> bool:
+    try:
+        _clip_order(clip_id)
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return True
+
+
+def _valid_clip(clip: object) -> bool:
+    """Whether ``clip`` is a clip snapshot with every field the readers of round files use."""
+    if not isinstance(clip, dict):
+        return False
+    try:
+        clip_candidate_from_dict(clip)
+        for key in ("original_start", "original_end", "start"):
+            time_ms(clip[key])
+        float(clip["duration"])
+    except (AttributeError, KeyError, OverflowError, TypeError, ValueError):
+        return False
+    return isinstance(clip["title"], str) and isinstance(clip.get("status"), str)
+
+
 def _check_history(changes: object, events: object) -> None:
     if not isinstance(changes, list) or not isinstance(events, list) or len(changes) + len(events) > MAX_FILE_ENTRIES:
         raise ValueError("the file's history is missing")
     for change in changes:
         if not (isinstance(change, dict) and isinstance(change.get("seq"), int) and isinstance(change.get("after"), dict)
-                and all(clip is None or isinstance(clip, dict) for clip in change["after"].values())):
+                and all(_valid_clip_id(clip_id) and (clip is None or _valid_clip(clip))
+                        for clip_id, clip in change["after"].items())):
             raise ValueError("a change in the file is malformed")
     for event in events:
-        if not (isinstance(event, dict) and isinstance(event.get("seq"), int) and isinstance(event.get("clip"), str)):
+        if not (isinstance(event, dict) and isinstance(event.get("seq"), int) and _valid_clip_id(event.get("clip"))
+                and isinstance(event.get("type"), str)
+                and (event["type"] != "view" or isinstance(event.get("dwell_ms"), int))):
             raise ValueError("an event in the file is malformed")
+
+
+def check_in_round(roles: dict[str, str], changes: list[dict], events: list[dict]) -> None:
+    """Raise ValueError if ``changes`` or ``events`` name a clip outside the round with ``roles``."""
+    if not all(in_round(roles, clip_id) for change in changes for clip_id in change["after"]) \
+            or not all(in_round(roles, event["clip"]) for event in events):
+        raise ValueError("the file's history names a clip outside its round")
 
 
 def _check_v2(data: dict) -> None:
@@ -247,12 +279,11 @@ def _check_v2(data: dict) -> None:
         raise ValueError("the file's round is incomplete")
     if not isinstance(start, dict) or len(start) > MAX_FILE_CLIPS:
         raise ValueError("the file's clips are missing")
-    for clip in start.values():
-        try:
-            clip_candidate_from_dict(clip)
-        except (TypeError, ValueError):
-            raise ValueError("a clip in the file is malformed") from None
+    if not all(_valid_clip_id(clip_id) and in_round(roles, clip_id) and _valid_clip(clip)
+               for clip_id, clip in start.items()):
+        raise ValueError("a clip in the file is malformed")
     _check_history(data.get("changes"), data.get("events"))
+    check_in_round(roles, data["changes"], data["events"])
 
 
 def parse_round_file(data: object) -> dict:
@@ -311,6 +342,7 @@ class RoundHistory:
                 raise ValueError("the update file is for another round")
             if update["to_seq"] <= self.last_seq:
                 continue
+            check_in_round(self.roles, update["changes"], update["events"])
             self.gaps += update["from_seq"] > self.last_seq
             self.changes += [change for change in update["changes"] if change["seq"] > self.last_seq]
             # A round file also holds views delivered after the round that were made while it was open.
