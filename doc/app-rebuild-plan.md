@@ -74,6 +74,17 @@ First real session with generated clips (0903, 2026-10-21): 6,071 candidates, re
 
 Decision (owner, 2026-10-21): transcript lines stay the default. The timing of generated clips felt off and the owner prefers the SRT lines; generated clips stay available on the Transcription screen, and improving their timing is the open part of [#47](https://github.com/pomodorozhong/jipandan-clip/issues/47).
 
+How edge timing is judged (owner, 2026-10-26, [#47](https://github.com/pomodorozhong/jipandan-clip/issues/47)): a start that cuts into the voice is unacceptable; an early start is fine because the export's Trim edges removes the lead-in; a late end is fine; an early end that cuts the voice is bad. Starts are therefore judged on where the export begins the clip, and only lateness counts as a failure (`scripts/evaluate_candidates.py --audio`). The owner's own edits rarely move starts earlier (3 of 68 trims in 0903), because clips that cut in get rejected instead of fixed, so edit direction alone understates the problem.
+
+What "felt off" in 0903, and what changed ([#119](https://github.com/pomodorozhong/jipandan-clip/pull/119)):
+
+- Rejected generated clips started inside the voice 3× as often as kept ones (28% against 8%). After the export trim, generated starts are not later than transcript lines overall (11% against 10% on 0903); the problem is concentrated in the clips that got rejected.
+- Nearest-point snapping in Polish would cut into the voice on 41–72% of retimed starts and 41–77% of ends; snapping starts back and ends forward cuts in on 0–1%. Polish now snaps that way.
+- Generated starts inside speech that began ≤0.6 s earlier now back off to the onset, fixing 12 of 0903's 38 rejected cut-ins without breaking clean starts. The other cut-ins start inside long running speech and need a start at the phrase onset further back.
+- Generated ends stop before the owner's ends on about half of keeps, though they rarely cut the voice itself; not changed yet.
+
+Models tried and rejected for timing and ranking (2026-10-26): Desert Ant Labs Voz (no Chinese), Clips (podcast highlight picker; +0.006–0.008 AUC on Likely keep), and Align (word-timestamp refinement with Chinese support; it moves word starts later toward the acoustic onset, which makes start snap points and start rules worse under the rule above).
+
 ## Ranking direction
 
 Triage orders clips by a "Likely keep" score. The app ships fixed built-in weights rather than training per user. The event log, plus 5% exploration picks, collects unbiased review data for retraining the weights centrally.

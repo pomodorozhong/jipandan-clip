@@ -2,14 +2,13 @@
 
 ## In progress
 
-### feat/generated-clip-timing
+### feat/generated-clip-timing-review
 
-- **Task:** #47, timing of generated clips. The owner's rule: a start that cuts into the voice is unacceptable; an early start or a late end is fine, since the export trims silence. Not linked to the issue: this PR advances #47 but doesn't resolve it.
-- **PR:** #119, opened against `main` with the owner's approval; awaiting review and merge.
-- **Code checkpoint:** `724163d` (snap starts back and ends forward), `451997d` (generated starts back off to the voice onset), `7469953` (`evaluate_candidates.py --audio` timing report), then a merge of `main` at `f9713cd` (#118); plus this handoff.
-- **State:** awaiting review and merge.
-- **Verification:** on the merged tip, 168 Python tests and 170 frontend tests, type check and build pass; each timing commit passed on its own before the merge. Snapping was checked by dragging edges in Polish on a disposable session. On 0511, 0526, 0602 and 0903 the start rule raises acoustically clean starts from 79–86% to 85–90%. Not checked: a real clipping session with the new rules.
-- **Next action:** after #119 merges, drop this subsection; #47's next step is in Ranked work.
+- **Task:** #47, judging generated clips with the timing fixes from #119 on a real clipping session. Not linked to the issue: no code change is planned until the session shows what is left.
+- **PR:** none. Never open a PR from this branch with only `HANDOFF.md` in it; carry this handoff into the next work branch.
+- **Code checkpoint:** `main` at `d127d28` (#119 merged); plus this handoff.
+- **State:** waiting for the owner's next clipping session.
+- **Next action:** after the owner's session, compare its review time, rejections and start fixes with the 0903 session (`scripts/evaluate_candidates.py --audio` gives late-start and early-end rates), then decide on the remaining #47 gaps in Ranked work.
 
 ## Ranked work
 
