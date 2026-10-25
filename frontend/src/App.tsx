@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isExploreClip, orderByLikelyKeep, upNext } from "./reviewOrder";
 import TriageScreen from "./TriageScreen";
-import { isIdle, viewEvent, type OpenView, type ViewEndReason } from "./reviewViews";
+import { ReviewEventQueue, isIdle, previewWaitEvent, viewChange, viewEvent, type OpenView, type PreviewWait, type ViewEndReason, type ViewSubject } from "./reviewViews";
 import { api, applySessionDelta, audioUrl, bootstrap, sendReviewEvents, uploadAudio, type Clip, type ClipFeaturesJob, type ClipTranscriptionJob, type RoundsOverview, type LeadingSilenceJob, type PreviewJob, type Session, type SessionDelta, type SnapPoints, type Status, type ClipSource, clipSourceLabels } from "./api";
 import WaveformEditor from "./WaveformEditor";
 import { Button, CountBadge, Panel, StageLayout, StatusBadge, statusLabels } from "./ui";
@@ -298,6 +298,8 @@ export default function App() {
   const [roundError, setRoundError] = useState("");
   const [startingRound, setStartingRound] = useState(false);
   const [completingRound, setCompletingRound] = useState(false);
+  // Set when ending the round failed, so the round doesn't retry by itself; ending it by hand retries.
+  const [roundEndFailed, setRoundEndFailed] = useState(false);
   // The open round's details, and whether ending it early is waiting for confirmation.
   const [showRoundDetails, setShowRoundDetails] = useState(false);
   const [confirmEndRound, setConfirmEndRound] = useState(false);
@@ -633,7 +635,7 @@ export default function App() {
   const rankingContext = useCallback((clip: Clip) => {
     const rank = visible.findIndex((item) => item.clip_id === clip.clip_id) + 1;
     return {
-      source: lastInputSourceRef.current, order: effectiveOrder, filter: mode === "polish" ? activeFilter : mode,
+      source: lastInputSourceRef.current, order: effectiveOrder, stage: mode, filter: mode === "polish" ? activeFilter : mode,
       rank: rank || undefined, score: clip.likely_keep ?? undefined,
       explore: roundOpen ? clip.round_role === "random"
         : effectiveOrder === "likely-desc" && settings.exploreRanking && exploreSeed !== null
@@ -647,13 +649,11 @@ export default function App() {
     roundOpen, session?.rounds_done, session?.review_round?.number]);
 
   // A "view" is logged once a clip has been on screen for VIEW_MIN_MS, with how often it was played.
-  // It ends when the clip changes, the page is hidden or loses focus, or input stops for VIEW_IDLE_MS.
+  // It ends when the clip or stage changes, Settings or Help covers it, the page is hidden or loses
+  // focus, or input stops for VIEW_IDLE_MS. Events wait in the queue until the server confirms them.
   const viewRef = useRef<OpenView | null>(null);
-  const pendingViewsRef = useRef<object[]>([]);
-  const flushViews = useCallback((keepalive = false) => {
-    const events = pendingViewsRef.current.splice(0);
-    if (events.length) void sendReviewEvents(events, keepalive);
-  }, []);
+  const [reviewEvents] = useState(() => new ReviewEventQueue(sendReviewEvents));
+  const flushViews = useCallback((keepalive = false) => reviewEvents.flush(keepalive), [reviewEvents]);
   const autoplayRef = useRef(settings.autoplayClips);
   autoplayRef.current = settings.autoplayClips;
   const closeView = useCallback((reason: ViewEndReason) => {
@@ -661,9 +661,11 @@ export default function App() {
     viewRef.current = null;
     if (!view) return;
     const event = viewEvent(view, Date.now(), reason, autoplayRef.current);
-    if (event) pendingViewsRef.current.push(event);
-  }, []);
-  const reviewingClip = session?.audio && !session.needs_transcription ? selected : null;
+    if (event) reviewEvents.push(event);
+  }, [reviewEvents]);
+  // Dialogs that take the viewer away from the clip; Jump, Merge, and Export stay part of reviewing it.
+  const viewCovered = showSettings || showHelp || showStorageConfirm || startOverSource !== null || showRoundDetails;
+  const reviewingClip = session?.audio && !session.needs_transcription && !viewCovered ? selected : null;
   const startViewRef = useRef<() => void>(() => {});
   startViewRef.current = () => {
     const now = Date.now();
@@ -682,25 +684,36 @@ export default function App() {
     markViewActivityRef.current();
     if (viewRef.current) viewRef.current.plays += 1;
   }, []);
+  const viewSubjectRef = useRef<ViewSubject & { audio?: string | null }>({ clipId: null, stage: mode, covered: false });
   useEffect(() => {
-    closeView("clip_change");
+    const next = { clipId: reviewingClip?.clip_id ?? null, stage: mode, covered: viewCovered, audio: session?.audio };
+    const previous = viewSubjectRef.current;
+    viewSubjectRef.current = next;
+    const reason = next.audio !== previous.audio ? "clip_change" : viewChange(previous, next);
+    if (reason === null) return;
+    closeView(reason);
     startViewRef.current();
-  }, [reviewingClip?.clip_id, session?.audio, closeView]);
+  }, [reviewingClip?.clip_id, session?.audio, mode, viewCovered, closeView]);
+  const recordPreviewWait = useCallback((clipId: string, wait: PreviewWait) => {
+    const clip = session?.candidates.find((item) => item.clip_id === clipId);
+    if (!session?.audio || !clip) return;
+    reviewEvents.push(previewWaitEvent(session.audio, clipId, wait, rankingContext(clip)));
+  }, [session?.audio, session?.candidates, rankingContext, reviewEvents]);
   useEffect(() => {
-    const flushTimer = window.setInterval(() => flushViews(), VIEW_FLUSH_MS);
+    const flushTimer = window.setInterval(() => void flushViews(), VIEW_FLUSH_MS);
     const idleTimer = window.setInterval(() => {
       if (viewRef.current && isIdle(viewRef.current, Date.now())) closeView("idle");
     }, VIEW_IDLE_CHECK_MS);
     function onVisibility() {
       if (document.visibilityState === "hidden") {
         closeView("hidden");
-        flushViews(true);
+        void flushViews(true);
       } else if (!viewRef.current) startViewRef.current();
     }
     function onBlur() { closeView("blur"); }
     function onFocus() { if (!viewRef.current && document.visibilityState === "visible") startViewRef.current(); }
     function onActivity() { markViewActivityRef.current(); }
-    function onPageHide() { closeView("hidden"); flushViews(true); }
+    function onPageHide() { closeView("hidden"); void flushViews(true); }
     const activityEvents = ["keydown", "pointerdown", "pointermove", "wheel"] as const;
     for (const type of activityEvents) window.addEventListener(type, onActivity, { capture: true, passive: true });
     document.addEventListener("visibilitychange", onVisibility);
@@ -716,7 +729,7 @@ export default function App() {
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("pagehide", onPageHide);
       closeView("hidden");
-      flushViews(true);
+      void flushViews(true);
     };
   }, [closeView, flushViews]);
   const nextVisibleClipId = visible[selectedPosition + 1]?.clip_id ?? null;
@@ -1209,13 +1222,22 @@ export default function App() {
   async function completeRound() {
     setCompletingRound(true);
     try {
+      // The round's time must reach the server before the round closes, so its summary and file have all of it.
+      closeView("round_end");
+      if (!await flushViews()) {
+        setRoundEndFailed(true);
+        setError("Review time didn't reach the app, so the round is still open. End it again to retry.");
+        return;
+      }
       const next = await api<Session>("/session/rounds/complete", "POST");
+      setRoundEndFailed(false);
       setSession(next);
       setShowRoundDetails(false);
       setConfirmEndRound(false);
       setFreeReviewAudio(null);
       setSelectedId(null);
     } catch (cause) {
+      setRoundEndFailed(true);
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setCompletingRound(false);
@@ -1226,8 +1248,8 @@ export default function App() {
   const completeRoundRef = useRef(completeRound);
   completeRoundRef.current = completeRound;
   useEffect(() => {
-    if (roundProcessed && !completingRound && saveState === "saved") void completeRoundRef.current();
-  }, [roundProcessed, completingRound, saveState]);
+    if (roundProcessed && !completingRound && !roundEndFailed && saveState === "saved") void completeRoundRef.current();
+  }, [roundProcessed, completingRound, roundEndFailed, saveState]);
 
   // The rounds home's estimates follow the planned size and random share, and every finished round.
   const roundsAudio = showRoundsHome || showRoundDetails ? session?.audio : null;
@@ -1250,7 +1272,7 @@ export default function App() {
     setStartOverError("");
     // Views of the old session's clips must not land in the new session's review log.
     viewRef.current = null;
-    pendingViewsRef.current = [];
+    reviewEvents.clear();
     try {
       const next = await api<Session>("/session/start-over", "POST", {
         expected_revision: session.revision, clip_source: source,
@@ -1548,6 +1570,7 @@ export default function App() {
           headingDetail={`#${selected.clip_id} · ${formatDuration(selected.end_ms - selected.start_ms)}`}
           recordingDurationMs={session.duration_ms ?? undefined}
           revision={session.revision} open={!showSettings && !showHelp && !showJump && !showMerge}
+          onPlayback={countViewPlayback} onPreviewWait={(wait) => recordPreviewWait(selected.clip_id, wait)}
           nextClipId={nextVisibleClipId} controllerHandlerRef={dialogControllerHandlerRef} onClose={() => {}}
           gamepadAction={gamepadActionRequest}
           onGamepadActionHandled={(id) => setGamepadActionRequest((current) => current?.id === id ? null : current)}
@@ -1822,6 +1845,7 @@ export default function App() {
         </Panel>} />}
       {selected && session.revision !== null && <ExportPreview key={selected.clip_id} clip={selected}
         revision={session.revision} open={showExportModal} nextClipId={nextVisibleClipId}
+        onPlayback={countViewPlayback} onPreviewWait={(wait) => recordPreviewWait(selected.clip_id, wait)}
         exportContext={rankingContext(selected)}
         gamepadAction={gamepadActionRequest}
         onGamepadActionHandled={(id) => setGamepadActionRequest((current) => current?.id === id ? null : current)}

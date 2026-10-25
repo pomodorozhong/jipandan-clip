@@ -14,6 +14,7 @@ import math
 import random
 import secrets
 from collections.abc import Iterable, Sequence
+from datetime import datetime
 
 from jipandan.core.stage_times import CHANGE_TYPES, STAGES, event_stage, stage_breakdown
 
@@ -162,21 +163,38 @@ def margin_points(labels: int) -> float | None:
 STAT_EVENTS = ("view", "export", *sorted(CHANGE_TYPES))
 
 
+def _ms(stamp: str) -> float:
+    return datetime.fromisoformat(stamp).timestamp() * 1000
+
+
 def round_events(item: dict, clip_index: dict[str, int], events: Iterable[dict]) -> list[dict]:
-    """The views of and changes to a round's clips made while it was open; earlier ones are left out."""
+    """The views of and changes to a round's clips made while it was open; earlier ones are left out.
+
+    A view that runs across the round's start or end counts only its part inside the round, so its
+    ``dwell_ms`` is cut to that part.
+    """
     started = item.get("started")
     ended = (item.get("completed") or {}).get("t")
     roles = item["roles"]
     if started is None:
         return []
+    opened, closed = _ms(started), None if ended is None else _ms(ended)
     kept = []
     for event in events:
         index = clip_index.get(event.get("clip") or "")
         if index is None or str(index) not in roles:
             continue
-        start = event.get("start", event["t"])
-        if start >= started and (ended is None or start <= ended):
-            kept.append(event)
+        if event["type"] != "view":
+            start = _ms(event.get("start", event["t"]))
+            if start >= opened and (closed is None or start <= closed):
+                kept.append(event)
+            continue
+        # A view without a start time was logged as it ended.
+        start = _ms(event["start"]) if "start" in event else _ms(event["t"]) - event["dwell_ms"]
+        end = start + event["dwell_ms"]
+        inside = min(end, closed if closed is not None else end) - max(start, opened)
+        if inside > 0:
+            kept.append(event if inside >= event["dwell_ms"] else {**event, "dwell_ms": round(inside)})
     return kept
 
 

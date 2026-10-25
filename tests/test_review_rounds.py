@@ -142,6 +142,26 @@ class EstimateTests(unittest.TestCase):
                                           "stage_ms": {"triage": 10_000, "polish": 0, "publish": 5_000}, "ms": 15_000})
         self.assertEqual(result["next"]["ms"], 15_000)
 
+    def test_views_across_the_round_edges_count_only_their_part_inside_it(self):
+        roles = {"1": "top"}
+        clips = [("a", 1, "exported", 80.0)]
+        item = self.make_round(1, roles, started="2026-10-21T10:00:10.000Z", completed="2026-10-21T10:00:20.000Z")
+        events = [
+            view("a", "2026-10-21T10:00:09.000Z", 5_000),  # 9–14 s: 4 s inside
+            view("a", "2026-10-21T10:00:19.000Z", 5_000),  # 19–24 s: 1 s inside
+            view("a", "2026-10-21T10:00:21.000Z", 5_000),  # after the round
+        ]
+        result = overview([item], clips, events, 10, 0.2)
+        self.assertEqual(result["rounds"][0]["time_ms"], 5_000)
+        self.assertEqual(result["rounds"][0]["stages"][0]["ms"], 5_000)
+
+    def test_views_without_a_start_time_count_as_ending_when_logged(self):
+        roles = {"1": "top"}
+        clips = [("a", 1, "exported", 80.0)]
+        logged = {"type": "view", "clip": "a", "t": "2026-10-21T10:00:05.000Z", "dwell_ms": 30_000, "filter": "triage"}
+        item = self.make_round(1, roles, started="2026-10-21T10:00:00.000Z")
+        self.assertEqual(overview([item], clips, [logged], 10, 0.2)["rounds"][0]["time_ms"], 5_000)
+
 
 if __name__ == "__main__":
     unittest.main()

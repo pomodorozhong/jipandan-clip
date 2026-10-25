@@ -38,6 +38,8 @@ type Props = {
   alert?: React.ReactNode;
   onActivate(): void;
   onAction(action: InputAction): void;
+  /** Called each time playback starts, including nearby audio outside the clip, to count it in the clip's view. */
+  onPlayback?: () => void;
 };
 
 const NEARBY_AUDIO_MS = 5000;
@@ -56,7 +58,7 @@ function clock(ms: number): string {
 
 const PreviewPlayer = forwardRef<PreviewPlayerHandle, Props>(function PreviewPlayer({
   variant, eyebrow, title, durationLabel, durationText, note, startMs, endMs,
-  waveform, sharedPeak, trimMap, src, placeholder, playShortcut, replayShortcut, playShortcutId, replayShortcutId, onActivate, onAction, onTrim, editingDisabled = false, sourceContext, alert,
+  waveform, sharedPeak, trimMap, src, placeholder, playShortcut, replayShortcut, playShortcutId, replayShortcutId, onActivate, onAction, onTrim, editingDisabled = false, sourceContext, alert, onPlayback,
 }, ref) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const contextAudioRef = useRef<HTMLAudioElement>(null);
@@ -217,6 +219,7 @@ const PreviewPlayer = forwardRef<PreviewPlayerHandle, Props>(function PreviewPla
     try {
       await audio.play();
       setError("");
+      onPlayback?.();
     } catch {
       setError("Playback was blocked. Press Play again after interacting with the page.");
     }
@@ -233,6 +236,7 @@ const PreviewPlayer = forwardRef<PreviewPlayerHandle, Props>(function PreviewPla
     try {
       await audio.play();
       setError("");
+      onPlayback?.();
     } catch {
       setError("Playback was blocked. Press Play again after interacting with the page.");
     }

@@ -297,13 +297,13 @@ export async function api<T>(path: string, method = "GET", body?: unknown, signa
   return result as T;
 }
 
-/** Best-effort delivery of review-log events; failures are ignored so reviewing never stalls. */
-export function sendReviewEvents(events: unknown[], keepalive = false): Promise<void> {
+/** Send review-log events; resolves true once the server has stored them, false on any failure. */
+export function sendReviewEvents(events: unknown[], keepalive = false): Promise<boolean> {
   return fetch("/api/review-log", {
     method: "POST", keepalive,
     headers: { "content-type": "application/json", "x-jipandan-token": token },
     body: JSON.stringify({ events }),
-  }).then(() => undefined, () => undefined);
+  }).then((response) => response.ok, () => false);
 }
 
 export async function uploadAudio(file: File): Promise<Session> {
