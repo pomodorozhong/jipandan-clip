@@ -5,13 +5,11 @@
 ### feat/generated-clip-timing
 
 - **Task:** #47, timing of generated clips. The owner's rule: a start that cuts into the voice is unacceptable; an early start or a late end is fine, since the export trims silence. Not linked to the issue: this PR advances #47 but doesn't resolve it.
-- **PR:** drafted, waiting on P-01.
+- **PR:** #119, opened against `main` with the owner's approval; awaiting review and merge.
 - **Code checkpoint:** `724163d` (snap starts back and ends forward), `451997d` (generated starts back off to the voice onset), `7469953` (`evaluate_candidates.py --audio` timing report), then a merge of `main` at `f9713cd` (#118); plus this handoff.
-- **State:** awaiting the owner's approval to push and open the PR.
+- **State:** awaiting review and merge.
 - **Verification:** on the merged tip, 168 Python tests and 170 frontend tests, type check and build pass; each timing commit passed on its own before the merge. Snapping was checked by dragging edges in Polish on a disposable session. On 0511, 0526, 0602 and 0903 the start rule raises acoustically clean starts from 79–86% to 85–90%. Not checked: a real clipping session with the new rules.
-- **Pending:**
-  - P-01: push `feat/generated-clip-timing` and open the PR shown in chat ("feat: keep clip edges from cutting into the voice"), `Related to #47`. Blocks the PR.
-- **Next action:** after P-01, wait for review and merge.
+- **Next action:** after #119 merges, drop this subsection; #47's next step is in Ranked work.
 
 ## Ranked work
 
