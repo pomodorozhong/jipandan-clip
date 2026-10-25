@@ -194,7 +194,23 @@ class RoundFileTests(unittest.TestCase):
         matches = match_clips(file_clips, clips)
         self.assertEqual(sorted(matches), [1, 2, 4])
         self.assertEqual(matches[4][1]["outcome"], "rejected")
-        self.assertAlmostEqual(matches[1][0], 1.0)
+        self.assertAlmostEqual(matches[1][0][0], 1.0)
+
+    def test_nested_clips_match_the_file_clip_with_the_same_range(self):
+        # Generated clips nest: 282 lies inside 281, so both overlap all of the shorter clip.
+        history = RoundHistory(parse_round_file(round_file(
+            item=finished_round(size=2, roles={"281": "top", "282": "top"}),
+            start={"281": clip(281, 1_316_472, 1_318_368), "282": clip(282, 1_317_208, 1_318_368)},
+            changes=[change(2, {"281": clip(281, 1_316_472, 1_318_368, "exported"),
+                                "282": clip(282, 1_317_208, 1_318_368, "rejected")})])))
+        # Here 280 is the start of 281 and is cut from that file clip alone.
+        matches = match_clips(history.file_clips(), [
+            (280, 1_316_472, 1_317_208), (281, 1_316_472, 1_318_368), (282, 1_317_208, 1_318_368)])
+        self.assertEqual({index: clip["index"] for index, (_, clip) in matches.items()}, {280: 281, 281: 281, 282: 282})
+        item = imported_round(history, matches, 1, "a.round-02.json")
+        self.assertEqual(item["imported"]["unmatched"], 0)
+        # The clip with the same range takes the outcome, not the one nested inside it.
+        self.assertEqual((item["outcomes"], item["covered"]), ({"281": "kept", "282": "rejected"}, [280]))
 
     def test_imported_round_counts_its_decisions_and_keeps_unfinished_clips_in_the_pool(self):
         history = RoundHistory(parse_round_file(round_file(
