@@ -53,6 +53,41 @@ class RecordingStoreTests(unittest.TestCase):
         self.store.commit(draft, changed, events, **options)
         return draft
 
+    def test_history_gives_each_change_with_its_clips_right_after_it(self):
+        def decide(status):
+            def mutate(draft):
+                draft.get_candidate("1").status = status
+            return mutate
+
+        start = self.store.last_seq()
+        session = self.change(self.session, decide("group1"), [{"type": "status", "clip": "1", "to": "group1"}],
+                              label="1", undoable=True)
+        self.store.append_events([{"type": "view", "clip": "1", "dwell_ms": 900}])
+        session = self.change(session, decide("rejected"), [{"type": "status", "clip": "1", "to": "rejected"}],
+                              label="1", undoable=True)
+        rejected = self.store.last_seq()
+        target = self.store.undo_target()
+        session = self.change(session, decide("group1"), [{"type": "undo", "targets": target.seqs}], undoes=target.seqs)
+        def split(draft):
+            draft.duplicate_candidate("1")
+        self.change(session, split, [{"type": "duplicate", "clip": "1", "created": "1-2"}])
+
+        changes, events = self.store.history(start, self.store.last_seq())
+        self.assertEqual([(c["type"], c["after"]["1"]["status"] if "1" in c["after"] else None) for c in changes],
+                         [("status", "group1"), ("status", "rejected"), ("undo", "group1"), ("duplicate", None)])
+        self.assertEqual(changes[2]["undoes"], [rejected])
+        self.assertEqual(changes[3]["after"]["1-2"]["status"], "group1")
+        self.assertEqual([(e["type"], e["clip"], e["dwell_ms"]) for e in events], [("view", "1", 900)])
+        # A window that ends early still gives the clips as they were right after each change in it.
+        early, _ = self.store.history(start, rejected)
+        self.assertEqual([c["after"]["1"]["status"] for c in early], ["group1", "rejected"])
+        self.assertEqual(self.store.clips_at(start)["1"]["status"], "pending")
+        self.assertIsNone(self.store.clips_at(start)["1-2"])
+        self.assertNotIn("2", self.store.clips_at(start))
+        self.assertEqual([ids for _, ids in self.store.changed_after(rejected)], [["1"], ["1-2"]])
+        self.assertEqual(self.store.seq_at("2000-01-01T00:00:00Z"), 0)
+        self.assertEqual(self.store.seq_at("2999-01-01T00:00:00Z"), self.store.last_seq())
+
     def test_state_and_undo_survive_reopening(self):
         def decide(draft):
             draft.get_candidate("1").status = "group1"

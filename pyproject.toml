@@ -17,6 +17,7 @@ dependencies = [
 [project.scripts]
 transcribe = "jipandan.cli.transcribe:main"
 jipandan-web = "jipandan.cli.web:main"
+jipandan-dataset = "jipandan.cli.dataset:main"
 
 [build-system]
 requires = ["setuptools>=69", "wheel"]

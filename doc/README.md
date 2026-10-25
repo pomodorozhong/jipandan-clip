@@ -5,6 +5,7 @@ See the [project README](../README.md) for installation, commands, and testing.
 ## Reference
 
 - [Architecture](architecture.md): how the browser, server, SQLite store, FFmpeg, and Whisper fit together, and how input is handled.
+- [Datasets](datasets.md): building ranking, timing, and title examples from round files, and how to evaluate on them.
 
 ## Active plans
 

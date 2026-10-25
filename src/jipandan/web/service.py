@@ -41,7 +41,8 @@ from jipandan.core.review_rounds import (
     in_pool, pick_round, set_order_key, unprocessed,
 )
 from jipandan.core.round_files import (
-    audio_sha256, build_round_file, imported_round, match_clips, parse_round_file, round_file_path, write_round_file,
+    RoundHistory, audio_sha256, build_round_file, build_update_file, file_kind, imported_round, in_round, match_clips,
+    parse_round_file, round_file_path, update_file_path, write_round_file,
 )
 from jipandan.core.review_rounds import overview as round_overview
 from jipandan.core.srt import parse_srt, segment_scores_path
@@ -78,6 +79,13 @@ def _time_ms(value: str) -> int:
     return round(srt_time_to_seconds(value.replace(".", ",")) * 1000)
 
 
+def _view_start_ms(event: dict) -> float:
+    """When a view began; a view without a start time was logged as it ended."""
+    if "start" in event:
+        return datetime.fromisoformat(event["start"]).timestamp() * 1000
+    return datetime.fromisoformat(event["t"]).timestamp() * 1000 - event.get("dwell_ms", 0)
+
+
 def _copy_sidecars(source_srt: Path, destination_srt: Path) -> None:
     """Copy an SRT's segment scores and snap points to sit beside ``destination_srt``."""
     for path in (segment_scores_path, snap_points_path):
@@ -85,6 +93,8 @@ def _copy_sidecars(source_srt: Path, destination_srt: Path) -> None:
             shutil.copyfile(path(source_srt), path(destination_srt))
 
 
+# Events that open and close a review round, or a review set from before rounds.
+ROUND_EVENTS = ("review-round", "review-round-complete", "review-set", "review-set-complete")
 # Where a new session's clips come from: transcript lines, or the generated candidates SRT.
 CLIP_SOURCE_LINES = "lines"
 CLIP_SOURCE_GENERATED = "generated"
@@ -927,7 +937,13 @@ class SessionService:
             clips = [(c.clip_id, c.index, c.status, score) for c, score in zip(session.candidates, scores)]
             events = self.store.events(kinds=STAT_EVENTS) if self.store is not None else []
             rounds = list(self._rounds)
-        return round_overview(rounds, clips, events, size, random_share)
+            watched = [item["written_seq"] for item in rounds if item.get("file_version") == 2]
+            changed = self.store.changed_after(min(watched)) if watched else []
+        result = round_overview(rounds, clips, events, size, random_share)
+        for summary, item in zip(result["rounds"], rounds):
+            summary["file_version"] = item.get("file_version", 1 if item.get("file") else None)
+            summary["unsaved_changes"] = self._unsaved_changes(item, changed)
+        return result
 
     def start_round(self, size: int, random_share: float) -> dict:
         """Open the next review round: the top clips no round has taken yet, plus a random share of them."""
@@ -960,7 +976,10 @@ class SessionService:
             return self.snapshot()
 
     def complete_round(self) -> dict:
-        """Close the open round, early if some of its clips are not yet exported or rejected, and write its file."""
+        """Close the open round, early if some of its clips are not yet exported or rejected, and write its file.
+
+        Earlier rounds whose clips changed since their files were written get an update file too.
+        """
         sha = self._audio_sha256()
         with self._lock:
             session = self._ready()
@@ -970,11 +989,11 @@ class SessionService:
             left = unprocessed(current["roles"], [(c.index, c.status) for c in session.candidates])
             completed = {"t": utc_now(), "unprocessed": left}
             closed = closing_statuses(current["roles"], [(c.clip_id, c.index, c.status) for c in session.candidates])
-            finished = {**current, "completed": completed, "closed_status": closed}
-            finished["file"] = self._write_round_file(session, finished, sha)
-            rounds = [*self._rounds[:-1], finished]
+            finished = {**current, "completed": completed, "closed_status": closed,
+                        **self._write_round_file(session, {**current, "completed": completed}, sha, ending=True)}
+            rounds, updates = self._write_updates(session, sha, [*self._rounds[:-1], finished], exclude=current["number"])
             self.store.save_review_rounds(rounds, {"type": "review-round-complete", "number": current["number"],
-                                                   "file": finished["file"], **completed})
+                                                   "file": finished.get("file"), "updates": updates, **completed})
             self._rounds = rounds
             return self.snapshot()
 
@@ -998,26 +1017,106 @@ class SessionService:
                 store.save_audio_hash({**key, "sha256": digest})
         return digest
 
-    def _write_round_file(self, session: Session, item: dict, sha: str | None) -> str | None:
-        """Write a finished round's file beside the recording; returns its name, or None if it could not be written."""
+    def _round_seqs(self, item: dict) -> tuple[int, int]:
+        """Where a finished round starts and ends in the review history.
+
+        A round opens with its ``review-round`` event and closes just before its ``review-round-complete``
+        event (``review-set`` and ``review-set-complete`` for a review set from before rounds); a round
+        missing them is placed by its start and end times.
+        """
+        start = end = None
+        for event in self.store.events(kinds=ROUND_EVENTS):
+            if event.get("number", 1 if event["type"].startswith("review-set") else None) != item["number"]:
+                continue
+            if event["type"] in ("review-round", "review-set") and start is None:
+                start = event["seq"] - 1
+            elif event["type"] in ("review-round-complete", "review-set-complete") and end is None:
+                end = event["seq"] - 1
+        if start is None:
+            start = self.store.seq_at(item["started"]) if item.get("started") else 0
+        return start, end if end is not None else self.store.seq_at(item["completed"]["t"])
+
+    def _write_round_file(self, session: Session, item: dict, sha: str | None, *, ending: bool = False) -> dict:
+        """Write a finished round's file beside the recording, as the round's part of the review history.
+
+        ``ending`` marks a round being closed now, which ends at the latest event. Returns the round's
+        file fields (``file``, ``file_version``, ``written_seq``), or nothing if the file could not be written.
+        """
         if sha is None:
-            return None
-        scores = self._scores(session)
-        # The file holds each clip as it was when the round ended, not as it is now.
-        closed = item.get("closed_status") or {}
-        clips = [(c.clip_id, c.index, _time_ms(c.original_start), _time_ms(c.original_end),
-                  closed.get(c.clip_id, c.status), score)
-                 for c, score in zip(session.candidates, scores) if not closed or c.clip_id in closed]
-        events = self.store.events(kinds=("view",)) if self.store is not None else []
-        times = clip_times(item, {c.clip_id: c.index for c in session.candidates}, events)
+            return {}
+        start_seq, end_seq = self._round_seqs(item)
+        if ending:
+            end_seq = self.store.last_seq()
+        roles = item["roles"]
+        then = self.store.clips_at(start_seq)
+        clips = {c.clip_id: asdict(c) for c in session.candidates if in_round(roles, c.clip_id)}
+        clips.update({clip_id: clip for clip_id, clip in then.items() if in_round(roles, clip_id)})
+        start = {clip_id: clip for clip_id, clip in clips.items() if clip is not None}
+        scores = {c.clip_id: score for c, score in zip(session.candidates, self._scores(session))}
+        changes, events = self.store.history(start_seq, end_seq)
+        # Views delivered after the round ended still count for the part made while it was open,
+        # as in its summary; before #106 the last views of a round could arrive late.
+        _, late = self.store.history(end_seq, self.store.last_seq())
+        ended = datetime.fromisoformat(item["completed"]["t"]).timestamp() * 1000
+        events += [event for event in late if event["type"] == "view" and _view_start_ms(event) < ended]
         recording = {"name": session.audio.name, "sha256": sha, "duration_ms": self.duration_ms}
         path = round_file_path(session.audio, item["number"])
         try:
-            write_round_file(path, build_round_file(item, recording, clips, times))
+            write_round_file(path, build_round_file(
+                item, recording, self._round_source(session), start, scores, changes, events, start_seq, end_seq))
         except OSError as exc:
             logger.warning("Could not write the round file %s: %s", path, exc)
+            return {}
+        return {"file": path.name, "file_version": 2, "written_seq": end_seq}
+
+    @staticmethod
+    def _round_source(session: Session) -> dict:
+        return {"clip_source": CLIP_SOURCE_GENERATED if is_candidates_srt(session.srt) else CLIP_SOURCE_LINES,
+                "srt_sha256": session.srt_fingerprint, "features_version": session.clip_features_version}
+
+    @staticmethod
+    def _unsaved_changes(item: dict, changed: list[tuple[int, list[str]]]) -> int | None:
+        """How many changes touched a finished round's clips since its files were written; None without a
+        current-format file, as for rounds imported from another project."""
+        if not item.get("completed") or item.get("imported") or item.get("file_version") != 2:
             return None
-        return path.name
+        return sum(1 for seq, clip_ids in changed
+                   if seq > item["written_seq"] and any(in_round(item["roles"], clip_id) for clip_id in clip_ids))
+
+    def _write_updates(
+        self, session: Session, sha: str | None, rounds: list[dict], *, exclude: int | None = None,
+        only: int | None = None,
+    ) -> tuple[list[dict], list[str]]:
+        """Write an update file for each finished round in ``rounds`` changed since its files were written.
+
+        Returns the rounds with their new update files recorded, and the names written. A round that
+        could not be updated keeps its changes unsaved, to be written next time.
+        """
+        if sha is None:
+            return rounds, []
+        watched = [item["written_seq"] for item in rounds if item.get("file_version") == 2 and not item.get("imported")]
+        if not watched:
+            return rounds, []
+        changed = self.store.changed_after(min(watched))
+        last = self.store.last_seq()
+        result, names = [], []
+        for item in rounds:
+            if item["number"] in (exclude,) or (only is not None and item["number"] != only) \
+                    or not self._unsaved_changes(item, changed):
+                result.append(item)
+                continue
+            changes, events = self.store.history(item["written_seq"], last)
+            update = len(item.get("updates") or []) + 1
+            path = update_file_path(session.audio, item["number"], update)
+            try:
+                write_round_file(path, build_update_file(item, sha, update, item["written_seq"], last, changes, events))
+            except OSError as exc:
+                logger.warning("Could not write the update file %s: %s", path, exc)
+                result.append(item)
+                continue
+            names.append(path.name)
+            result.append({**item, "updates": [*(item.get("updates") or []), path.name], "written_seq": last})
+        return result, names
 
     def _finished_round(self, number: int) -> dict:
         item = next((item for item in self._rounds if item["number"] == number), None)
@@ -1026,18 +1125,33 @@ class SessionService:
         return item
 
     def save_round_file(self, number: int) -> dict:
-        """Write the file of a finished round that has none, such as one finished before round files."""
+        """Bring a finished round's files up to date.
+
+        A round with no file, or only a file of an older format, gets a file in the current format,
+        built from the review history as it was when the round ended; changes to its clips since then
+        go into an update file.
+        """
         sha = self._audio_sha256()
         with self._lock:
             session = self._ready()
             item = self._finished_round(number)
-            if item.get("file") or item.get("imported"):
+            if item.get("imported"):
                 return self.snapshot()
-            name = self._write_round_file(session, item, sha)
-            if name is None:
-                raise InvalidEdit("The round file could not be written beside the recording")
-            rounds = [{**entry, "file": name} if entry is item else entry for entry in self._rounds]
-            self.store.save_review_rounds(rounds, {"type": "round-file", "number": number, "file": name})
+            rounds = list(self._rounds)
+            position = rounds.index(item)
+            written = None
+            if item.get("file_version") != 2:
+                fields = self._write_round_file(session, item, sha)
+                if not fields:
+                    raise InvalidEdit("The round file could not be written beside the recording")
+                written = {**fields, "replaces": item.get("file")}
+                rounds[position] = {**item, **fields}
+            rounds, updates = self._write_updates(session, sha, rounds, only=number)
+            if written is None and not updates:
+                return self.snapshot()
+            self.store.save_review_rounds(rounds, {"type": "round-file", "number": number,
+                                                   "file": (written or {}).get("file"),
+                                                   "replaces": (written or {}).get("replaces"), "updates": updates})
             self._rounds = rounds
             return self.snapshot()
 
@@ -1055,6 +1169,8 @@ class SessionService:
 
         Clips are matched by time, so the files' clips are skipped by later rounds and their decisions
         count toward the estimates; the clips here stay Unsorted, as their exports are not carried over.
+        Of several copies of one round, the one in the newest format is used. Update files are left
+        for datasets: a round counts what it found while it was open.
         """
         sha = self._audio_sha256()
         with self._lock:
@@ -1063,35 +1179,49 @@ class SessionService:
                 raise InvalidEdit("End the open round before importing round files")
             rounds = list(self._rounds)
             imported, skipped = [], []
+            parsed: list[tuple[str, int, dict]] = []
+            order = {name: position for position, (name, _) in enumerate(files)}
             for name, raw in files:
+                if file_kind(raw) == "update":
+                    skipped.append({"file": name, "reason": "update files are read by jipandan-dataset, not imported"})
+                    continue
                 try:
-                    data = parse_round_file(raw)
+                    version = raw.get("version") if isinstance(raw, dict) else None
+                    parsed.append((name, version, parse_round_file(raw)))
                 except ValueError as exc:
                     skipped.append({"file": name, "reason": str(exc)})
-                    continue
+            newest: dict[str, int] = {}
+            for _, version, data in parsed:
+                newest[data["round"]["seed"]] = max(newest.get(data["round"]["seed"], 0), version)
+            for name, version, data in parsed:
                 if sha is None or data["recording"]["sha256"] != sha:
                     skipped.append({"file": name, "reason": "it is from a different recording"})
+                    continue
+                if version < newest[data["round"]["seed"]]:
+                    skipped.append({"file": name, "reason": "a newer copy of this round is in the import"})
                     continue
                 if any(item["seed"] == data["round"]["seed"] for item in rounds):
                     skipped.append({"file": name, "reason": "this round is already here"})
                     continue
+                history = RoundHistory(data)
                 # Like a new round's pool: clips an earlier round left unfinished can still be matched.
                 effective = effective_clips(rounds, [(c.clip_id, c.index, c.status, None) for c in session.candidates])
                 taken = {index for _, index, status, _ in effective if status != "pending"}
-                matches = match_clips(data["clips"], [
+                matches = match_clips(history.file_clips(), [
                     (c.index, _time_ms(c.original_start), _time_ms(c.original_end))
                     for c in session.candidates if c.index not in taken
                 ])
                 if not matches:
                     skipped.append({"file": name, "reason": "none of its clips match a clip here"})
                     continue
-                item = imported_round(data, matches, len(rounds) + 1, name)
+                item = imported_round(history, matches, len(rounds) + 1, name)
                 rounds.append(item)
                 imported.append({"file": name, "number": item["number"], "from_number": data["round"]["number"],
                                  "matched": len(matches), "unmatched": item["imported"]["unmatched"]})
             if imported:
                 self.store.save_review_rounds(rounds, {"type": "review-round-import", "rounds": imported})
                 self._rounds = rounds
+            skipped.sort(key=lambda entry: order[entry["file"]])
             return {**self.snapshot(), "round_import": {"imported": imported, "skipped": skipped}}
 
     def _clip_source_srts(self) -> dict[str, Path]:
@@ -1109,12 +1239,17 @@ class SessionService:
         """Replace the open session with a fresh one from a saved SRT, keeping the old one as a backup.
 
         Decisions, edits, and the review log start empty; exported files and the export directory stay.
+        Finished rounds' changes not yet in their files are written to update files first.
         """
+        sha = self._audio_sha256()
         with self._lock:
             old = self._check_revision(expected_revision)
             srt = self._clip_source_srts().get(clip_source)
             if srt is None:
                 raise InvalidEdit("That transcript is not saved beside the recording")
+            rounds, updates = self._write_updates(old, sha, list(self._rounds))
+            if updates:
+                self.store.save_review_rounds(rounds, {"type": "round-update", "updates": updates})
             database = store_path(old.audio)
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             backup = database.with_name(f"{database.name}.{stamp}.bak")

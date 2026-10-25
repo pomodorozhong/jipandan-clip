@@ -1,0 +1,73 @@
+{
+ "format": "jipandan-round",
+ "version": 1,
+ "recording": {
+  "name": "fixture.mp3",
+  "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "duration_ms": 60000
+ },
+ "round": {
+  "number": 2,
+  "size": 4,
+  "pool": 50,
+  "total": 60,
+  "random_share": 0.5,
+  "seed": "fixture-v1",
+  "score_version": "builtin-v1",
+  "sampling": 2,
+  "random_chance": 0.0435,
+  "started": "2026-10-24T09:00:00.000Z",
+  "ended": "2026-10-24T10:00:00.000Z",
+  "unprocessed": 1
+ },
+ "clips": [
+  {
+   "start_ms": 1000,
+   "end_ms": 2000,
+   "role": "top",
+   "score": 81.0,
+   "outcome": "kept",
+   "time_ms": {
+    "triage": 4000,
+    "polish": 6000,
+    "publish": 9000
+   }
+  },
+  {
+   "start_ms": 3000,
+   "end_ms": 4000,
+   "role": "top",
+   "score": 66.0,
+   "outcome": "rejected",
+   "time_ms": {
+    "triage": 3000,
+    "polish": 0,
+    "publish": 0
+   }
+  },
+  {
+   "start_ms": 5000,
+   "end_ms": 6000,
+   "role": "random",
+   "score": 20.5,
+   "outcome": "kept",
+   "time_ms": {
+    "triage": 2500,
+    "polish": 1000,
+    "publish": 0
+   }
+  },
+  {
+   "start_ms": 7000,
+   "end_ms": 8000,
+   "role": "random",
+   "score": 12.0,
+   "outcome": "unfinished",
+   "time_ms": {
+    "triage": 0,
+    "polish": 0,
+    "publish": 0
+   }
+  }
+ ]
+}

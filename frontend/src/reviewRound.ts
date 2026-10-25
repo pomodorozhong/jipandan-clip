@@ -1,4 +1,4 @@
-import type { Clip, ReviewRound, Status } from "./api";
+import type { Clip, ReviewRound, RoundSummary, Status } from "./api";
 import { unitHash } from "./reviewOrder";
 
 // While a review round is open, the whole app works on its clips only; see doc/app-rebuild-plan.md, "Review rounds".
@@ -84,4 +84,17 @@ export function formatPercent(share: number | null): string | null {
 export function finishClock(now: Date, ms: number): string {
   const end = new Date(now.getTime() + ms);
   return `${String(end.getHours()).padStart(2, "0")}:${String(end.getMinutes()).padStart(2, "0")}`;
+}
+
+export type RoundFileState =
+  | { kind: "imported" | "open" | "missing" | "older" | "saved" }
+  | { kind: "unsaved"; changes: number };
+
+/** What a finished round's files need: none yet, one in the current format, or an update with later changes. */
+export function roundFileState(round: Pick<RoundSummary, "imported" | "completed" | "file" | "file_version" | "unsaved_changes">): RoundFileState {
+  if (round.imported) return { kind: "imported" };
+  if (!round.completed) return { kind: "open" };
+  if (!round.file) return { kind: "missing" };
+  if (round.file_version !== 2) return { kind: "older" };
+  return round.unsaved_changes ? { kind: "unsaved", changes: round.unsaved_changes } : { kind: "saved" };
 }

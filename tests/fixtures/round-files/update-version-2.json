@@ -1,0 +1,59 @@
+{
+ "format": "jipandan-round-update",
+ "version": 2,
+ "recording": {
+  "sha256": "6896d9ea3f73a4434f5832bc65714e7d066f177373f36f34dc8a6f735daa41b1"
+ },
+ "round": {
+  "number": 1,
+  "seed": "90340de37b8b9e12"
+ },
+ "update": 1,
+ "from_seq": 11,
+ "to_seq": 13,
+ "changes": [
+  {
+   "undoes": null,
+   "seq": 13,
+   "t": "2026-10-25T06:12:34.041Z",
+   "type": "status",
+   "label": "1",
+   "events": [
+    {
+     "seq": 13,
+     "t": "2026-10-25T06:12:34.041Z",
+     "type": "status",
+     "clip": "1",
+     "from": "group1",
+     "to": "group2",
+     "stage": "polish"
+    }
+   ],
+   "after": {
+    "1": {
+     "index": 1,
+     "title": "Line one!",
+     "original_start": "00:00:01.000",
+     "original_end": "00:00:01.500",
+     "start": "00:00:01.100",
+     "duration": "0.400",
+     "status": "group2",
+     "suffix": 0,
+     "source_text": "Line 1",
+     "last_export_title": null,
+     "last_export_mode": null,
+     "last_export_start_threshold_db": null,
+     "last_export_stop_threshold_db": null,
+     "last_export_path": null,
+     "last_export_snapshot": null,
+     "avg_logprob": null,
+     "no_speech_prob": null,
+     "peak_db": -12.0,
+     "mid_share_db": -3.0,
+     "bass_share_db": -25.0
+    }
+   }
+  }
+ ],
+ "events": []
+}

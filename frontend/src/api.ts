@@ -37,6 +37,10 @@ export interface RoundSummary {
   captured: number | null;
   /** The round file's name beside the recording, once written. */
   file: string | null;
+  /** The format its file was written in: 2 holds the round's history, 1 only its outcomes; null without a file. */
+  file_version: number | null;
+  /** Changes to its clips since its files were written, saved by the next update file; null without a version 2 file. */
+  unsaved_changes: number | null;
   /** Set for a round read from another project's round file. */
   imported: { file: string; number: number; clips: number; unmatched: number } | null;
 }

@@ -1,7 +1,7 @@
 import { useId, useRef } from "react";
 import type { ClipFeaturesJob, RoundImport, RoundSummary, RoundsOverview } from "./api";
 import {
-  finishClock, formatPercent, randomShareWarning, ROUND_SIZES, ROUND_RANDOM_SHARE, type ShareWarning,
+  finishClock, formatPercent, randomShareWarning, roundFileState, ROUND_SIZES, ROUND_RANDOM_SHARE, type ShareWarning,
 } from "./reviewRound";
 import { formatDuration, formatPerClip, formatShare, stageLabels } from "./stageTimes";
 import { Button } from "./ui";
@@ -75,13 +75,31 @@ function RoundDone({ round, stream, onSaveFile, onRevealFile }: {
         ? <span>From <span className="mono text-[#edf2ee]">{round.imported.file}</span>, round {round.imported.number} of another project{round.imported.unmatched
           ? `; ${round.imported.unmatched} of its ${round.imported.clips} clips matched no clip here` : ""}.</span>
         : round.file
-          ? <><span>Saved <span className="mono text-[#edf2ee]">{round.file}</span> beside the recording; it won't change again.</span>
+          ? <><span>Saved <span className="mono text-[#edf2ee]">{round.file}</span> beside the recording; later changes to its clips go into update files beside it.</span>
             <button type="button" className="accent ml-auto hover:underline" onClick={() => onRevealFile(round.number)}>Show in Finder</button></>
           : <><span>This round has no round file yet.</span>
             <button type="button" className="accent ml-auto hover:underline" onClick={() => onSaveFile(round.number)}>Save round file</button></>}
     </div>
     <StageTable round={round} />
   </section>;
+}
+
+/** A finished round's files in Earlier rounds: Show them, or Save what they are missing. */
+function FileCell({ round, onSaveFile, onRevealFile }: {
+  round: RoundSummary; onSaveFile: (number: number) => void; onRevealFile: (number: number) => void;
+}) {
+  const state = roundFileState(round);
+  if (state.kind === "imported") return <span className="subtle" title={round.imported?.file}>Imported</span>;
+  if (state.kind === "open") return <>—</>;
+  const save = <button type="button" className="accent hover:underline" onClick={() => onSaveFile(round.number)}>Save</button>;
+  if (state.kind === "missing") return save;
+  const show = <button type="button" className="accent hover:underline" title={round.file ?? undefined}
+    onClick={() => onRevealFile(round.number)}>Show</button>;
+  if (state.kind === "saved") return show;
+  const note = state.kind === "unsaved"
+    ? `${state.changes} ${state.changes === 1 ? "change" : "changes"} not saved` : "Older format";
+  return <span className="inline-flex flex-wrap items-baseline justify-end gap-x-2">{show}
+    <span className="subtle text-xs">· {note}</span>{save}</span>;
 }
 
 const CELL = "border-b border-[#2f5440] px-2 py-2 text-right tabular-nums first:pl-0 first:text-left last:pr-0";
@@ -276,12 +294,8 @@ export default function RoundsHome({
                 <td className="px-4 py-3 text-right">{round.kept}</td>
                 <td className="px-4 py-3 text-right">{round.captured === null ? "—" : `+${formatPercent(round.captured)}`}</td>
                 <td className="px-4 py-3 text-right">{formatDuration(round.time_ms)}</td>
-                <td className="px-4 py-3 text-right font-sans">{round.imported
-                  ? <span className="subtle" title={round.imported.file}>Imported</span>
-                  : !round.completed ? "—"
-                    : round.file ? <button type="button" className="accent hover:underline" title={round.file}
-                      onClick={() => onRevealFile(round.number)}>Show</button>
-                      : <button type="button" className="accent hover:underline" onClick={() => onSaveFile(round.number)}>Save</button>}</td>
+                <td className="px-4 py-3 text-right font-sans"><FileCell round={round} onSaveFile={onSaveFile}
+                  onRevealFile={onRevealFile} /></td>
               </tr>)}
             </tbody>
           </table>

@@ -2,10 +2,23 @@ import { describe, expect, it } from "vitest";
 import type { Clip } from "./api";
 import {
   countDone, countStatuses, finishClock, isProcessed, isRoundOpen, normalizeRoundSize, orderRound, randomShareWarning,
-  scopeClips,
+  roundFileState, scopeClips,
 } from "./reviewRound";
 
 const clip = (id: string, status: Clip["status"], role: Clip["round_role"]) => ({ clip_id: id, status, round_role: role }) as Clip;
+
+describe("round files", () => {
+  const done = { imported: null, completed: { t: "t", unprocessed: 0 }, file: "a.round-01.json", file_version: 2, unsaved_changes: 0 };
+
+  it("asks for a save only when a round's files are missing something", () => {
+    expect(roundFileState(done)).toEqual({ kind: "saved" });
+    expect(roundFileState({ ...done, unsaved_changes: 3 })).toEqual({ kind: "unsaved", changes: 3 });
+    expect(roundFileState({ ...done, file_version: 1, unsaved_changes: null })).toEqual({ kind: "older" });
+    expect(roundFileState({ ...done, file: null, file_version: null })).toEqual({ kind: "missing" });
+    expect(roundFileState({ ...done, completed: null })).toEqual({ kind: "open" });
+    expect(roundFileState({ ...done, imported: { file: "x", number: 1, clips: 1, unmatched: 0 } })).toEqual({ kind: "imported" });
+  });
+});
 
 describe("review rounds", () => {
   const clips = [clip("1", "pending", "top"), clip("2", "rejected", "random"), clip("3", "pending", null)];
