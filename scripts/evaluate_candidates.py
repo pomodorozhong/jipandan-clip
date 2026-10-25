@@ -12,6 +12,11 @@ probabilities per 32 ms frame as a ``.npy`` file (see ``jipandan.core.vad``).
 
     uv run python scripts/evaluate_candidates.py \\
         --recording 0511 0511.jipandan.json 0511.srt 0511.words.json 0511.silero.npy
+
+With ``--audio NAME AUDIO`` for a recording, it also reports start and end timing the way they
+are judged (#47): a start fails when the export would begin later than it does for the kept clip,
+cutting into the voice, while an early start only adds silence the export trims; an end fails only
+when it is early.
 """
 
 from __future__ import annotations
@@ -19,18 +24,27 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
 from jipandan.core import candidates as cand
-from jipandan.core import vad
+from jipandan.core import ffmpeg, vad
 from jipandan.core.srt import parse_srt, srt_time_to_seconds
 
 KEPT = ("exported", "group1", "group2")
 MIN_COVER = 0.8
 TOLERANCES_S = (0.25, 0.5, 0.75, 1.0, 1.5)
+# Timing report: how much later (start) or earlier (end) than the kept clip counts as cutting the voice.
+CUT_S = 0.05
+MIN_OVERLAP = 0.5
+# The export's leading trim (``ffmpeg.build_silence_filter``): sound must stay above the threshold
+# for start_duration, and start_silence of quiet is kept before it.
+TRIM_DURATION_S = 0.1
+TRIM_KEEP_S = 0.2
+LEVEL_RATE = 100
 
 
 @dataclass
@@ -39,6 +53,7 @@ class Recording:
     hours: float
     kept: np.ndarray  # (n, 2) final start and end, in seconds
     sources: dict[str, np.ndarray]  # source name -> (m, 2) candidate start and end
+    levels: np.ndarray | None = None  # 10 ms RMS levels in dBFS, for the timing report
 
 
 def _seconds(value: str) -> float:
@@ -81,6 +96,52 @@ def load_recording(
                 [(c.start_ms / 1000, c.end_ms / 1000) for c in generated], float).reshape(-1, 2),
         },
     )
+
+
+def levels_db(audio: Path, chunk_frames: int = 60_000) -> np.ndarray:
+    """Return 10 ms RMS levels of ``audio`` in dBFS, decoding in chunks to keep memory small."""
+    frame = 8000 // LEVEL_RATE
+    process = subprocess.Popen(
+        ["ffmpeg", "-v", "error", "-i", str(audio), "-ac", "1", "-ar", "8000", "-f", "f32le", "-"],
+        stdout=subprocess.PIPE,
+    )
+    parts = []
+    while chunk := process.stdout.read(chunk_frames * frame * 4):
+        samples = np.frombuffer(chunk, np.float32)
+        samples = samples[: len(samples) // frame * frame].reshape(-1, frame)
+        parts.append(20 * np.log10(np.maximum(np.sqrt((samples ** 2).mean(1)), 1e-6)))
+    if process.wait():
+        raise RuntimeError(f"ffmpeg could not decode {audio}")
+    return np.concatenate(parts) if parts else np.zeros(0)
+
+
+def exported_start(levels: np.ndarray, start: float) -> float:
+    """Where the export's edge trim (default start threshold) begins a clip that starts at ``start``."""
+    start = max(start, 0.0)
+    index = round(start * LEVEL_RATE)
+    loud = levels[index:index + 30 * LEVEL_RATE] > ffmpeg.DEFAULT_START_THRESHOLD_DB
+    need = round(TRIM_DURATION_S * LEVEL_RATE)
+    if len(loud) < need:
+        return start
+    runs = np.flatnonzero(np.convolve(loud, np.ones(need, int), "valid") >= need)
+    return start if not len(runs) else max(start, (index + runs[0]) / LEVEL_RATE - TRIM_KEEP_S)
+
+
+def timing(recording: Recording, source: str) -> dict:
+    """Late exported starts and early ends of each kept clip's best-overlapping candidate."""
+    candidates = recording.sources[source]
+    late = early = matched = 0
+    for start, end in recording.kept:
+        overlap = np.minimum(candidates[:, 1], end) - np.maximum(candidates[:, 0], start)
+        union = np.maximum(candidates[:, 1], end) - np.minimum(candidates[:, 0], start)
+        best = int(np.argmax(overlap / union))
+        if overlap[best] / union[best] < MIN_OVERLAP:
+            continue
+        matched += 1
+        shift = exported_start(recording.levels, candidates[best, 0]) - exported_start(recording.levels, start)
+        late += shift > CUT_S
+        early += candidates[best, 1] < end - CUT_S
+    return {"matched": matched / len(recording.kept), "late": late / max(matched, 1), "early": early / max(matched, 1)}
 
 
 def match(kept: np.ndarray, candidates: np.ndarray, tolerance: float) -> np.ndarray:
@@ -143,6 +204,21 @@ def report(recordings: list[Recording]) -> str:
                     + " | ".join(f"{summarize([r], source, tolerance)['recall']:.0%}" for r in recordings)
                     + " |"
                 )
+    timed = [r for r in recordings if r.levels is not None]
+    if timed:
+        lines += [
+            "",
+            "Timing of each kept clip's best-overlapping candidate (overlap ≥ 50% of the union): "
+            "matched / exported start later than the kept clip's by more than 50 ms (cuts the voice) / "
+            "end more than 50 ms early.",
+            "",
+            "| recording | " + " | ".join(sources) + " |",
+            "|---" * (len(sources) + 1) + "|",
+        ]
+        for r in timed:
+            cells = [timing(r, source) for source in sources]
+            lines.append(f"| {r.name} | " + " | ".join(
+                f"{c['matched']:.0%} / {c['late']:.0%} / {c['early']:.0%}" for c in cells) + " |")
     return "\n".join(lines)
 
 
@@ -151,6 +227,10 @@ def main() -> None:
     parser.add_argument(
         "--recording", nargs=5, action="append", required=True,
         metavar=("NAME", "SESSION", "SRT", "WORDS_JSON", "VAD_NPY"),
+    )
+    parser.add_argument(
+        "--audio", nargs=2, action="append", default=[], metavar=("NAME", "AUDIO"),
+        help="recording audio, to add the start and end timing report",
     )
     parser.add_argument("--min-length-ms", type=int, default=cand.MIN_LENGTH_MS)
     parser.add_argument("--max-length-ms", type=int, default=cand.MAX_LENGTH_MS)
@@ -162,6 +242,10 @@ def main() -> None:
         )
         for name, *paths in args.recording
     ]
+    audio = dict(args.audio)
+    for recording in recordings:
+        if recording.name in audio:
+            recording.levels = levels_db(Path(audio[recording.name]))
     print(report(recordings))
 
 
