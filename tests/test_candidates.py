@@ -57,6 +57,24 @@ class GenerateTests(unittest.TestCase):
         self.assertEqual(self.generate(segments, runs, min_length_ms=1200), [])
         self.assertEqual(self.generate(segments, runs, max_length_ms=900), [])
 
+    def test_start_inside_recent_speech_moves_back_to_its_onset(self):
+        # The segment starts 0.4 s into a run of speech: the clip would open mid-word.
+        segments = [{"end": 3.0, "words": [word("中", 2.0, 3.0)]}]
+        result = self.generate(segments, [(1600, 3500)], start_snap_ms=0, end_snap_ms=0)
+        self.assertIn(cand.Candidate(1550, 3000, "中"), result)
+        self.assertFalse(any(c.start_ms == 2000 for c in result))
+
+    def test_start_deep_inside_speech_is_left_alone(self):
+        # Speech began 1 s earlier: backing off that far would start a different phrase.
+        segments = [{"end": 3.5, "words": [word("長", 2.6, 3.5)]}]
+        result = self.generate(segments, [(1600, 3600)], start_snap_ms=0, end_snap_ms=0)
+        self.assertIn(cand.Candidate(2600, 3500, "長"), result)
+
+    def test_onset_backoff_can_be_turned_off(self):
+        segments = [{"end": 3.0, "words": [word("中", 2.0, 3.0)]}]
+        result = self.generate(segments, [(1600, 3500)], start_snap_ms=0, end_snap_ms=0, onset_backoff_ms=0)
+        self.assertIn(cand.Candidate(2000, 3000, "中"), result)
+
     def test_start_never_goes_below_zero(self):
         segments = [{"end": 1.0, "words": [word("零", 0.05, 1.0)]}]
         self.assertEqual(self.generate(segments, [(100, 1000)])[0].start_ms, 0)
