@@ -55,6 +55,16 @@ uv run transcribe raw.mp3
 
 New sessions save exported clips as `exports/raw_0001_title.mp3`, `exports/raw_0002_title.mp3`, etc. Here, `raw` is the stem of the source audio filename (for example, `raw.mp3` -> `raw`); an explicit `--clip-dir` can choose another directory.
 
+### Datasets
+
+Build training data from round files (see Storage locations) and their update files:
+
+```bash
+uv run jipandan-dataset ~/rounds/ --out datasets/2026-10-25
+```
+
+It writes ranking, timing, and title examples as JSON Lines plus a `manifest.json` with counts; the same files always give the same bytes. See [Datasets](doc/datasets.md).
+
 ## Testing
 
 Complete the installation steps above, then run these commands from the repository root. The Python tests use the standard-library `unittest` runner; some web API tests also require `ffmpeg` on your PATH.
