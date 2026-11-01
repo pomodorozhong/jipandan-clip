@@ -88,10 +88,13 @@ def _view_start_ms(event: dict) -> float:
 
 
 def _copy_sidecars(source_srt: Path, destination_srt: Path) -> None:
-    """Copy an SRT's segment scores and snap points to sit beside ``destination_srt``."""
-    for path in (segment_scores_path, snap_points_path):
+    """Publish the SRT's app sidecars and reusable experiment inputs beside it."""
+    for path in (segment_scores_path, snap_points_path, whisper_words_path, speech_probabilities_path):
         if path(source_srt).is_file():
             shutil.copyfile(path(source_srt), path(destination_srt))
+        elif path in (whisper_words_path, speech_probabilities_path):
+            # A failed VAD run must not leave probabilities from an older transcription.
+            path(destination_srt).unlink(missing_ok=True)
 
 
 # Events that open and close a review round, or a review set from before rounds.

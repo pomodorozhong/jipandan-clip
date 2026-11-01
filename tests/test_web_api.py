@@ -21,7 +21,10 @@ from jipandan.core.clip_features import ClipFeatures
 from jipandan.core.models import Session
 from jipandan.core.snap_points import SPEECH_END, WORD_START, write_snap_points
 from jipandan.core.waveform_envelope import WaveformEnvelopeCache
-from jipandan.core.whisper import write_segment_scores
+from jipandan.core.whisper import (
+    write_segment_scores, write_whisper_words, write_speech_probabilities,
+    whisper_words_path, speech_probabilities_path,
+)
 from jipandan.web.api import create_app
 from jipandan.core.store import RecordingStore, store_path
 from jipandan.core.ffmpeg import ExportOptions
@@ -1785,6 +1788,49 @@ class WebApiTests(unittest.TestCase):
             again = self.client.post("/api/transcriptions", json=settings, headers=self.headers)
             self.assertEqual(again.status_code, 200, again.text)
             self.wait_for_job(f"/api/transcriptions/{again.json()['id']}", "completed")
+
+    def test_browser_publication_keeps_word_and_probability_sidecars(self):
+        import hashlib
+        self.srt.unlink()
+        self.open()
+        settings = {"audio": str(self.audio.resolve()), "model_name": "large-v3"}
+        segments = [{"start": 1., "end": 2., "text": "First", "words": [
+            {"word": "First", "start": 1.1, "end": 1.9, "probability": .95},
+        ]}]
+
+        def succeed(_manager, job):
+            job.output.write_text(SRT, encoding="utf-8")
+            write_whisper_words(job.output, segments)
+            write_speech_probabilities(job.output, [.1, .9])
+            return 0
+
+        with patch("jipandan.web.transcription.TranscriptionJobs._run_process", succeed):
+            started = self.client.post("/api/transcriptions", json=settings, headers=self.headers)
+            self.wait_for_job(f"/api/transcriptions/{started.json()['id']}", "completed")
+        words = json.loads(whisper_words_path(self.srt).read_text())
+        self.assertEqual(words["srt_sha256"], hashlib.sha256(self.srt.read_bytes()).hexdigest())
+        self.assertEqual(words["segments"], segments)
+        probabilities = np.load(speech_probabilities_path(self.srt))
+        self.assertEqual(probabilities.dtype, np.float16)
+        np.testing.assert_array_equal(probabilities, np.array([.1, .9], np.float16))
+
+    def test_browser_publication_removes_stale_probabilities_after_vad_failure(self):
+        self.srt.unlink()
+        speech_probabilities_path(self.srt).write_bytes(b"stale probabilities")
+        self.open()
+
+        def succeed(_manager, job):
+            job.output.write_text(SRT, encoding="utf-8")
+            write_whisper_words(job.output, [])
+            return 0
+
+        with patch("jipandan.web.transcription.TranscriptionJobs._run_process", succeed):
+            started = self.client.post("/api/transcriptions", json={
+                "audio": str(self.audio.resolve()), "model_name": "large-v3",
+            }, headers=self.headers)
+            self.wait_for_job(f"/api/transcriptions/{started.json()['id']}", "completed")
+        self.assertTrue(whisper_words_path(self.srt).exists())
+        self.assertFalse(speech_probabilities_path(self.srt).exists())
 
     def test_generated_clip_source_builds_the_session_from_candidates(self):
         self.srt.unlink()
