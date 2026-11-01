@@ -25,7 +25,7 @@ from jipandan.core.models import ClipCandidate
 from jipandan.core.srt import srt_time_to_seconds
 from jipandan.core.waveform_envelope import build_envelope_from_audio_slice
 
-PREVIEW_CACHE_VERSION = 3
+PREVIEW_CACHE_VERSION = 4
 PREVIEW_WAVEFORM_BUCKETS = 400
 logger = logging.getLogger(__name__)
 
