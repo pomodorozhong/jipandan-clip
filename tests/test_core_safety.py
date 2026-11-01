@@ -1,4 +1,6 @@
 import hashlib
+import shutil
+import subprocess
 import json
 import sys
 import tempfile
@@ -76,6 +78,31 @@ class SessionSafetyTests(unittest.TestCase):
         self.assertEqual(second.name, "clip (2).mp3")
         self.assertEqual(first.read_bytes(), b"old")
         self.assertEqual(second.read_bytes(), b"new")
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is required")
+    def test_long_valid_export_name_uses_a_short_temporary_name(self):
+        preview = self.root / "preview.mp3"
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                        "sine=frequency=440:duration=0.2", str(preview)], check=True)
+        audio = self.root / ("r" * 40 + ".mp3")
+        candidate = self.session().get_candidate("1")
+        title = "a" * 180
+        destination = self.root / "exports"
+        first = ffmpeg.publish_prebuilt_clip(preview, audio, candidate, destination, title)
+        second = ffmpeg.publish_prebuilt_clip(preview, audio, candidate, destination, title)
+        self.assertTrue(first.is_file())
+        self.assertTrue(second.is_file())
+        self.assertEqual(second.stem, first.stem + " (2)")
+        self.assertFalse(list(destination.glob(".*")))
+        metadata = json.loads(subprocess.run([
+            "ffprobe", "-v", "error", "-show_entries", "format_tags=title", "-of", "json", str(first),
+        ], capture_output=True, text=True, check=True).stdout)
+        self.assertEqual(metadata["format"]["tags"]["title"], title)
+
+        with patch.object(ffmpeg, "_publish_clip", side_effect=OSError("publication failed")):
+            with self.assertRaises(OSError):
+                ffmpeg.publish_prebuilt_clip(preview, audio, candidate, destination, title)
+        self.assertEqual(sorted(destination.iterdir()), sorted([first, second]))
 
     def test_failed_transcription_preserves_existing_srt(self):
         old = self.srt.read_bytes()
