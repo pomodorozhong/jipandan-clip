@@ -32,6 +32,7 @@ class TranscriptionJob:
     started_at: float | None = None
     finished_at: float | None = None
     log_directory: Path | None = None
+    reuse_output: bool = False
 
     @property
     def output(self) -> Path:
@@ -47,6 +48,7 @@ class TranscriptionJob:
             "state": self.state, "phase": self.phase, "error": self.error,
             "entry_count": self.entry_count, "created_at": self.created_at,
             "started_at": self.started_at, "finished_at": self.finished_at,
+            "reuse_output": self.reuse_output,
         }
 
     def snapshot(self) -> dict:
@@ -103,6 +105,7 @@ class TranscriptionJobs:
                     error=data.get("error"), entry_count=data.get("entry_count"),
                     created_at=data["created_at"], started_at=data.get("started_at"),
                     finished_at=data.get("finished_at"),
+                    reuse_output=bool(data.get("reuse_output", False)),
                 )
                 if job.id != path.parent.name:
                     continue
@@ -159,6 +162,23 @@ class TranscriptionJobs:
                         pass
             return job.snapshot()
 
+    def retry(self, job_id: str) -> dict:
+        """Retry a failed save from validated worker output, or start a fresh worker."""
+        with self._lock:
+            job = self._jobs[job_id]
+            if job.state not in {"failed", "cancelled"}:
+                raise ValueError("Only failed or cancelled jobs can be retried")
+            if not job.reuse_output or not job.output.is_file():
+                return self.start(job.audio, job.settings)
+            if any(other.audio == job.audio and other.state in {"queued", "running"}
+                   for other in self._jobs.values()):
+                raise ValueError("A transcription is already running for this audio")
+            job.state, job.phase = "queued", "Waiting to save transcript"
+            job.error, job.finished_at = None, None
+            self._write(job)
+            self._executor.submit(self._run, job)
+            return job.snapshot()
+
     def _run_process(self, job: TranscriptionJob) -> int:
         settings_path = job.directory / "settings.json"
         settings_path.write_text(json.dumps(job.settings), encoding="utf-8")
@@ -191,11 +211,11 @@ class TranscriptionJobs:
             if job.state == "cancelled":
                 return
             job.state = "running"
-            job.phase = "Transcribing"
+            job.phase = "Saving transcript" if job.reuse_output else "Transcribing"
             job.started_at = time.time()
             self._write(job)
         try:
-            code = self._run_process(job)
+            code = 0 if job.reuse_output and job.output.is_file() else self._run_process(job)
             if code != 0:
                 lines = job.snapshot()["log_tail"]
                 detail = next((line for line in reversed(lines)

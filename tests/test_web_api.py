@@ -1679,6 +1679,86 @@ class WebApiTests(unittest.TestCase):
                 "/api/transcriptions", json=settings, headers=self.headers,
             ).status_code, 409)
 
+    def check_publication_failure_retry(self, clip_source, failure, restart=False):
+        self.srt.unlink()
+        self.open()
+        settings = {"audio": str(self.audio.resolve()), "model_name": "large-v3", "clip_source": clip_source}
+        generated = "1\n00:00:00,800 --> 00:00:02,100\nGenerated\n\n"
+        old_sidecar = self.srt.with_suffix(".segments.json")
+        old_sidecar.write_bytes(b"pre-existing sidecar")
+        old_probabilities = self.srt.with_suffix(".silero.npy")
+        old_probabilities.write_bytes(b"pre-existing probabilities")
+        unrelated = self.root / "owner-note.txt"
+        unrelated.write_text("keep this")
+        runs = []
+
+        def succeed(_manager, job):
+            runs.append(job.id)
+            job.output.write_text(SRT, encoding="utf-8")
+            write_segment_scores(job.output, [{"no_speech_prob": .1}, {"no_speech_prob": .8}])
+            if clip_source == "generated":
+                candidates_srt_path(job.output).write_text(generated, encoding="utf-8")
+            return 0
+
+        real_link = os.link
+
+        def fail_database_link(source, target):
+            if str(target).endswith(".jipandan.db"):
+                raise OSError("injected database publication failure")
+            return real_link(source, target)
+
+        target, injected = {
+            "sidecars": ("jipandan.web.service._copy_sidecars", OSError("injected sidecar failure")),
+            "database": ("jipandan.web.service.RecordingStore.create", OSError("injected database failure")),
+            "publication": ("jipandan.web.service.os.link", fail_database_link),
+        }[failure]
+        with patch("jipandan.web.transcription.TranscriptionJobs._run_process", succeed):
+            with patch(target, side_effect=injected):
+                started = self.client.post("/api/transcriptions", json=settings, headers=self.headers).json()
+                failed = self.wait_for_job(f"/api/transcriptions/{started['id']}", "failed")
+            self.assertTrue(failed["reuse_output"])
+            self.assertFalse(self.srt.exists())
+            self.assertFalse(store_path(self.audio).exists())
+            self.assertFalse(candidates_srt_path(self.srt).exists())
+            self.assertEqual(old_sidecar.read_bytes(), b"pre-existing sidecar")
+            self.assertEqual(old_probabilities.read_bytes(), b"pre-existing probabilities")
+            self.assertEqual(unrelated.read_text(), "keep this")
+            self.assertFalse(list(self.root.glob(".jipandan-publish-*")))
+            if restart:
+                self.client.close()
+                self.service.close()
+                self.service = SessionService(self.root / "clips", preview_dir=self.root / "previews",
+                                              transcription_dir=self.root / "transcriptions", app_paths=self.paths)
+                self.client = TestClient(create_app(self.service, allowed_hosts={"testserver"}))
+                self.headers = {"x-jipandan-token": self.client.get("/api/bootstrap").json()["token"]}
+                self.open()
+            retried = self.client.post(f"/api/transcriptions/{started['id']}/retry", headers=self.headers)
+            self.assertEqual(retried.status_code, 200, retried.text)
+            self.wait_for_job(f"/api/transcriptions/{retried.json()['id']}", "completed")
+        self.assertEqual(runs, [started["id"]])
+        expected_srt = candidates_srt_path(self.srt) if clip_source == "generated" else self.srt
+        state = self.service.snapshot()
+        self.assertEqual(state["srt"], str(expected_srt.resolve()))
+        self.assertEqual(len(state["candidates"]), 1 if clip_source == "generated" else 2)
+        self.assertEqual(self.stored().srt, expected_srt.resolve())
+        self.assertEqual(unrelated.read_text(), "keep this")
+        self.assertFalse(old_probabilities.exists())
+
+    def test_sidecar_publication_failure_retries_without_whisper(self):
+        self.check_publication_failure_retry("lines", "sidecars")
+
+    def test_generated_sidecar_failure_retries_without_whisper(self):
+        self.check_publication_failure_retry("generated", "sidecars")
+
+    def test_database_creation_failure_retries_without_whisper(self):
+        self.check_publication_failure_retry("lines", "database")
+
+    def test_generated_database_failure_retries_after_restart(self):
+        self.check_publication_failure_retry("generated", "database", restart=True)
+
+    def test_late_publication_failure_restores_preexisting_sidecars(self):
+        self.check_publication_failure_retry("generated", "publication")
+
     def test_removed_transcript_allows_transcribing_again(self):
         self.srt.unlink()
         self.open()

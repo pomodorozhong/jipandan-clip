@@ -47,7 +47,7 @@ from jipandan.core.round_files import (
 )
 from jipandan.core.review_rounds import overview as round_overview
 from jipandan.core.srt import parse_srt, segment_scores_path
-from jipandan.core.whisper import describe_transcribe_call
+from jipandan.core.whisper import describe_transcribe_call, whisper_words_path, speech_probabilities_path
 from jipandan.core.models import ClipCandidate, MIN_CLIP_DURATION_SECONDS, Session
 from jipandan.core.store import RecordingStore, StoreConflict, store_path, utc_now
 from jipandan.core.srt import seconds_to_ffmpeg_timestamp, srt_time_to_seconds
@@ -268,7 +268,13 @@ class SessionService:
         previous = self.transcription(job_id)
         if previous["state"] not in {"failed", "cancelled"}:
             raise SessionNotReady("Only failed or cancelled jobs can be retried")
-        return self.start_transcription(previous["audio"], previous["settings"])
+        with self._lock:
+            if self.session is not None or (self.srt and self.srt.exists()):
+                raise SessionNotReady("This audio already has an SRT or saved session")
+            try:
+                return self._transcriptions.retry(job_id)
+            except ValueError as exc:
+                raise SessionNotReady(str(exc)) from exc
 
     def cancel_transcription(self, job_id: str) -> dict:
         self.transcription(job_id)
@@ -282,7 +288,6 @@ class SessionService:
             if srt_time_to_seconds(entry.end) <= srt_time_to_seconds(entry.start):
                 raise ValueError("Transcription contains invalid clip times")
         destination = job.audio.with_suffix(".srt")
-        staged = destination.with_name(f".{destination.name}.{job.id}.tmp")
         generated = job.settings.get("clip_source", CLIP_SOURCE_LINES) == CLIP_SOURCE_GENERATED
         candidates = candidates_srt_path(job.output)
         if generated and not candidates.is_file():
@@ -293,26 +298,78 @@ class SessionService:
         with self._lock:
             if destination.exists() or store_path(job.audio).exists():
                 raise SessionConflict("An SRT or session was created while transcription ran")
-            try:
-                with job.output.open("rb") as source, staged.open("wb") as target:
-                    shutil.copyfileobj(source, target)
-                    target.flush()
-                    os.fsync(target.fileno())
-                os.link(staged, destination)
-                _copy_sidecars(job.output, destination)
+            # Validation succeeded. A filesystem failure can reuse this output on Retry,
+            # including after the job record has been reloaded on a later launch.
+            job.reuse_output = True
+            with tempfile.TemporaryDirectory(prefix=".jipandan-publish-", dir=destination.parent) as directory:
+                staging = Path(directory)
+                staged = staging / destination.name
+                shutil.copyfile(job.output, staged)
+                _copy_sidecars(job.output, staged)
                 if candidates.is_file():
-                    shutil.copyfile(candidates, candidates_srt_path(destination))
-                    _copy_sidecars(candidates, candidates_srt_path(destination))
+                    shutil.copyfile(candidates, candidates_srt_path(staged))
+                    _copy_sidecars(candidates, candidates_srt_path(staged))
+                staged_source = candidates_srt_path(staged) if generated else staged
                 source_srt = candidates_srt_path(destination) if generated else destination
-                session = Session.from_srt(job.audio, source_srt, self._new_session_clip_dir(job.audio))
-                store = RecordingStore(store_path(job.audio))
-                store.create(session, load_snap_points(source_srt, session.srt_fingerprint))
-            finally:
-                staged.unlink(missing_ok=True)
-            if self.audio == job.audio:
-                self._replace_recording(session, store, source_srt)
-            else:
-                store.close()
+                session = Session.from_srt(job.audio, staged_source, self._new_session_clip_dir(job.audio))
+                session.srt = source_srt.resolve()
+                staged_db = staging / store_path(job.audio).name
+                store = RecordingStore(staged_db)
+                try:
+                    store.create(session, load_snap_points(staged_source, session.srt_fingerprint))
+                finally:
+                    # Closing checkpoints SQLite's WAL before the database is published.
+                    store.close()
+
+                # Publish the database last. Roll back only files installed by this attempt
+                # and restore pre-existing sidecars if any later publication step fails.
+                files = [staged, *(p for p in sorted(staging.iterdir()) if p not in (staged, staged_db)), staged_db]
+                installed = []
+                backups = {}
+                removed = {}
+                store = None
+                try:
+                    # Missing optional worker data must also remove an older companion.
+                    # Keep those removals reversible until the database is installed.
+                    for original in (job.output, candidates):
+                        if not original.is_file():
+                            continue
+                        published_srt = destination if original == job.output else candidates_srt_path(destination)
+                        for sidecar_path in (whisper_words_path, speech_probabilities_path):
+                            target = sidecar_path(published_srt)
+                            if not sidecar_path(original).is_file() and target.is_file():
+                                backup = staging / f"removed-{len(removed)}"
+                                os.replace(target, backup)
+                                removed[target] = backup
+                    for number, source in enumerate(files):
+                        with source.open("rb") as handle:
+                            os.fsync(handle.fileno())
+                        target = destination.parent / source.name
+                        if target.exists() and target not in (destination, store_path(job.audio)):
+                            backup = staging / f"backup-{number}"
+                            shutil.copyfile(target, backup)
+                            backups[target] = backup
+                            os.replace(source, target)
+                        else:
+                            os.link(source, target)
+                        installed.append((target, target.stat().st_ino))
+                    store = RecordingStore(store_path(job.audio))
+                    if self.audio == job.audio:
+                        self._replace_recording(session, store, source_srt)
+                    else:
+                        store.close()
+                except Exception:
+                    if store is not None:
+                        store.close()
+                    for target, inode in reversed(installed):
+                        if target.exists() and target.stat().st_ino == inode:
+                            target.unlink()
+                            if target in backups:
+                                os.replace(backups[target], target)
+                    for target, backup in removed.items():
+                        if not target.exists():
+                            os.replace(backup, target)
+                    raise
             return len(session.candidates)
 
     def close(self) -> None:
