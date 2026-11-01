@@ -13,10 +13,9 @@ probabilities per 32 ms frame as a ``.npy`` file (see ``jipandan.core.vad``).
     uv run python scripts/evaluate_candidates.py \\
         --recording 0511 0511.jipandan.json 0511.srt 0511.words.json 0511.silero.npy
 
-With ``--audio NAME AUDIO`` for a recording, it also reports start and end timing the way they
-are judged (#47): a start fails when the export would begin later than it does for the kept clip,
-cutting into the voice, while an early start only adds silence the export trims; an end fails only
-when it is early.
+With ``--audio NAME AUDIO``, it also estimates leading-trim start shifts from 10 ms RMS
+levels and reports early ends. These are acoustic proxies, not actual FFmpeg renders or
+listening judgments: earlier starts can add other speech, and loud game audio can look like voice.
 """
 
 from __future__ import annotations
@@ -34,7 +33,7 @@ from jipandan.core import candidates as cand
 from jipandan.core import ffmpeg, vad
 from jipandan.core.srt import parse_srt, srt_time_to_seconds
 
-KEPT = ("exported", "group1", "group2")
+KEPT = ("exported", "group2")
 MIN_COVER = 0.8
 TOLERANCES_S = (0.25, 0.5, 0.75, 1.0, 1.5)
 # Timing report: how much later (start) or earlier (end) than the kept clip counts as cutting the voice.
@@ -62,7 +61,7 @@ def _seconds(value: str) -> float:
 
 
 def kept_clips(session: Path) -> np.ndarray:
-    """Return the final (start, end) of every kept clip in a reviewed session."""
+    """Return approved timing references; Needs work clips have no final bounds yet."""
     if session.suffix == ".db":
         with sqlite3.connect(f"file:{session}?mode=ro", uri=True) as db:
             clips = [json.loads(data) for (data,) in db.execute("SELECT data FROM clip")]
@@ -115,33 +114,41 @@ def levels_db(audio: Path, chunk_frames: int = 60_000) -> np.ndarray:
     return np.concatenate(parts) if parts else np.zeros(0)
 
 
-def exported_start(levels: np.ndarray, start: float) -> float:
-    """Where the export's edge trim (default start threshold) begins a clip that starts at ``start``."""
+def exported_start(levels: np.ndarray, start: float, end: float) -> float:
+    """Approximate a leading trim within the clip, or NaN when no loud onset is found."""
     start = max(start, 0.0)
     index = round(start * LEVEL_RATE)
-    loud = levels[index:index + 30 * LEVEL_RATE] > ffmpeg.DEFAULT_START_THRESHOLD_DB
+    stop = max(index, min(len(levels), round(end * LEVEL_RATE)))
+    loud = levels[index:stop] > ffmpeg.DEFAULT_START_THRESHOLD_DB
     need = round(TRIM_DURATION_S * LEVEL_RATE)
     if len(loud) < need:
-        return start
+        return float("nan")
     runs = np.flatnonzero(np.convolve(loud, np.ones(need, int), "valid") >= need)
-    return start if not len(runs) else max(start, (index + runs[0]) / LEVEL_RATE - TRIM_KEEP_S)
+    return float("nan") if not len(runs) else max(start, (index + runs[0]) / LEVEL_RATE - TRIM_KEEP_S)
 
 
 def timing(recording: Recording, source: str) -> dict:
     """Late exported starts and early ends of each kept clip's best-overlapping candidate."""
     candidates = recording.sources[source]
-    late = early = matched = 0
+    late = early = matched = measured = 0
     for start, end in recording.kept:
+        if not len(candidates):
+            break
         overlap = np.minimum(candidates[:, 1], end) - np.maximum(candidates[:, 0], start)
         union = np.maximum(candidates[:, 1], end) - np.minimum(candidates[:, 0], start)
-        best = int(np.argmax(overlap / union))
-        if overlap[best] / union[best] < MIN_OVERLAP:
+        iou = np.divide(overlap, union, out=np.zeros_like(overlap), where=union > 0)
+        best = int(np.argmax(iou))
+        if iou[best] < MIN_OVERLAP:
             continue
         matched += 1
-        shift = exported_start(recording.levels, candidates[best, 0]) - exported_start(recording.levels, start)
-        late += shift > CUT_S
+        shift = exported_start(recording.levels, *candidates[best]) - exported_start(recording.levels, start, end)
+        if np.isfinite(shift):
+            measured += 1
+            late += shift > CUT_S
         early += candidates[best, 1] < end - CUT_S
-    return {"matched": matched / len(recording.kept), "late": late / max(matched, 1), "early": early / max(matched, 1)}
+    return {"matched": matched / max(len(recording.kept), 1),
+            "late": late / measured if measured else float("nan"),
+            "early": early / max(matched, 1), "start_measured": measured, "matched_count": matched}
 
 
 def match(kept: np.ndarray, candidates: np.ndarray, tolerance: float) -> np.ndarray:
@@ -209,8 +216,9 @@ def report(recordings: list[Recording]) -> str:
         lines += [
             "",
             "Timing of each kept clip's best-overlapping candidate (overlap ≥ 50% of the union): "
-            "matched / exported start later than the kept clip's by more than 50 ms (cuts the voice) / "
-            "end more than 50 ms early.",
+            "matched / estimated trimmed start more than 50 ms late / end more than 50 ms early / "
+            "starts measurable. Late-start rate excludes pairs without a loud onset inside both clips. "
+            "RMS timing is a proxy; it does not establish that speech was cut.",
             "",
             "| recording | " + " | ".join(sources) + " |",
             "|---" * (len(sources) + 1) + "|",
@@ -218,7 +226,8 @@ def report(recordings: list[Recording]) -> str:
         for r in timed:
             cells = [timing(r, source) for source in sources]
             lines.append(f"| {r.name} | " + " | ".join(
-                f"{c['matched']:.0%} / {c['late']:.0%} / {c['early']:.0%}" for c in cells) + " |")
+                f"{c['matched']:.0%} / {c['late']:.0%} / {c['early']:.0%} / "
+                f"{c['start_measured']}/{c['matched_count']}" for c in cells) + " |")
     return "\n".join(lines)
 
 
