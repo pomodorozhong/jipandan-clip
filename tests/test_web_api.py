@@ -370,6 +370,33 @@ class WebApiTests(unittest.TestCase):
         missing = self.client.post(path, json={"clip_ids": ["99"]}, headers=self.headers)
         self.assertEqual(missing.status_code, 422)
 
+    def test_suggestion_only_undo_delta_updates_the_loaded_session(self):
+        self.open()
+        path = "/api/session/clip-transcription"
+        with patch("jipandan.web.service.transcribe_clips", return_value=iter([("1", "Better"), ("2", "Other")])):
+            self.client.post(path, json={"clip_ids": ["1", "2"]}, headers=self.headers)
+            self.wait_for_job(path, "completed")
+        loaded = self.client.get("/api/session").json()
+        delta = self.client.post("/api/session/undo?delta=true", json={"expected_revision": loaded["revision"]},
+                                 headers=self.headers).json()
+        self.assertEqual({clip["clip_id"] for clip in delta["clips"]}, {"1", "2"})
+        merged = {clip["clip_id"]: clip for clip in loaded["candidates"]}
+        merged.update({clip["clip_id"]: clip for clip in delta["clips"]})
+        self.assertEqual(list(merged.values()), self.client.get("/api/session").json()["candidates"])
+        self.assertFalse(delta["can_undo"])
+
+    def test_undo_delta_combines_suggestion_and_candidate_changes(self):
+        self.open()
+        self.service._set_title_suggestion("1", "Better")
+        self.service.store.record_suggestion("1", None, "Better", {"type": "suggest-title"},
+                                             label="Mixed change", undo_group="mixed")
+        self.service._mutate(lambda session: setattr(session.editable("2"), "title", "Edited"),
+                             [{"type": "title", "clip": "2"}], label="Mixed change", undo_group="mixed")
+        loaded = self.service.snapshot()
+        delta = self.service.undo(loaded["revision"], delta=True)
+        self.assertEqual({clip["clip_id"] for clip in delta["clips"]}, {"1", "2"})
+        self.assertEqual(delta["clips"], self.service.snapshot()["candidates"])
+
     def test_clip_transcription_failure_is_reported(self):
         self.open()
         path = "/api/session/clip-transcription"
