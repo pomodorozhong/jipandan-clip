@@ -481,8 +481,8 @@ class SessionService:
                     "stop_threshold_db": job.options.stop_threshold_db,
                     "title": job.title, "path": str(output), **clean_context(context),
                     **({"export_all": export_all} if export_all else {}),
-                }], label="Export all" if export_all else None,
-                    undo_group=f"export-all:{export_all}" if export_all else None, undoable=bool(export_all))
+                }], label="Export all" if export_all else "Export",
+                    undo_group=f"export-all:{export_all}" if export_all else None, undoable=True)
             except Exception:
                 output.unlink(missing_ok=True)
                 raise
