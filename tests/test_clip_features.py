@@ -70,6 +70,26 @@ class ClipFeatureTests(unittest.TestCase):
         ]
         self.assertEqual(likely_keep_scores(rows), [100.0, 0.0, 50.0, None])
 
+    def test_identical_features_share_the_midrank(self):
+        rows = [SimpleNamespace(peak_db=-20, no_speech_prob=0, mid_share_db=-3, bass_share_db=-10)
+                for _ in range(3)]
+        self.assertEqual(likely_keep_scores(rows), [50.0, 50.0, 50.0])
+
+    def test_tied_scores_are_invariant_to_order_with_missing_values(self):
+        import itertools
+        rows = [
+            SimpleNamespace(peak_db=-30, no_speech_prob=.9),
+            SimpleNamespace(peak_db=-20, no_speech_prob=.1),
+            SimpleNamespace(peak_db=-20, no_speech_prob=.1),
+            SimpleNamespace(peak_db=None, no_speech_prob=.5),
+            SimpleNamespace(peak_db=float("nan"), no_speech_prob=None),
+        ]
+        expected = [0., (75 + 100 * 2.5 / 3) / 2, (75 + 100 * 2.5 / 3) / 2, 33.3, None]
+        expected[1] = expected[2] = round(expected[1], 1)
+        self.assertEqual(likely_keep_scores(rows), expected)
+        for order in itertools.permutations(range(len(rows))):
+            self.assertEqual(likely_keep_scores([rows[i] for i in order]), [expected[i] for i in order])
+
 
 class SegmentScoreTests(unittest.TestCase):
     def setUp(self):

@@ -19,7 +19,7 @@ import numpy as np
 # Bump when the measurements change, so stored values from older versions are not mixed in.
 CLIP_FEATURES_VERSION = 1
 # Identifies the ranking formula in the review log; bump when likely_keep_scores changes.
-LIKELY_KEEP_VERSION = "builtin-v1"
+LIKELY_KEEP_VERSION = "builtin-v2"
 SAMPLE_RATE = 8_000
 _HOP = SAMPLE_RATE // 100  # 10 ms
 _FFT = 256
@@ -134,7 +134,11 @@ def likely_keep_scores(rows: Sequence[object]) -> list[float | None]:
         if present.size < 2:
             continue
         signed = values[present] if higher_is_better else -values[present]
-        ranks = signed.argsort(kind="stable").argsort()
+        # Average positions within each tie, so a clip's score does not depend
+        # on its input position. Missing measurements stay outside the ranking.
+        _, inverse, frequencies = np.unique(signed, return_inverse=True, return_counts=True)
+        ends = frequencies.cumsum()
+        ranks = (ends - (frequencies + 1) / 2)[inverse]
         totals[present] += ranks / (present.size - 1)
         counts[present] += 1
     return [
