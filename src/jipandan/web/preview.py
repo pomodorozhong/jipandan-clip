@@ -119,6 +119,10 @@ class PreviewJobs:
         self._executor.submit(self._render, job)
         return job
 
+    def close(self) -> None:
+        """Drop queued renders and wait for running ones, so nothing writes under the root afterwards."""
+        self._executor.shutdown(wait=True, cancel_futures=True)
+
     @staticmethod
     def source_identity(audio: Path) -> tuple[int, int]:
         stat = audio.stat()
