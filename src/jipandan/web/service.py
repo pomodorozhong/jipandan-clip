@@ -318,6 +318,7 @@ class SessionService:
     def close(self) -> None:
         self._transcriptions.close()
         self.cancel_clip_transcription()
+        self._previews.close()
         with self._lock:
             if self.store is not None:
                 self.store.close()

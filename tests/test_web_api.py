@@ -1214,6 +1214,24 @@ class WebApiTests(unittest.TestCase):
             self.assertEqual(cached.trim_map, completed["trim_map"])
             renderer.assert_called_once()
 
+    def test_closing_waits_for_a_running_preview_render(self):
+        self.open()
+        started = threading.Event()
+
+        def render(_audio, _candidate, _options, output):
+            started.set()
+            time.sleep(0.2)
+            raise RuntimeError("Render stopped")
+
+        request = {"clip_id": "1", "expected_revision": 1, "mode": "as_is", "title": "First"}
+        with patch("jipandan.web.preview.render_export_preview", side_effect=render):
+            job = self.client.post("/api/previews", json=request, headers=self.headers).json()
+            self.assertTrue(started.wait(5))
+            self.service.close()
+        # The render finished and cleaned up its folder before close returned.
+        self.assertEqual(self.service._previews.get(job["id"]).state, "failed")
+        self.assertFalse((self.root / "previews" / "jobs" / job["id"]).exists())
+
     def test_bulk_reject_and_invalid_bounds(self):
         self.open()
         bad = self.client.patch(
