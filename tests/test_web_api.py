@@ -654,7 +654,7 @@ class WebApiTests(unittest.TestCase):
                          {"number": 1, "size": 4, "random_share": 0.5, "unprocessed": 4})
         self.assertEqual(sorted(c["round_role"] for c in state["candidates"]), ["random", "random", "top", "top"])
         event = self.events("review-round")[0]
-        self.assertEqual((event["number"], event["pool"], event["score_version"]), (1, 4, "builtin-v1"))
+        self.assertEqual((event["number"], event["pool"], event["score_version"]), (1, 4, "builtin-v2"))
         # Asking again keeps the open round.
         again = self.client.post("/api/session/rounds", json={"size": 50, "random_share": 0.2}, headers=self.headers)
         self.assertEqual(again.json()["review_round"]["size"], 4)
