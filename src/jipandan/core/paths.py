@@ -50,6 +50,10 @@ class AppPaths:
     def fallback_export_dir(self) -> Path:
         return self.data_dir / "exports"
 
+    @property
+    def round_backup_dir(self) -> Path:
+        return self.data_dir / "round-backups"
+
 
 def get_app_paths() -> AppPaths:
     """Return the current user's application directories without creating them."""

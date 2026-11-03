@@ -16,17 +16,18 @@ def _read(path: Path) -> object:
 
 
 def _inputs(paths: list[Path]) -> list[tuple[str, object]]:
-    """Each file named, and each round or update file directly in a folder named, as (name, parsed JSON).
+    """Each file named, and each round or update file anywhere in a folder named, as (name, parsed JSON).
 
     A folder beside a recording also holds its other JSON files, such as snap points, so only round
-    and update files are taken from folders; a file named directly is always reported. Files are
+    and update files are taken from folders; a file named directly is always reported. Round backups
+    keep each round in a folder of its own, so subfolders are read too. Files are
     named by their path from the folder all of them share: folders for different recordings often
     hold the same file names, and moving the files together leaves the dataset unchanged.
     """
     found: list[tuple[Path, bool]] = []
     for path in paths:
         if path.is_dir():
-            found += [(item.resolve(), False) for item in sorted(path.glob("*.json"))]
+            found += [(item.resolve(), False) for item in sorted(path.rglob("*.json"))]
         else:
             found.append((path.resolve(), True))
     root = Path(os.path.commonpath([path.parent for path, _ in found])) if found else Path()

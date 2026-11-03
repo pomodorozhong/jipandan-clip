@@ -286,6 +286,15 @@ def create_app(
     def import_round_files(request: RoundImport):
         return SessionJSON(app.state.service.import_round_files([(item.name, item.data) for item in request.files]))
 
+    @app.post("/api/session/rounds/backups")
+    def backup_rounds():
+        return SessionJSON(app.state.service.backup_rounds())
+
+    @app.post("/api/session/rounds/backups/reveal")
+    def reveal_round_backups():
+        app.state.service.reveal_round_backups()
+        return {"revealed": True}
+
     @app.post("/api/session/rounds/{number}/file")
     def save_round_file(number: int):
         return SessionJSON(app.state.service.save_round_file(number))
