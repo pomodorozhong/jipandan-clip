@@ -1,6 +1,6 @@
 # Local review checkpoints
 
-All branches are local and unmerged. Source hashes below exclude their separate docs-only handoff commits. No branch was pushed and no PR was opened. Review requests do not constitute approval.
+**Status (2026-11-04):** P-01–P-09 merged as grouped PRs: #131 (P-01), #132 (P-02, P-03), #136 (P-05–P-08) and #137 (P-04, P-09). P-10 and P-11 remain local on `test/improvement-roadblocks`. The table below is the original local review map; source hashes exclude separate docs-only handoff commits.
 
 | Request | Branch | Source checkpoint | Scope / issue handoff |
 |---|---|---|---|

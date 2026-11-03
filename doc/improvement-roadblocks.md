@@ -5,7 +5,7 @@ review decisions, cached experiments, and local model inference. It does not cla
 every possible algorithm. The stopping point is where another meaningful comparison needs
 new owner judgments, a new recording/session, or approval to publish the prepared changes.
 
-All application changes described below are local and unmerged. The baseline was `d127d28`
+The application fixes described below merged on 2026-11-04 in #131, #132, #136 and #137; the evaluator correction and research tools remain unmerged. The baseline was `d127d28`
 on `main`, after [#119](https://github.com/pomodorozhong/jipandan-clip/pull/119).
 Machine-readable aggregate results, provenance and runtime measurements are in
 [`experiments/2026-11-01/results.json`](experiments/2026-11-01/results.json).
