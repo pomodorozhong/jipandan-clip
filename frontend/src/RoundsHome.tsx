@@ -2,6 +2,7 @@ import { useId, useRef } from "react";
 import type { ClipFeaturesJob, RoundImport, RoundSummary, RoundsOverview } from "./api";
 import {
   finishClock, formatPercent, randomShareWarning, roundFileState, ROUND_SIZES, ROUND_RANDOM_SHARE, type ShareWarning,
+  roundBackupState,
 } from "./reviewRound";
 import { formatDuration, formatPerClip, formatShare, stageLabels } from "./stageTimes";
 import { Button } from "./ui";
@@ -80,6 +81,10 @@ function RoundDone({ round, stream, onSaveFile, onRevealFile }: {
           : <><span>This round has no round file yet.</span>
             <button type="button" className="accent ml-auto hover:underline" onClick={() => onSaveFile(round.number)}>Save round file</button></>}
     </div>
+    <div className="mt-1 flex flex-wrap items-baseline justify-end gap-x-2 text-[13px] text-[#c1f3cd]">
+      <span className="mr-auto">Additional copy outside the project folder</span>
+      <BackupCell round={round} onSaveFile={onSaveFile} />
+    </div>
     <StageTable round={round} />
   </section>;
 }
@@ -100,6 +105,16 @@ function FileCell({ round, onSaveFile, onRevealFile }: {
     ? `${state.changes} ${state.changes === 1 ? "change" : "changes"} not saved` : "Older format";
   return <span className="inline-flex flex-wrap items-baseline justify-end gap-x-2">{show}
     <span className="subtle text-xs">· {note}</span>{save}</span>;
+}
+
+/** A finished round's additional copy outside the project folder, apart from its file beside the recording. */
+function BackupCell({ round, onSaveFile }: { round: RoundSummary; onSaveFile: (number: number) => void }) {
+  const state = roundBackupState(round);
+  if (!state) return <>—</>;
+  return <span className="inline-flex flex-wrap items-baseline justify-end gap-x-2">
+    <span className={state.failed ? "text-[#ffb3a8]" : state.action ? "" : "subtle"} title={round.backup?.error ?? undefined}>{state.label}</span>
+    {state.action && <button type="button" className="accent hover:underline" onClick={() => onSaveFile(round.number)}>{state.action}</button>}
+  </span>;
 }
 
 const CELL = "border-b border-[#2f5440] px-2 py-2 text-right tabular-nums first:pl-0 first:text-left last:pr-0";
@@ -134,7 +149,7 @@ function StageTable({ round }: { round: RoundSummary }) {
 
 export default function RoundsHome({
   overview, error, size, share, onSizeChange, onShareChange, onStart, starting, waiting, onCancelWaiting, measuring,
-  scoresReady, onReviewAll, now, onSaveFile, onRevealFile, onImport, importing, importResult,
+  scoresReady, onReviewAll, now, onSaveFile, onRevealFile, onImport, importing, importResult, onBackup, backingUp, onRevealBackups,
 }: {
   overview: RoundsOverview | null;
   error: string;
@@ -156,6 +171,9 @@ export default function RoundsHome({
   onImport: (files: File[]) => void;
   importing: boolean;
   importResult: RoundImport | null;
+  onBackup: () => void;
+  backingUp: boolean;
+  onRevealBackups: () => void;
 }) {
   const shareId = useId();
   const importRef = useRef<HTMLInputElement>(null);
@@ -262,8 +280,13 @@ export default function RoundsHome({
       <section aria-labelledby="earlier-rounds-title">
         <div className="mb-2.5 flex items-center justify-between gap-3">
           <h2 id="earlier-rounds-title" className="eyebrow">Earlier rounds</h2>
-          <button type="button" className="accent text-[13px] hover:underline disabled:opacity-50" disabled={importing}
-            onClick={() => importRef.current?.click()}>{importing ? "Importing…" : "Import round files…"}</button>
+          <div className="flex flex-wrap items-baseline justify-end gap-x-4 gap-y-1 text-[13px]">
+            {rounds.some((round) => round.backup) && <button type="button" className="accent hover:underline disabled:opacity-50" disabled={backingUp}
+              onClick={onBackup}>{backingUp ? "Backing up…" : "Back up all"}</button>}
+            <button type="button" className="accent hover:underline" onClick={onRevealBackups}>Show backups</button>
+            <button type="button" className="accent hover:underline disabled:opacity-50" disabled={importing}
+              onClick={() => importRef.current?.click()}>{importing ? "Importing…" : "Import round files…"}</button>
+          </div>
           <input ref={importRef} type="file" accept=".json,application/json" multiple className="sr-only" tabIndex={-1}
             aria-label="Round files to import" onChange={(event) => {
               const files = Array.from(event.target.files ?? []);
@@ -276,7 +299,7 @@ export default function RoundsHome({
           {importResult.skipped.map((item) => <p key={item.file} className="text-[#ffcfc4]">Skipped <span className="mono">{item.file}</span>: {item.reason}.</p>)}
         </div>}
         {rounds.length ? <div className="overflow-x-auto rounded-xl border line bg-[#192420]">
-          <table className="w-full min-w-[620px] border-collapse text-sm">
+          <table className="w-full min-w-[700px] border-collapse text-sm">
             <thead><tr className="subtle text-left text-xs">
               <th scope="col" className="px-4 py-2.5 font-semibold">Round</th>
               <th scope="col" className="px-4 py-2.5 font-semibold">Finished</th>
@@ -285,6 +308,7 @@ export default function RoundsHome({
               <th scope="col" className="px-4 py-2.5 text-right font-semibold">Keepers captured</th>
               <th scope="col" className="px-4 py-2.5 text-right font-semibold">Time</th>
               <th scope="col" className="px-4 py-2.5 text-right font-semibold">File</th>
+              <th scope="col" className="px-4 py-2.5 text-right font-semibold">Backup</th>
             </tr></thead>
             <tbody className="mono">
               {[...rounds].reverse().map((round) => <tr key={round.number} className="border-t line">
@@ -296,11 +320,15 @@ export default function RoundsHome({
                 <td className="px-4 py-3 text-right">{formatDuration(round.time_ms)}</td>
                 <td className="px-4 py-3 text-right font-sans"><FileCell round={round} onSaveFile={onSaveFile}
                   onRevealFile={onRevealFile} /></td>
+                <td className="px-4 py-3 text-right font-sans"><BackupCell round={round} onSaveFile={onSaveFile} /></td>
               </tr>)}
             </tbody>
           </table>
         </div> : <div className="subtle rounded-xl border border-dashed line px-4 py-5 text-center text-sm">
           No rounds yet. Picking up from an older project folder? Import its round files to skip the clips they cover.</div>}
+        {rounds.filter((round) => round.backup?.error).map((round) => <p key={round.number} role="alert" className="mt-2 text-[13px] text-[#ffb3a8]">
+          Round {round.number} backup failed: {round.backup?.error}</p>)}
+        {overview && rounds.length > 0 && <p className="subtle mt-2 text-xs">Backups stay in <span className="mono break-all">{overview.backup_dir}</span> when a project folder is deleted, and are never removed automatically. They hold each round's decisions and history, not recordings or MP3s, and are lost with this disk.</p>}
       </section>
 
       <p className="subtle text-[13px]">Need something outside a round?{" "}

@@ -90,6 +90,15 @@ export type RoundFileState =
   | { kind: "imported" | "open" | "missing" | "older" | "saved" }
   | { kind: "unsaved"; changes: number };
 
+/** What to say about a finished round's backup, and whether backing it up again can help: an imported file can't be read again from here. */
+export function roundBackupState(round: Pick<RoundSummary, "backup" | "imported">): { label: string; failed: boolean; action: "Back up" | "Retry" | null } | null {
+  const { backup, imported } = round;
+  if (!backup) return null;
+  if (backup.state === "backed_up") return { label: "Backed up", failed: false, action: null };
+  const failed = backup.state === "failed" || backup.error !== null;
+  return { label: failed ? "Backup failed" : "Not backed up", failed, action: imported ? null : failed ? "Retry" : "Back up" };
+}
+
 /** What a finished round's files need: none yet, one in the current format, or an update with later changes. */
 export function roundFileState(round: Pick<RoundSummary, "imported" | "completed" | "file" | "file_version" | "unsaved_changes">): RoundFileState {
   if (round.imported) return { kind: "imported" };

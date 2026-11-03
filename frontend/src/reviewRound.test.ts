@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Clip } from "./api";
 import {
   countDone, countStatuses, finishClock, isProcessed, isRoundOpen, normalizeRoundSize, orderRound, randomShareWarning,
-  roundFileState, scopeClips,
+  roundBackupState, roundFileState, scopeClips,
 } from "./reviewRound";
 
 const clip = (id: string, status: Clip["status"], role: Clip["round_role"]) => ({ clip_id: id, status, round_role: role }) as Clip;
@@ -17,6 +17,23 @@ describe("round files", () => {
     expect(roundFileState({ ...done, file: null, file_version: null })).toEqual({ kind: "missing" });
     expect(roundFileState({ ...done, completed: null })).toEqual({ kind: "open" });
     expect(roundFileState({ ...done, imported: { file: "x", number: 1, clips: 1, unmatched: 0 } })).toEqual({ kind: "imported" });
+  });
+});
+
+describe("round backups", () => {
+  const backup = (state: "backed_up" | "pending" | "failed" | "no_file", error: string | null = null) => ({ state, files: 1, error });
+  const imported = { file: "x", number: 1, clips: 1, unmatched: 0 };
+
+  it("never calls a round backed up until its copy exists", () => {
+    expect(roundBackupState({ backup: null, imported: null })).toBeNull();
+    expect(roundBackupState({ backup: backup("backed_up"), imported: null })).toEqual({ label: "Backed up", failed: false, action: null });
+    expect(roundBackupState({ backup: backup("pending"), imported: null })).toEqual({ label: "Not backed up", failed: false, action: "Back up" });
+    expect(roundBackupState({ backup: backup("no_file"), imported: null })).toEqual({ label: "Not backed up", failed: false, action: "Back up" });
+    expect(roundBackupState({ backup: backup("failed", "disk full"), imported: null })).toEqual({ label: "Backup failed", failed: true, action: "Retry" });
+  });
+
+  it("offers no retry for an imported file, which isn't kept to read again", () => {
+    expect(roundBackupState({ backup: backup("pending"), imported })).toEqual({ label: "Not backed up", failed: false, action: null });
   });
 });
 

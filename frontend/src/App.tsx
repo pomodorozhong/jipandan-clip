@@ -301,6 +301,7 @@ export default function App() {
   // Set when ending the round failed, so the round doesn't retry by itself; ending it by hand retries.
   const [roundEndFailed, setRoundEndFailed] = useState(false);
   const [importingRounds, setImportingRounds] = useState(false);
+  const [backingUpRounds, setBackingUpRounds] = useState(false);
   const [roundImport, setRoundImport] = useState<RoundImport | null>(null);
   // Bumped when round files change, which the session snapshot doesn't show, so the rounds home reloads.
   const [roundFilesVersion, setRoundFilesVersion] = useState(0);
@@ -1273,6 +1274,27 @@ export default function App() {
     }
   }
 
+  async function backupRounds() {
+    setBackingUpRounds(true);
+    setRoundError("");
+    try {
+      setSession(await api<Session>("/session/rounds/backups", "POST"));
+      setRoundFilesVersion((version) => version + 1);
+    } catch (cause) {
+      setRoundError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBackingUpRounds(false);
+    }
+  }
+
+  async function revealRoundBackups() {
+    try {
+      await api("/session/rounds/backups/reveal", "POST");
+    } catch (cause) {
+      setRoundError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
   // Round files come from another project folder of the same recording; the server matches their clips by time.
   async function importRoundFiles(files: File[]) {
     setImportingRounds(true);
@@ -1537,6 +1559,7 @@ export default function App() {
         measuring={clipFeaturesJob} scoresReady={session.clip_features_complete}
         onReviewAll={() => { setFreeReviewAudio(session.audio); setMode("triage"); setSelectedId(null); }} now={new Date()}
         onSaveFile={(number) => void saveRoundFile(number)} onRevealFile={(number) => void revealRoundFile(number)}
+        onBackup={() => void backupRounds()} backingUp={backingUpRounds} onRevealBackups={() => void revealRoundBackups()}
         onImport={(files) => void importRoundFiles(files)} importing={importingRounds} importResult={roundImport} />
       : mode === "triage" ? <TriageScreen clip={selected} upNext={triageUpNext} durationMs={session.duration_ms ?? 0} position={selectedPosition + 1} remaining={visible.length}
         counts={scopedCounts} hideScores={roundOpen} audioSrc={audioUrl()} autoplay={settings.autoplayClips}
