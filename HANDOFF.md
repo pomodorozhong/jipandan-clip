@@ -20,13 +20,15 @@
 - **Findings:** semantic features raise corrected legacy mean AUC 0.793→0.813 but do not establish a generated-pool gain; audio's paired increment is uncertain; title generation improves 0/62 edited examples; boundary expansions mostly increase review cost. See `doc/improvement-roadblocks.md` and `doc/experiments/2026-11-01/results.json` for methods and limits.
 - **Verification:** 178 Python tests passed with optional scikit-learn installed, including six research protocol guards. Every scored model used local pinned files. The combined application/evaluator review branch has 188 passing Python tests and 174 frontend tests, plus type/build checks.
 - **Issue handoffs:** https://github.com/pomodorozhong/jipandan-clip/issues/128#issuecomment-6560383006 (models) and https://github.com/pomodorozhong/jipandan-clip/issues/47#issuecomment-6560377931 (candidate/timing audit), both Codex-authored and verified.
-- **Next action:** owner review of the prepared fixes (P-01–P-10 in their own handoffs), then a new real clipping round from another recording. New human labels and onset judgments are required before choosing integration or changed defaults.
+- **Review follow-ups:** #129 tracks missing ranking preparation code and reproduction commands; #130 tracks missing candidate-variant implementations and aggregate evidence. Both were filed with owner authorization after the P-01–P-11 review. The boundary-oracle offset finding remains local and unfiled.
+- **Published fixes:** owner approved P-01/P-02's exact tips, titles and bodies on 2026-11-03. Ready PRs https://github.com/pomodorozhong/jipandan-clip/pull/131 (Trim edges, `601159b`) and https://github.com/pomodorozhong/jipandan-clip/pull/132 (transcription recovery, `a373d86`) target `main` and close only #120/#121 respectively. Both verified; no GitHub checks reported. Other branches remain local.
+- **Next action:** review/merge #131/#132, then continue local review/publication preparation for P-03–P-10 and address #129/#130 before publishing P-11. A new real clipping round from another recording is still required before choosing model integration or changed defaults.
 - **P-11 — Research review:** review the experimental branch and report before publication. No push/PR is authorized; use `open-pr` to present a final title/body when requested. This does not request approval to change scoring or candidate defaults.
 
 ## Ranked work
 
-1. #120 Review the local Trim edges fix first; internal pauses must not truncate later speech (`fix/trim-edges-pause`).
-2. #121 Review transcription publication recovery (`fix/recover-transcription-publication`); caught publication failures can reuse worker output, with sidecar rollback.
+1. #120 Review PR #131 for Trim edges first; internal pauses must not truncate later speech (`fix/trim-edges-pause`).
+2. #121 Review PR #132 for transcription publication recovery (`fix/recover-transcription-publication`); caught publication failures can reuse worker output, with sidecar rollback.
 3. #122 Review browser sidecar publication (`fix/transcription-experiment-sidecars`) before the next real transcription.
 4. #123–#127 Review the independent local Undo-delta, interval-matching, tied-ranking, export-name, and final-playback fixes. All remain unmerged.
 5. #98 Review `feat/undo-single-export`; the owner's product decision was already yes. Undo keeps the saved MP3.
