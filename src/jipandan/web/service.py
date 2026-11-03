@@ -481,8 +481,8 @@ class SessionService:
                     "stop_threshold_db": job.options.stop_threshold_db,
                     "title": job.title, "path": str(output), **clean_context(context),
                     **({"export_all": export_all} if export_all else {}),
-                }], label="Export all" if export_all else None,
-                    undo_group=f"export-all:{export_all}" if export_all else None, undoable=bool(export_all))
+                }], label="Export all" if export_all else "Export",
+                    undo_group=f"export-all:{export_all}" if export_all else None, undoable=True)
             except Exception:
                 output.unlink(missing_ok=True)
                 raise
@@ -1617,6 +1617,7 @@ class SessionService:
         self, operation: Callable[[Session], object], events: list[dict] | None = None, *,
         label: str | None = None, undo_group: str | None = None, undoable: bool | None = None,
         undoes: list[int] | None = None, delta: bool = False,
+        changed_payloads: Iterable[str] = (),
     ) -> tuple[dict, object]:
         """Apply ``operation`` to a copy of the session and save it with ``events``.
 
@@ -1629,7 +1630,7 @@ class SessionService:
             draft = current.copy_for_edit()
             result = operation(draft)
             before = self._changed_clips(current, draft)
-            self._last_changed = set(before)
+            self._last_changed = set(before) | set(changed_payloads)
             if not before and not events:
                 return (self._delta() if delta else self.snapshot()), result
             undo = bool(before) and (undoable if undoable is not None else label is not None)
@@ -1811,16 +1812,18 @@ class SessionService:
                 session.candidates = sorted(by_id.values(), key=lambda c: (c.index, c.suffix))
 
             # A suggestion replaced or accepted since stays as it is.
+            changed_suggestions = set()
             for clip_id, (old, new) in target.suggestions.items():
                 if self._title_suggestions.get(clip_id) == new:
                     self._set_title_suggestion(clip_id, old)
+                    changed_suggestions.add(clip_id)
 
             # Record what each clip went back to, so training sees the corrected decision.
             return self._mutate(restore, [{
                 "type": "undo", "label": target.label, "targets": target.seqs,
                 "restored": {clip_id: old.status if old else None for clip_id, old in target.restored.items()},
                 **clean_context(context),
-            }], undoable=False, undoes=target.seqs, delta=delta)[0]
+            }], undoable=False, undoes=target.seqs, delta=delta, changed_payloads=changed_suggestions)[0]
 
     def merge_preview(self) -> dict | None:
         with self._lock:

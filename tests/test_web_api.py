@@ -370,6 +370,33 @@ class WebApiTests(unittest.TestCase):
         missing = self.client.post(path, json={"clip_ids": ["99"]}, headers=self.headers)
         self.assertEqual(missing.status_code, 422)
 
+    def test_suggestion_only_undo_delta_updates_the_loaded_session(self):
+        self.open()
+        path = "/api/session/clip-transcription"
+        with patch("jipandan.web.service.transcribe_clips", return_value=iter([("1", "Better"), ("2", "Other")])):
+            self.client.post(path, json={"clip_ids": ["1", "2"]}, headers=self.headers)
+            self.wait_for_job(path, "completed")
+        loaded = self.client.get("/api/session").json()
+        delta = self.client.post("/api/session/undo?delta=true", json={"expected_revision": loaded["revision"]},
+                                 headers=self.headers).json()
+        self.assertEqual({clip["clip_id"] for clip in delta["clips"]}, {"1", "2"})
+        merged = {clip["clip_id"]: clip for clip in loaded["candidates"]}
+        merged.update({clip["clip_id"]: clip for clip in delta["clips"]})
+        self.assertEqual(list(merged.values()), self.client.get("/api/session").json()["candidates"])
+        self.assertFalse(delta["can_undo"])
+
+    def test_undo_delta_combines_suggestion_and_candidate_changes(self):
+        self.open()
+        self.service._set_title_suggestion("1", "Better")
+        self.service.store.record_suggestion("1", None, "Better", {"type": "suggest-title"},
+                                             label="Mixed change", undo_group="mixed")
+        self.service._mutate(lambda session: setattr(session.editable("2"), "title", "Edited"),
+                             [{"type": "title", "clip": "2"}], label="Mixed change", undo_group="mixed")
+        loaded = self.service.snapshot()
+        delta = self.service.undo(loaded["revision"], delta=True)
+        self.assertEqual({clip["clip_id"] for clip in delta["clips"]}, {"1", "2"})
+        self.assertEqual(delta["clips"], self.service.snapshot()["candidates"])
+
     def test_clip_transcription_failure_is_reported(self):
         self.open()
         path = "/api/session/clip-transcription"
@@ -1579,8 +1606,41 @@ class WebApiTests(unittest.TestCase):
             }, headers=self.headers)
             self.assertEqual(stale.status_code, 409)
             self.assertEqual(len(list((self.root / "clips").glob("*.mp3"))), 2)
-            # A single export from Publish is not an Undo step; the trim before it is.
+            # No undo has been requested yet.
             self.assertEqual(self.events("undo"), [])
+
+    def test_single_export_undo_restores_prior_state_and_keeps_the_mp3(self):
+        state = self.open()
+        state = self.client.patch("/api/clips/1", json={
+            "expected_revision": state["revision"], "status": "group2",
+        }, headers=self.headers).json()
+        prior = state["candidates"][0]
+        valid_mp3 = self.root / "valid.mp3"
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                        "sine=frequency=440:duration=0.8", str(valid_mp3)], check=True)
+
+        def render(_audio, _candidate, _options, output):
+            shutil.copyfile(valid_mp3, output)
+
+        with patch("jipandan.web.preview.render_export_preview", side_effect=render):
+            job_id = self.client.post("/api/previews", json={
+                "clip_id": "1", "expected_revision": state["revision"], "mode": "as_is", "title": "Published title",
+            }, headers=self.headers).json()["id"]
+            self.wait_for_job(f"/api/previews/{job_id}", "completed")
+            exported = self.client.post("/api/exports", json={
+                "preview_id": job_id, "expected_revision": state["revision"],
+            }, headers=self.headers).json()
+        output = Path(exported["output_path"])
+        saved = output.read_bytes()
+        # The export remains undoable after reopening the recording.
+        self.open()
+        undone = self.client.post("/api/session/undo?delta=true", json={
+            "expected_revision": exported["revision"],
+        }, headers=self.headers).json()
+        self.assertEqual(undone["clips"], [prior])
+        self.assertEqual(output.read_bytes(), saved)
+        self.assertEqual(self.stored().get_candidate("1").status, "group2")
+        self.assertEqual(self.events("undo")[-1]["label"], "Export")
 
     def test_export_all_run_undoes_as_one_step_and_keeps_files(self):
         state = self.open()
