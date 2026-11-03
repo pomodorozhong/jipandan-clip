@@ -5,12 +5,12 @@
 ### feat/round-backups
 
 - **Task:** #133, durable backups of finished rounds outside the project folder. Linked to the issue; the PR fully resolves it.
-- **PR:** none yet; see P-12.
+- **PR:** https://github.com/pomodorozhong/jipandan-clip/pull/134, opened with the owner's approval at `c59c6f9`; closes #133.
 - **Code checkpoint:** `6547577` (backups, API, dataset subfolders), `ee7b335` (rounds home status, docs), on `main` at `d127d28`.
-- **State:** built and awaiting the owner's approval to open the PR.
+- **State:** awaiting review and merge.
 - **Verification:** 192 Python tests and 172 frontend tests, type check and build pass; the first commit's Python tests also pass on their own. Back up all was run in the app on a temporary copy of the 0903 session, isolated from real application data: it wrote one round file and one verified backup, and `jipandan-dataset` on the backup folder built 303 ranking, 171 timing and 171 title examples with 60 random labels. Layout checked at 375, 800 and 1440 px. The failed state was covered by tests only, not seen in the app.
-- **Next action:** after the PR opens, run Back up all on the real 0903 recording from this branch's build, then confirm with `mo clean --dry-run` that `round-backups` isn't listed.
-- **P-12 — Open the PR:** open this branch's PR against `main`, closing #133. It blocks the real 0903 backup, which the owner asked to run after the PR opens.
+- **Real 0903 backup (2026-11-03):** Back up all on the real session wrote `0903.round-01.json` beside the recording and an identical copy in `round-backups`; there is no update file because no round clips changed after the round. `jipandan-dataset` on the backups built the same 303/171/171 examples. `mo clean --dry-run` (Mole 1.67.0) lists no file in `round-backups` or Application Support/Jipandan.
+- **Next action:** owner reviews #134, including the reviewer follow-ups in its body.
 
 ## Ranked work
 
