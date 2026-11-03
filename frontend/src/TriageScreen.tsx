@@ -115,8 +115,11 @@ export default function TriageScreen({
   useEffect(() => {
     const audio = audioRef.current;
     setPlayheadMs(clip?.start_ms ?? 0);
+    audio?.pause();
+    stopAtRef.current = null;
+    setPlaying(false);
+    setSoundBlocked(false);
     if (!audio || !clip) return;
-    audio.pause();
     if (!autoplay || !active) return;
     if (audio.readyState >= 1) {
       play("replay");

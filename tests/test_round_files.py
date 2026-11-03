@@ -235,6 +235,31 @@ class RoundFileTests(unittest.TestCase):
         # The clip with the same range takes the outcome, not the one nested inside it.
         self.assertEqual((item["outcomes"], item["covered"]), ({"281": "kept", "282": "rejected"}, [280]))
 
+    def test_matching_considers_earlier_containing_intervals(self):
+        outer = {"start_ms": 0, "end_ms": 5000, "outcome": "kept"}
+        file_clips = [outer, {"start_ms": 1000, "end_ms": 2000, "outcome": "rejected"}]
+        self.assertIs(match_clips(file_clips, [(7, 3000, 4000)])[7][1], outer)
+        file_clips += [{"start_ms": 2100, "end_ms": 2200}, {"start_ms": 2300, "end_ms": 2400}]
+        self.assertIs(match_clips(file_clips, [(7, 3000, 4000)])[7][1], outer)
+        self.assertEqual(match_clips(file_clips, [(8, 5000, 6000)]), {})
+
+    def test_nested_interval_search_matches_exhaustive_search(self):
+        import random
+        rng = random.Random(124)
+        file_clips = [{"start_ms": a, "end_ms": a + rng.randrange(1, 1000)}
+                      for a in [rng.randrange(2000) for _ in range(100)]]
+        for index in range(100):
+            start = rng.randrange(2500)
+            end = start + rng.randrange(1, 500)
+            expected = {}
+            for clip in sorted(file_clips, key=lambda c: c["start_ms"]):
+                overlap = min(end, clip["end_ms"]) - max(start, clip["start_ms"])
+                fit = (overlap / min(end - start, clip["end_ms"] - clip["start_ms"]),
+                       overlap / (max(end, clip["end_ms"]) - min(start, clip["start_ms"])))
+                if fit[0] >= .5 and fit > expected.get(index, ((0., 0.), {}))[0]:
+                    expected[index] = (fit, clip)
+            self.assertEqual(match_clips(file_clips, [(index, start, end)]), expected)
+
     def test_imported_round_counts_its_decisions_and_keeps_unfinished_clips_in_the_pool(self):
         history = RoundHistory(parse_round_file(round_file(
             changes=[change(2, {"1": clip(1, 1000, 2000, "exported")}), change(3, {"3": clip(3, 5000, 6000, "rejected")})],

@@ -19,6 +19,7 @@ app only ever sees the current version. See doc/app-rebuild-plan.md, "Round file
 from __future__ import annotations
 
 import bisect
+import itertools
 import hashlib
 import json
 from collections.abc import Callable, Sequence
@@ -437,10 +438,12 @@ def match_clips(file_clips: Sequence[dict], clips: Sequence[tuple[int, int, int]
     clips here can match one file clip when this project cut it into parts.
     """
     ordered = sorted(file_clips, key=lambda clip: clip["start_ms"])
-    starts = [clip["start_ms"] for clip in ordered]
+    # Prefix maxima let us skip only intervals which all end before the query.
+    # An earlier containing interval may start well before the preceding clip.
+    latest_ends = list(itertools.accumulate((clip["end_ms"] for clip in ordered), max))
     matches: dict[int, tuple[Fit, dict]] = {}
     for index, start, end in clips:
-        position = max(0, bisect.bisect_left(starts, start) - 1)
+        position = bisect.bisect_right(latest_ends, start)
         while position < len(ordered) and ordered[position]["start_ms"] < end:
             clip = ordered[position]
             overlap = min(end, clip["end_ms"]) - max(start, clip["start_ms"])

@@ -216,7 +216,7 @@ def publish_prebuilt_clip(
     final_clip = clip_dir / f"{basename}.mp3"
     if source.resolve() == final_clip.resolve():
         return final_clip
-    temporary_clip = clip_dir / f".{basename}.{uuid4().hex}.mp3"
+    temporary_clip = clip_dir / f".export-{uuid4().hex}.mp3"
     try:
         _run([
             "ffmpeg",
