@@ -2,22 +2,29 @@
 
 ## In progress
 
-### feat/generated-clip-timing
+### feat/round-backups
 
-- **Task:** #47, timing of generated clips. The owner's rule: a start that cuts into the voice is unacceptable; an early start or a late end is fine, since the export trims silence. Not linked to the issue: this PR advances #47 but doesn't resolve it.
-- **PR:** #119, opened against `main` with the owner's approval; awaiting review and merge.
-- **Code checkpoint:** `724163d` (snap starts back and ends forward), `451997d` (generated starts back off to the voice onset), `7469953` (`evaluate_candidates.py --audio` timing report), then a merge of `main` at `f9713cd` (#118); plus this handoff.
-- **State:** awaiting review and merge.
-- **Verification:** on the merged tip, 168 Python tests and 170 frontend tests, type check and build pass; each timing commit passed on its own before the merge. Snapping was checked by dragging edges in Polish on a disposable session. On 0511, 0526, 0602 and 0903 the start rule raises acoustically clean starts from 79–86% to 85–90%. Not checked: a real clipping session with the new rules.
-- **Next action:** after #119 merges, drop this subsection; #47's next step is in Ranked work.
+- **Task:** #133, durable backups of finished rounds outside the project folder. Linked to the issue; the PR fully resolves it.
+- **PR:** none yet; see P-12.
+- **Code checkpoint:** `6547577` (backups, API, dataset subfolders), `ee7b335` (rounds home status, docs), on `main` at `d127d28`.
+- **State:** built and awaiting the owner's approval to open the PR.
+- **Verification:** 192 Python tests and 172 frontend tests, type check and build pass; the first commit's Python tests also pass on their own. Back up all was run in the app on a temporary copy of the 0903 session, isolated from real application data: it wrote one round file and one verified backup, and `jipandan-dataset` on the backup folder built 303 ranking, 171 timing and 171 title examples with 60 random labels. Layout checked at 375, 800 and 1440 px. The failed state was covered by tests only, not seen in the app.
+- **Next action:** after the PR opens, run Back up all on the real 0903 recording from this branch's build, then confirm with `mo clean --dry-run` that `round-backups` isn't listed.
+- **P-12 — Open the PR:** open this branch's PR against `main`, closing #133. It blocks the real 0903 backup, which the owner asked to run after the PR opens.
 
 ## Ranked work
 
-1. #47 Judge generated clips on the next real clipping session. Transcribe again first, since only new transcriptions get the start rule. Then compare review speed and rejections with transcript-line sessions. Known gaps: about 40% of the cut-in starts that got rejected in 0903 start inside long running speech, which the rule leaves alone; and generated ends stop before the owner's ends on about half of keeps (rarely cutting the voice itself). `scripts/evaluate_candidates.py --audio` measures both.
-2. On the next real transcription, check #118's `<audio>.words.json` and `<audio>.silero.npy` load in an experiment script, and note their real sizes.
-3. #98 Decide whether a single export from Publish should be undoable (`needs-decision`).
-4. #108 rest: an action log for UI questions, parked until a specific question needs it.
+1. #120 Review PR #131 for Trim edges first; internal pauses must not truncate later speech (`fix/trim-edges-pause`).
+2. #121 Review PR #132 for transcription publication recovery (`fix/recover-transcription-publication`); caught publication failures can reuse worker output, with sidecar rollback.
+3. #122 Review browser sidecar publication (`fix/transcription-experiment-sidecars`) before the next real transcription.
+4. #123–#127 Review the independent local Undo-delta, interval-matching, tied-ranking, export-name, and final-playback fixes. All remain unmerged.
+5. #98 Review `feat/undo-single-export`; the owner's product decision was already yes. Undo keeps the saved MP3.
+6. Review `fix/candidate-evaluation-bounds`; its issue draft and filing request P-10 are in that branch's handoff.
+7. #128 Review the completed local research branch `test/improvement-roadblocks`. Semantic scores give a small legacy gain, unconfirmed on the generated random sample; audio adds no clear benefit; the tested title recipe fails to improve reference edit distance. Do not integrate these recipes yet.
+8. #47 Judge generated clips in a new real clipping session after the fixes, preserving round files and sidecars. Current evidence cannot establish candidate precision or settle onset quality. The owner retains Transcript lines as default until a real session supports a change.
+9. Gather random review decisions from multiple recordings; only 60 random labels from one generated session are currently available. The 250-label target is a planning guide, not a guarantee. On the next browser transcription verify #118/#122 word and probability sidecars with real output.
+10. #108 Action-level logging remains parked until a specific question needs it; old dwell attribution cannot explain causal delays.
 
 ## Pending
 
-None. The remote branches `cursor/whisper-defaults-e294` (PR #1 closed unmerged) and `sherpa-onnx-paraformer` (no PR) were kept, since they may hold unique work.
+None beyond the branch requests above. Remote branches `cursor/whisper-defaults-e294` (PR #1 closed unmerged) and `sherpa-onnx-paraformer` (no PR) remain retained; no branch deletion was authorized.
