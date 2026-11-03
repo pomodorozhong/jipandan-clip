@@ -849,6 +849,161 @@ class WebApiTests(unittest.TestCase):
         self.assertGreater(row["time_ms"], 0)
         self.assertEqual(sum(sum(clip.values()) for clip in history.times().values()), row["time_ms"])
 
+    def backup_folder(self, seed=None):
+        seed = seed or self.service._rounds[0]["seed"]
+        return self.paths.round_backup_dir / audio_sha256(self.audio) / seed
+
+    def legacy_round(self):
+        """A session with a round finished before round files existed."""
+        self.open()
+        legacy = {"size": 2, "total": 2, "random_share": 0.2, "seed": "a1b2c3d4", "score_version": "builtin-v1",
+                  "top": ["1", "2"], "random": [], "roles": {"1": "top", "2": "top"},
+                  "completed": {"t": "2026-10-21T12:00:00.000Z", "unprocessed": 2}}
+        db = sqlite3.connect(self.service.store.path)
+        with db:
+            db.execute("INSERT INTO meta (key, value) VALUES ('review_set', ?)", (json.dumps(legacy),))
+        db.close()
+        self.open()
+
+    def test_a_finished_round_is_backed_up_outside_the_project_folder(self):
+        self.finish_a_round()
+        name = f"{self.audio.stem}.round-01.json"
+        self.assertEqual((self.backup_folder() / name).read_bytes(), self.audio.with_name(name).read_bytes())
+        overview = self.client.get("/api/session/rounds").json()
+        self.assertEqual(overview["rounds"][0]["backup"], {"state": "backed_up", "files": 1, "error": None})
+        self.assertEqual(overview["backup_dir"], str(self.paths.round_backup_dir))
+        self.assertTrue(self.backup_folder().is_relative_to(self.paths.data_dir))
+
+    def test_later_saves_keep_the_whole_update_chain_and_repeat_saves_add_nothing(self):
+        revision = self.finish_a_round()
+        for title in ("One", "Two"):
+            revision = self.client.patch("/api/clips/1", json={"expected_revision": revision, "title": title},
+                                         headers=self.headers).json()["revision"]
+            self.client.post("/api/session/rounds/1/file", headers=self.headers)
+        stem = self.audio.stem
+        files = sorted(path.name for path in self.backup_folder().glob("*.json"))
+        self.assertEqual(files, [f"{stem}.round-01.json", f"{stem}.round-01.update-01.json", f"{stem}.round-01.update-02.json"])
+        before = (self.backup_folder() / "manifest.jsonl").read_bytes()
+        self.client.post("/api/session/rounds/1/file", headers=self.headers)
+        self.client.post("/api/session/rounds/backups", headers=self.headers)
+        self.assertEqual((self.backup_folder() / "manifest.jsonl").read_bytes(), before)
+        self.assertEqual(self.round_row()["backup"]["files"], 3)
+
+    def test_back_up_all_writes_and_copies_a_round_older_than_round_files(self):
+        self.legacy_round()
+        self.assertEqual(self.round_row()["backup"]["state"], "no_file")
+        result = self.client.post("/api/session/rounds/backups", headers=self.headers)
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(self.round_row()["backup"]["state"], "backed_up")
+        self.assertTrue((self.backup_folder("a1b2c3d4") / f"{self.audio.stem}.round-01.json").is_file())
+
+    def test_a_failed_backup_is_shown_keeps_the_project_file_and_can_be_retried(self):
+        self.paths.data_dir.mkdir(parents=True, exist_ok=True)
+        blocker = self.paths.round_backup_dir
+        blocker.write_text("not a folder")
+        self.finish_a_round()
+        self.assertTrue(self.audio.with_name(f"{self.audio.stem}.round-01.json").is_file())
+        backup = self.round_row()["backup"]
+        self.assertEqual((backup["state"], backup["files"]), ("failed", 0))
+        self.assertIn(f"{self.audio.stem}.round-01.json", backup["error"])
+        # Still failing: a save succeeds but the backup is not reported as done.
+        self.assertEqual(self.client.post("/api/session/rounds/1/file", headers=self.headers).status_code, 200)
+        self.assertEqual(self.round_row()["backup"]["state"], "failed")
+        blocker.unlink()
+        self.client.post("/api/session/rounds/1/file", headers=self.headers)
+        self.assertEqual(self.round_row()["backup"], {"state": "backed_up", "files": 1, "error": None})
+
+    def test_a_round_not_backed_up_before_a_restart_can_be_backed_up_after_it(self):
+        with patch("jipandan.web.service.backup_file", side_effect=OSError("disk full")):
+            self.finish_a_round()
+        self.open()
+        self.service._backup_errors.clear()
+        self.assertEqual(self.round_row()["backup"]["state"], "pending")
+        self.client.post("/api/session/rounds/backups", headers=self.headers)
+        self.assertEqual(self.round_row()["backup"]["state"], "backed_up")
+
+    def test_a_retry_does_not_need_files_already_backed_up_beside_the_recording(self):
+        self.finish_a_round()
+        self.audio.with_name(f"{self.audio.stem}.round-01.json").unlink()
+        self.client.post("/api/session/rounds/backups", headers=self.headers)
+        self.assertEqual(self.round_row()["backup"]["state"], "backed_up")
+
+    def test_start_over_backs_up_final_updates_and_a_reused_round_number_keeps_both_rounds(self):
+        revision = self.finish_a_round()
+        first_seed = self.service._rounds[0]["seed"]
+        revision = self.client.patch("/api/clips/1", json={"expected_revision": revision, "title": "Later"},
+                                     headers=self.headers).json()["revision"]
+        fresh = self.client.post("/api/session/start-over", json={"expected_revision": revision, "clip_source": "lines"},
+                                 headers=self.headers).json()
+        stem = self.audio.stem
+        self.assertTrue((self.backup_folder(first_seed) / f"{stem}.round-01.update-01.json").is_file())
+        self.assertEqual(fresh["rounds_done"], 0)
+        self.finish_a_round()
+        second_seed = self.service._rounds[0]["seed"]
+        self.assertNotEqual(first_seed, second_seed)
+        self.assertTrue((self.backup_folder(first_seed) / f"{stem}.round-01.json").is_file())
+        self.assertEqual(len(list(self.backup_folder(second_seed).glob("*.json"))), 1)
+
+    def test_backups_restore_a_round_and_build_a_dataset_with_the_project_folder_gone(self):
+        revision = self.finish_a_round()
+        self.client.patch("/api/clips/2", json={"expected_revision": revision, "status": "group2"}, headers=self.headers)
+        self.client.post("/api/session/rounds/1/file", headers=self.headers)
+        recording = self.audio.read_bytes()
+        project = sorted(self.root.glob("audio*"))
+        folder = self.backup_folder()
+        for path in project:
+            if path.name not in ("audio.mp3", "audio.srt"):
+                path.unlink()
+        self.assertEqual(self.audio.read_bytes(), recording)
+
+        from jipandan.cli.dataset import _inputs
+        from jipandan.core.datasets import build_dataset
+        manifest = build_dataset(_inputs([self.paths.round_backup_dir]))["manifest"]
+        self.assertEqual([entry["kind"] for entry in manifest["inputs"] if entry["used"]], ["round", "update"])
+
+        self.open()
+        body = {"files": [{"name": path.name, "data": json.loads(path.read_text(encoding="utf-8"))}
+                          for path in sorted(folder.glob("*.json"))]}
+        result = self.client.post("/api/session/rounds/import", json=body, headers=self.headers).json()["round_import"]
+        self.assertEqual(result["imported"][0]["matched"], 2)
+        row = self.round_row()
+        self.assertEqual((row["kept"], row["imported"]["file"], row["backup"]["state"]),
+                         (1, f"{self.audio.stem}.round-01.json", "backed_up"))
+        self.assertEqual(len(list(folder.glob("*.json"))), 2)
+
+    def test_importing_backs_up_the_round_and_its_updates_from_elsewhere(self):
+        revision = self.finish_a_round()
+        self.client.patch("/api/clips/2", json={"expected_revision": revision, "status": "group2"}, headers=self.headers)
+        self.client.post("/api/session/rounds/1/file", headers=self.headers)
+        seed = self.service._rounds[0]["seed"]
+        files = sorted(self.root.glob("audio.round-*.json"))
+        body = {"files": [{"name": path.name, "data": json.loads(path.read_text(encoding="utf-8"))} for path in files]}
+        shutil.rmtree(self.paths.round_backup_dir)
+        revision = self.client.get("/api/session").json()["revision"]
+        self.client.post("/api/session/start-over", json={"expected_revision": revision, "clip_source": "lines"},
+                         headers=self.headers)
+        shutil.rmtree(self.paths.round_backup_dir, ignore_errors=True)
+        self.client.post("/api/session/rounds/import", json=body, headers=self.headers)
+        self.assertEqual(sorted(path.name for path in self.backup_folder(seed).glob("*.json")), [path.name for path in files])
+        self.assertEqual(self.round_row()["backup"]["state"], "backed_up")
+
+    def test_the_backup_location_does_not_follow_the_working_directory(self):
+        before = AppPaths.default().round_backup_dir
+        self.assertTrue(before.is_absolute())
+        current = os.getcwd()
+        os.chdir(self.root)
+        try:
+            self.assertEqual(AppPaths.default().round_backup_dir, before)
+        finally:
+            os.chdir(current)
+
+    def test_show_backups_reveals_this_recordings_folder(self):
+        self.finish_a_round()
+        folder = self.backup_folder().parent
+        with patch.object(self.service, "_reveal") as reveal:
+            self.assertEqual(self.client.post("/api/session/rounds/backups/reveal", headers=self.headers).status_code, 200)
+        reveal.assert_called_once_with(folder)
+
     def test_a_round_end_writes_updates_for_earlier_rounds_changed_since_their_files(self):
         self.srt.write_text("".join(
             f"{n}\n00:00:0{n},000 --> 00:00:0{n},500\nLine {n}\n\n" for n in range(1, 5)), encoding="utf-8")

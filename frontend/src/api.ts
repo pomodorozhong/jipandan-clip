@@ -43,6 +43,14 @@ export interface RoundSummary {
   unsaved_changes: number | null;
   /** Set for a round read from another project's round file. */
   imported: { file: string; number: number; clips: number; unmatched: number } | null;
+  /** The additional copy of its files outside the project folder; null while the round is open. */
+  backup: RoundBackup | null;
+}
+
+export interface RoundBackup {
+  state: "backed_up" | "pending" | "failed" | "no_file";
+  files: number;
+  error: string | null;
 }
 
 export interface RoundImport {
@@ -53,6 +61,8 @@ export interface RoundImport {
 /** Earlier rounds and estimates for the next one, from GET /session/rounds. */
 export interface RoundsOverview {
   rounds: RoundSummary[];
+  /** Where round backups go, in the app's data folder. */
+  backup_dir: string;
   stream: { keepers: number; low: number; high: number } | null;
   captured: number | null;
   pace: { source: "rounds" | "default"; rounds: number[]; stage_ms: Record<RoundStage, number> | null; ms: number };

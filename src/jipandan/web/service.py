@@ -40,9 +40,10 @@ from jipandan.core.review_rounds import (
     DEFAULT_SIZE, MAX_SIZE, MIN_SIZE, RANDOM_SHARE, STAT_EVENTS, clip_times, closing_statuses, effective_clips,
     in_pool, pick_round, set_order_key, unprocessed,
 )
+from jipandan.core.round_backups import backup_data, backup_file, missing_backups
 from jipandan.core.round_files import (
     RoundHistory, audio_sha256, build_round_file, build_update_file, file_kind, imported_round, in_round, match_clips,
-    parse_round_file, round_file_path, update_file_path, write_round_file,
+    parse_round_file, parse_update_file, round_file_path, update_file_path, write_round_file,
 )
 from jipandan.core.review_rounds import overview as round_overview
 from jipandan.core.srt import parse_srt, segment_scores_path
@@ -123,6 +124,8 @@ class SessionService:
                  preview_dir: Path | None = None, transcription_dir: Path | None = None,
                  *, app_paths: AppPaths | None = None) -> None:
         self._lock = threading.RLock()
+        # Why each round's last backup failed, by seed, until one succeeds.
+        self._backup_errors: dict[str, str] = {}
         self.paths = app_paths or get_app_paths()
         self.audio: Path | None = None
         self.srt: Path | None = None
@@ -939,10 +942,13 @@ class SessionService:
             rounds = list(self._rounds)
             watched = [item["written_seq"] for item in rounds if item.get("file_version") == 2]
             changed = self.store.changed_after(min(watched)) if watched else []
+            sha = self._known_audio_sha256()
         result = round_overview(rounds, clips, events, size, random_share)
         for summary, item in zip(result["rounds"], rounds):
             summary["file_version"] = item.get("file_version", 1 if item.get("file") else None)
             summary["unsaved_changes"] = self._unsaved_changes(item, changed)
+            summary["backup"] = self._backup_status(item, sha)
+        result["backup_dir"] = str(self.paths.round_backup_dir)
         return result
 
     def start_round(self, size: int, random_share: float) -> dict:
@@ -995,7 +1001,12 @@ class SessionService:
             self.store.save_review_rounds(rounds, {"type": "review-round-complete", "number": current["number"],
                                                    "file": finished.get("file"), "updates": updates, **completed})
             self._rounds = rounds
+            self._backup_finished_rounds(session)
             return self.snapshot()
+
+    def _known_audio_sha256(self) -> str | None:
+        cached = self.store.audio_hash() if self.store is not None else None
+        return str(cached["sha256"]) if cached else None
 
     def _audio_sha256(self) -> str | None:
         """The open recording's SHA-256, kept in the session until the audio file changes; None if unreadable."""
@@ -1134,26 +1145,128 @@ class SessionService:
         sha = self._audio_sha256()
         with self._lock:
             session = self._ready()
-            item = self._finished_round(number)
-            if item.get("imported"):
-                return self.snapshot()
-            rounds = list(self._rounds)
-            position = rounds.index(item)
-            written = None
-            if item.get("file_version") != 2:
-                fields = self._write_round_file(session, item, sha)
-                if not fields:
-                    raise InvalidEdit("The round file could not be written beside the recording")
-                written = {**fields, "replaces": item.get("file")}
-                rounds[position] = {**item, **fields}
-            rounds, updates = self._write_updates(session, sha, rounds, only=number)
-            if written is None and not updates:
-                return self.snapshot()
-            self.store.save_review_rounds(rounds, {"type": "round-file", "number": number,
-                                                   "file": (written or {}).get("file"),
-                                                   "replaces": (written or {}).get("replaces"), "updates": updates})
-            self._rounds = rounds
+            self._save_round_files(session, sha, number)
             return self.snapshot()
+
+    def _save_round_files(self, session: Session, sha: str | None, number: int) -> None:
+        item = self._finished_round(number)
+        if item.get("imported"):
+            return
+        try:
+            self._update_round_files(session, sha, item)
+        finally:
+            # Also the retry of an earlier failure, when there is nothing new to write.
+            self._backup_round(session, self._finished_round(number))
+
+    def _update_round_files(self, session: Session, sha: str | None, item: dict) -> None:
+        number = item["number"]
+        rounds = list(self._rounds)
+        position = rounds.index(item)
+        written = None
+        if item.get("file_version") != 2:
+            fields = self._write_round_file(session, item, sha)
+            if not fields:
+                raise InvalidEdit("The round file could not be written beside the recording")
+            written = {**fields, "replaces": item.get("file")}
+            rounds[position] = {**item, **fields}
+        rounds, updates = self._write_updates(session, sha, rounds, only=number)
+        if written is None and not updates:
+            return
+        self.store.save_review_rounds(rounds, {"type": "round-file", "number": number,
+                                               "file": (written or {}).get("file"),
+                                               "replaces": (written or {}).get("replaces"), "updates": updates})
+        self._rounds = rounds
+
+    def backup_rounds(self) -> dict:
+        """Save and back up every finished round's files, also rounds that have no round file yet.
+
+        A round that fails stays marked with why, and the others still go through.
+        """
+        sha = self._audio_sha256()
+        with self._lock:
+            session = self._ready()
+            for item in list(self._rounds):
+                if not item["completed"] or item.get("imported"):
+                    continue
+                try:
+                    self._save_round_files(session, sha, item["number"])
+                except InvalidEdit as exc:
+                    self._backup_errors[item["seed"]] = str(exc)
+            return self.snapshot()
+
+    def reveal_round_backups(self) -> None:
+        """Show this recording's round backups, or the folder that will hold them."""
+        with self._lock:
+            self._ready()
+            sha = self._known_audio_sha256()
+        root = self.paths.round_backup_dir
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise InvalidEdit(f"The round backup folder could not be created: {exc}") from exc
+        folder = root / sha if sha else root
+        self._reveal(folder if folder.is_dir() else root)
+
+    @staticmethod
+    def _round_file_names(item: dict) -> list[str]:
+        if item.get("imported"):
+            return [item["imported"]["file"]]
+        return [name for name in (item.get("file"), *(item.get("updates") or [])) if name]
+
+    def _backup_round(self, session: Session, item: dict) -> None:
+        """Copy a finished round's files out of the project folder; a failure is shown, never raised.
+
+        Files already backed up are skipped, so a retry works after they left the project folder.
+        """
+        root = self.paths.round_backup_dir
+        names = missing_backups(root, self._known_audio_sha256(), item["seed"], self._round_file_names(item))
+        errors = []
+        for name in names:
+            path = session.audio.with_name(name)
+            try:
+                backup_file(root, name, path.read_bytes(), str(path))
+            except (OSError, ValueError) as exc:
+                logger.warning("Could not back up the round file %s: %s", path, exc)
+                errors.append(f"{name}: {exc}")
+        if errors:
+            self._backup_errors[item["seed"]] = "; ".join(errors)
+        else:
+            self._backup_errors.pop(item["seed"], None)
+
+    def _backup_finished_rounds(self, session: Session) -> None:
+        for item in self._rounds:
+            if item["completed"] and not item.get("imported"):
+                self._backup_round(session, item)
+
+    def _backup_imported(self, files: list[tuple[str, object]], sha: str | None) -> None:
+        """Back up files just read in for this recording's rounds, updates too, in case their folder goes next."""
+        seeds = {item["seed"] for item in self._rounds}
+        for name, raw in files:
+            try:
+                data = parse_update_file(raw) if file_kind(raw) == "update" else parse_round_file(raw)
+            except ValueError:
+                continue
+            seed = data["round"]["seed"]
+            if data["recording"]["sha256"] != sha or seed not in seeds:
+                continue
+            try:
+                backup_data(self.paths.round_backup_dir, name, raw)
+            except (OSError, ValueError) as exc:
+                logger.warning("Could not back up the imported file %s: %s", name, exc)
+                self._backup_errors[seed] = f"{name}: {exc}"
+
+    def _backup_status(self, item: dict, sha: str | None) -> dict | None:
+        """Whether a finished round's files have their additional copy; None while it is open."""
+        if not item["completed"]:
+            return None
+        names = self._round_file_names(item)
+        if not names:
+            return {"state": "no_file", "files": 0, "error": self._backup_errors.get(item["seed"])}
+        missing = missing_backups(self.paths.round_backup_dir, sha, item["seed"], names)
+        if not missing:
+            return {"state": "backed_up", "files": len(names), "error": None}
+        error = self._backup_errors.get(item["seed"])
+        return {"state": "failed" if error else "pending", "files": len(names) - len(missing), "error": error}
 
     def reveal_round_file(self, number: int) -> None:
         with self._lock:
@@ -1221,6 +1334,7 @@ class SessionService:
             if imported:
                 self.store.save_review_rounds(rounds, {"type": "review-round-import", "rounds": imported})
                 self._rounds = rounds
+                self._backup_imported(files, sha)
             skipped.sort(key=lambda entry: order[entry["file"]])
             return {**self.snapshot(), "round_import": {"imported": imported, "skipped": skipped}}
 
@@ -1252,6 +1366,7 @@ class SessionService:
             if updates:
                 self.store.save_review_rounds(rounds, {"type": "round-update", "updates": updates})
                 self._rounds = rounds
+            self._backup_finished_rounds(old)
             watched = [item["written_seq"] for item in rounds if item.get("file_version") == 2]
             changed = self.store.changed_after(min(watched)) if watched else []
             if any(self._unsaved_changes(item, changed) for item in rounds):
