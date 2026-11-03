@@ -2,26 +2,23 @@
 
 ## In progress
 
-### fix/recover-transcription-publication
+### fix/round-rank-export-triage
 
-- **Task:** #121 and #122; retry transcript publication without repeating Whisper, and publish Whisper word timings and Silero probabilities beside browser-transcribed recordings.
-- **PR:** https://github.com/pomodorozhong/jipandan-clip/pull/132 (open, ready for review, targets `main`). Grouped with #122 at the owner's request; it will close both issues. No linked issue branches exist.
-- **Code checkpoint:** `110d1c8` (#121, originally `9c94f70`) and `5a79b23` (#122, originally `789e160` from `fix/transcription-experiment-sidecars`), on `main` at `ac7cb77` (#131). The #121 commit already rolls back sidecar removals, so the two fixes are safe together.
-- **State:** awaiting the owner's approval of the new title and body (P-02b) before pushing; after that, review and merge. Merge order: #132, then the small-fixes and Undo PRs.
-- **Verification:** 201 Python tests passed on 2026-11-04 with `uv run --frozen python -m unittest discover -s tests`. Frontend checks not rerun; no frontend change.
-- **Issue handoffs:** https://github.com/pomodorozhong/jipandan-clip/issues/121#issuecomment-6560379539 and https://github.com/pomodorozhong/jipandan-clip/issues/122#issuecomment-6560380046.
-- **P-02b — Publish approval:** force-push this branch and change PR #132's title to "fix: retry transcript publication and keep Whisper inputs beside recordings" with the body shown in chat. Blocks #122 reaching the PR.
-- **Next action:** owner answers P-02b; reviewer follow-up is a real browser transcription that checks `.words.json` and `.silero.npy` appear beside the SRT.
+- **Task:** #124–#127; match earlier containing intervals in round imports, give tied features equal ranks (`builtin-v2`), use short temporary export names, and stop playback after the final Triage decision. Grouped at the owner's request.
+- **PR:** opened with this commit; targets `main`. Closes its issues through the PR body; the branch is not linked to an issue.
+- **Code checkpoint:** four commits from local branches `fix/round-containing-intervals`, `fix/likely-keep-ties`, `fix/short-export-temp-names` and `fix/triage-stop-final-playback`, on `main` at `23842c6` (#132).
+- **State:** awaiting review and merge. Independent of the other grouped PR; whichever merges second needs this file's clash resolved.
+- **Verification:** 206 Python tests, 176 frontend tests, TypeScript check and production build passed on 2026-11-04. Adds `jsdom` as a frontend dev dependency for the Triage test.
+- **Next action:** owner reviews and merges; reviewer follow-up is browser checks that the last Triage decision stops playback and a ~180-character title exports, plus importing a round file with nested clips.
 
 ## Ranked work
 
-1. #124–#127 Review the grouped small-fixes PR (`fix/round-rank-export-triage`: round matching, tied ranks, export temp names, final Triage playback). Built locally on `stack/roadblock-groups`; awaiting push approval.
-2. #98/#123 Review the grouped Undo PR (`feat/undo-exports-and-suggestions`: single-export Undo keeps the MP3; restored title suggestions refresh). Built locally on `stack/roadblock-groups`; awaiting push approval.
-3. Review `fix/candidate-evaluation-bounds`; its issue draft and filing request P-10 are in that branch's handoff. It will go with the research PR.
-4. #128 Review the completed local research branch `test/improvement-roadblocks` after #129/#130. Semantic scores give a small legacy gain, unconfirmed on the generated random sample; audio adds no clear benefit; the tested title recipe fails to improve reference edit distance. Do not integrate these recipes yet.
-5. #47 Judge generated clips in a new real clipping session after the fixes, preserving round files and sidecars. Current evidence cannot establish candidate precision or settle onset quality. The owner retains Transcript lines as default until a real session supports a change.
-6. Gather random review decisions from multiple recordings; only 60 random labels from one generated session are currently available. The 250-label target is a planning guide, not a guarantee. On the next browser transcription verify #118/#122 word and probability sidecars with real output.
-7. #108 Action-level logging remains parked until a specific question needs it; old dwell attribution cannot explain causal delays.
+1. #98/#123 Review the grouped Undo PR (`feat/undo-exports-and-suggestions`: single-export Undo keeps the MP3; restored title suggestions refresh). Open; awaiting review and merge.
+2. Review `fix/candidate-evaluation-bounds`; its issue draft and filing request P-10 are in that branch's handoff. It will go with the research PR.
+3. #128 Review the completed local research branch `test/improvement-roadblocks` after #129/#130. Semantic scores give a small legacy gain, unconfirmed on the generated random sample; audio adds no clear benefit; the tested title recipe fails to improve reference edit distance. Do not integrate these recipes yet.
+4. #47 Judge generated clips in a new real clipping session after the fixes, preserving round files and sidecars. Current evidence cannot establish candidate precision or settle onset quality. The owner retains Transcript lines as default until a real session supports a change.
+5. Gather random review decisions from multiple recordings; only 60 random labels from one generated session are currently available. The 250-label target is a planning guide, not a guarantee. On the next browser transcription verify #118/#122 word and probability sidecars with real output.
+6. #108 Action-level logging remains parked until a specific question needs it; old dwell attribution cannot explain causal delays.
 
 ## Pending
 
