@@ -99,6 +99,37 @@ class TrimMapTests(unittest.TestCase):
                 self.assertEqual(decoded, expected)
 
     @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is required")
+    def test_trim_edges_preserves_both_sounds_across_a_long_internal_pause(self):
+        rate = 16000
+        t = np.arange(rate // 2) / rate
+        first = (np.sin(2 * np.pi * 440 * t) * 600_000_000).astype(np.int32)
+        second = (np.sin(2 * np.pi * 880 * t) * 600_000_000).astype(np.int32)
+        audio = self.pcm("pause.wav", np.concatenate([
+            np.zeros(rate // 2), first, np.zeros(rate * 3 // 2), second, np.zeros(rate // 2),
+        ]), rate)
+        clip = ClipCandidate(1, "pause", "00:00:00.000", "00:00:03.500", "00:00:00.000", "3.500")
+        outputs = {}
+        for mode in ("trim_edges", "trim_all"):
+            output = self.root / f"pause-{mode}.mp3"
+            result = render_export_preview(audio, clip, ExportOptions(mode), output)
+            self.assertTrue(PreviewJobs._valid_trim_map(result))
+            samples = np.frombuffer(subprocess.run([
+                "ffmpeg", "-v", "error", "-i", str(output), "-ac", "1", "-ar", str(rate),
+                "-f", "f32le", "pipe:1",
+            ], capture_output=True, check=True).stdout, np.float32)
+            # A distinct second tone proves the later content survives, not just silence.
+            spectrum = abs(np.fft.rfft(samples))
+            frequencies = np.fft.rfftfreq(len(samples), 1 / rate)
+            for frequency in (440, 880):
+                self.assertGreater(spectrum[abs(frequencies - frequency) < 5].max(), 100)
+            self.assertLess(result["kept_ranges_ms"][0][0], 500)
+            self.assertGreater(result["kept_ranges_ms"][-1][1], 2990)
+            outputs[mode] = result
+        self.assertEqual(len(outputs["trim_edges"]["kept_ranges_ms"]), 1)
+        self.assertGreater(outputs["trim_edges"]["duration_ms"], 2500)
+        self.assertLess(outputs["trim_all"]["duration_ms"], 1700)
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is required")
     def test_real_filter_maps_speech_after_quiet_noise(self):
         # Quiet but nonzero audio before the speech makes FFmpeg's start-silence
         # flush emit a stale nonzero sample (#70).

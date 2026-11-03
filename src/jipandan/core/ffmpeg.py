@@ -185,13 +185,20 @@ def _audio_filter_for_options(options: ExportOptions) -> str | None:
             stop_duration="0.2",
             trim_middle=True,
         )
-    return build_silence_filter(
-        stop_periods=1,
+    # A forward stop_periods=1 ends at the first internal pause, even when speech
+    # follows it. Trim the start, then trim only the end by reversing the clip.
+    leading = build_silence_filter(
+        stop_periods=0,
         start_threshold_db=options.start_threshold_db,
         stop_threshold_db=options.stop_threshold_db,
-        stop_duration="1",
+        stop_duration="0",
         trim_middle=False,
     )
+    trailing = (
+        "silenceremove=start_periods=1:start_duration=0:"
+        f"start_threshold={options.stop_threshold_db:g}dB"
+    )
+    return f"{leading},areverse,{trailing},areverse"
 
 
 def publish_prebuilt_clip(
