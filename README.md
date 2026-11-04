@@ -122,6 +122,7 @@ Cache files and failed preview work can be removed at any time and will be rebui
 - `tests/`: Python regression and API tests.
 - `scripts/`: disposable web-review fixture preparation, and `evaluate_candidates.py`, which scores generated clip candidates against SRT lines on reviewed recordings.
 - `doc/`: [documentation index](doc/README.md), reviews, and archived project plans.
+- `experiments/`: pinned, self-contained snapshots of research runs, each with its own `pyproject.toml` and `uv.lock`; the application never imports them.
 - `AGENTS.md`: how coding agents work in this repository, including the session handoff rules.
 - `HANDOFF.md`: where work stands: each active branch's resume point, the ranked list of issues to work on next, and requests awaiting approval.
 - Audio sources may live anywhere; application data, caches, logs, and temporary work use the storage locations described above.

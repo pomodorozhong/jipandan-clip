@@ -1,0 +1,16 @@
+{
+  "note": "SHA-256 of the frozen private inputs (first three) and of the derived files computed from them. The files themselves stay out of git.",
+  "frozen_inputs": {
+    "legacy_features": "61f09e3b87c1229987919d425e4d2f34e026d54e1eccf68aed02e185b7946052",
+    "eg2_meta": "aceffa4eefa37cef79a33757011af1771b3ef80cdf13e21ca020766c17597e20",
+    "snapshot_0903": "234c135f5802e84a9aeda4c5b6e0ac6aa4cbab21b1be07b429e595913984882a"
+  },
+  "derived": {
+    "ranking-input.json": "6efb759ceb687e1503ddb9eaedfe693ba1450f6d67b77828913fe541d2e55a6b",
+    "ranking-features.npz": "9af30614282162732a2904e25ccab334555c3a8663f1c59a2856dc53e8a4c536",
+    "pipeline-ranking.npz": "c9afbd88894bcd38c6f90dce202e444230e4d8a18c0b22ef5a9b0a48ac1c4cf1",
+    "audio-input.json": "1dc6839c6ff444f19f925e76d989a59c24185d53c94f3b868977a9a5bd502de0",
+    "title-input.json": "fc2580d5e5b444963245973967e5a012791417bc04586e84296f7eb16f539380",
+    "omni-questions.json": "b44f9374f8ff5b191c153306f26d8713dbc341d9167fd1bfbc16a6f7c131dc18"
+  }
+}
