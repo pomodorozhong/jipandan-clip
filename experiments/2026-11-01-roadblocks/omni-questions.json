@@ -1,0 +1,14 @@
+{
+  "reusable": {
+    "type": "noul",
+    "instructions": "Would this Mandarin clip work as a short reusable soundboard reaction in everyday conversation? Favor expressive reactions, exclamations, jokes, greetings, laughter and shouts. Disfavor gameplay instructions, specific item or location names, neutral ongoing narration and incomplete fragments. Use the transcript and any attached audio; do not invent missing context."
+  },
+  "standalone": {
+    "type": "noul",
+    "instructions": "Does the Mandarin utterance or audible reaction express a complete understandable reaction or message without seeing the game or hearing surrounding conversation? Use the transcript and any attached audio."
+  },
+  "expressive": {
+    "type": "noul",
+    "instructions": "Does this clip express a recognizable emotional reaction, joke, greeting or exclamation, rather than neutral narration or gameplay instructions? Use the wording and any audible vocal delivery, including nonverbal laughter and shouts."
+  }
+}

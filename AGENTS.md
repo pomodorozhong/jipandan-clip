@@ -19,6 +19,7 @@ Jipandan turns long gaming-stream recordings into short soundboard MP3 clips. Se
 - GitHub issues: work items, with handoff notes in their comments; one milestone per step of the [app rebuild](doc/app-rebuild-plan.md).
 - `HANDOFF.md`: per-branch resume points, the ranked list of issues to work on next, and pending approvals.
 - `doc/`: long-term knowledge: architecture and decisions ([index](doc/README.md)).
+- `experiments/<date>-<topic>/`: one self-contained, pinned snapshot per experiment run (code, `pyproject.toml`/`uv.lock`, model and input hashes, aggregate results). Private data stays in ignored `tmp/`.
 
 ## Branches and pull requests
 

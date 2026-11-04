@@ -1,0 +1,127 @@
+{
+  "note": "Hugging Face commit SHAs plus SHA-256 of model.safetensors and of each custom *.py file; download_models.py verifies them.",
+  "models": {
+    "d1-2B": {
+      "repo": "LiquidAI/d1-2B",
+      "revision": "10e7671d44e4b37700020b1eed3f594c5f2af0b4",
+      "last_modified": "2026-10-29T14:55:57.000Z",
+      "license_tag": [
+        "license:other"
+      ],
+      "checkpoint_sha256": "b5e573687315e82ea80f4f7dd8d76b5cec3b6ee97e3509fd0493cfebb203719f",
+      "custom_code_sha256": {
+        "api.py": "d57845b414b6766cd0410f0437080244320adebd4f9f031a03777acbec243d2a",
+        "attention.py": "2608cc3f48bc3f906b64244322df81de5a18cd1faa8243680713289d5540fd2c",
+        "box.py": "1a123160ce3c94c25074132407c41d553601a6d8cb7056c814397ad0718dd16f",
+        "calibration.py": "04243c3a2c1c727440184901dd60a4b4b04f72204dc577bd9f30b0ea3373d114",
+        "configuration_lfm3.py": "cd9e8499d5e764e058c7aa1bb62234a0592acdf086126bea36770eb9e45e48cf",
+        "configuration_lfm3_vl.py": "d65e130693c7415a0b20b527e2c8df5322112cd8e7e4b3793348a2ddcd0343be",
+        "depthwise.py": "0e55c1d97227ebdb144503f1726b93693ea1232d8e9a98e4c60c044fbfdb6ce1",
+        "grid.py": "a5626b67094eda0a4a22d50e73346f3bc2f1b4b6eb6d95ba64333c6f71592eff",
+        "image_processing_lfm3_vl.py": "4f319e51f80051bce417db52df568a94ff3ea9a4527e1e0844f8ed3e21934b4b",
+        "integrations_lfm3.py": "4c443aab5945ef28298f7c4b58fb4c303dd9dec8fcb21adfca966b92e9caef00",
+        "json_spans.py": "91c4a6d585a58dfe7e06e4430f4516956f8143523a3e2de870bc8dd92ba20375",
+        "lfm3.py": "608348f7e2f963744c8b3940bcf93d29e4499643a1269a048b48bec0d6c47129",
+        "media.py": "1b2c76ba9fa13e75bf8b66caa9294682e76fbf463fe56c13b4e1f47c96e81e8e",
+        "modeling_d1.py": "214d3477cef38e7831f2b4fb0250ace7fb1aeac5b02066fcfd5cc030c541fd72",
+        "modeling_d1_lfm3_vl.py": "68d71f38188f07d11ad8af7cb557c8edc87536eb0db20870b7c5e6ae58fe5f30",
+        "modeling_lfm3.py": "1617c42a7e3ccb97c810867536a8f6bb71f3543db00cafda9b3bd7a571ec72b9",
+        "modeling_lfm3_vl.py": "c61dd6d90425d126de8402a9aa0a2a9d0241910100b719b8ab2bfee65e5e974f",
+        "native_lfm3.py": "8c7e7533b406315546d7a4eaceb83c8a49bed4dac7cb29328a76fa9f972e8a19",
+        "native_lfm3_vl.py": "90574b978c7138f36ea9970fff4fb691ad9ccd472580ae20c4110de090ed4b94",
+        "parsing.py": "0f0a05e7f2eee037f2e5ce1fefc984ff34824e07e7999120d94563a82642b54a",
+        "pointer.py": "53e7b403d5f9d6f24e18a3f08b4dd9e93fea6da1da7eaeea92d07a4700cfedb3",
+        "processing_lfm3_vl.py": "f4198f935ff6474cb1f44d5bdf02248f800a11eb7fc782dc1a168889b0b53da8",
+        "prompt.py": "e9d40f98c36ab68b8e3c33fd00a77e58218460fdc88c96b5edeef793a260d20b",
+        "runner.py": "ac195b19f60f985a6081ccecc1a5c9f7c9fbe6711e8916c0e9835aaaac0bc2a2",
+        "slots.py": "67adea5fb377a79832827c43054b4ce94de0fa48f5ba0a39e6f2867b7e59f373",
+        "video_processing_lfm3_vl.py": "597ca93c1df97f746166b93f3431edec4da6d938a1b3a60a9bf9900e54ab4e93"
+      },
+      "scored_with": {
+        "device": "mps",
+        "dtype": "torch.bfloat16",
+        "python": "3.12.13",
+        "versions": {
+          "torch": "2.15.0",
+          "transformers": "5.22.1",
+          "numpy": "2.5.4"
+        }
+      }
+    },
+    "d1-Omni-2B": {
+      "repo": "LiquidAI/d1-Omni-2B",
+      "revision": "431f1d667de5afcc9b0c58b2d9c170a7b38b358b",
+      "last_modified": "2026-10-29T14:55:59.000Z",
+      "license_tag": [
+        "license:other"
+      ],
+      "checkpoint_sha256": "1553fff04c54377ff527d2016fc479425ef60a0b3bc7a2e61d32f80a75c32aaf",
+      "custom_code_sha256": {
+        "api.py": "d57845b414b6766cd0410f0437080244320adebd4f9f031a03777acbec243d2a",
+        "attention.py": "2608cc3f48bc3f906b64244322df81de5a18cd1faa8243680713289d5540fd2c",
+        "box.py": "1a123160ce3c94c25074132407c41d553601a6d8cb7056c814397ad0718dd16f",
+        "calibration.py": "04243c3a2c1c727440184901dd60a4b4b04f72204dc577bd9f30b0ea3373d114",
+        "configuration_lfm3.py": "cd9e8499d5e764e058c7aa1bb62234a0592acdf086126bea36770eb9e45e48cf",
+        "configuration_lfm3_omni.py": "878d0650c9a790f479ddd3baea0a396cfd25dc55aaa9bf5d3ab2f76131ad7c7c",
+        "configuration_lfm3_vl.py": "d65e130693c7415a0b20b527e2c8df5322112cd8e7e4b3793348a2ddcd0343be",
+        "depthwise.py": "0e55c1d97227ebdb144503f1726b93693ea1232d8e9a98e4c60c044fbfdb6ce1",
+        "feature_extraction_lfm3_omni.py": "42198f768b862a2db219c3d1b8e950a0bcce95470c8aeeec968690ebbdf4c8b5",
+        "grid.py": "a5626b67094eda0a4a22d50e73346f3bc2f1b4b6eb6d95ba64333c6f71592eff",
+        "image_processing_lfm3_vl.py": "4f319e51f80051bce417db52df568a94ff3ea9a4527e1e0844f8ed3e21934b4b",
+        "integrations_lfm3.py": "4c443aab5945ef28298f7c4b58fb4c303dd9dec8fcb21adfca966b92e9caef00",
+        "json_spans.py": "91c4a6d585a58dfe7e06e4430f4516956f8143523a3e2de870bc8dd92ba20375",
+        "lfm3.py": "8cd91970a0af52dc6d65ca489a0a0a034eda5751002cf2c25abd143cff8725d7",
+        "media.py": "1b2c76ba9fa13e75bf8b66caa9294682e76fbf463fe56c13b4e1f47c96e81e8e",
+        "modeling_d1.py": "214d3477cef38e7831f2b4fb0250ace7fb1aeac5b02066fcfd5cc030c541fd72",
+        "modeling_d1_lfm3_omni.py": "be09e4292373fec960d322474a1012f9e7cd62b395d6cce16622a85a894cae6b",
+        "modeling_lfm3.py": "1617c42a7e3ccb97c810867536a8f6bb71f3543db00cafda9b3bd7a571ec72b9",
+        "modeling_lfm3_omni.py": "b3a606cc5acb711a3dffa4e7080aaa85fb6a290495b902de3c72e9e86fcd46a9",
+        "modeling_lfm3_vl.py": "c61dd6d90425d126de8402a9aa0a2a9d0241910100b719b8ab2bfee65e5e974f",
+        "native_lfm3.py": "8c7e7533b406315546d7a4eaceb83c8a49bed4dac7cb29328a76fa9f972e8a19",
+        "native_lfm3_omni.py": "eedc381f5e2035a7178f93d04a9fad10a4dd5df3f586d481e309f5cca016e15c",
+        "native_lfm3_vl.py": "90574b978c7138f36ea9970fff4fb691ad9ccd472580ae20c4110de090ed4b94",
+        "parsing.py": "0f0a05e7f2eee037f2e5ce1fefc984ff34824e07e7999120d94563a82642b54a",
+        "pointer.py": "53e7b403d5f9d6f24e18a3f08b4dd9e93fea6da1da7eaeea92d07a4700cfedb3",
+        "processing_lfm3_omni.py": "1f22969002efd3fbe010e47aaa85b77a40439c19d7d6a9807c861a71e2edf511",
+        "processing_lfm3_vl.py": "f4198f935ff6474cb1f44d5bdf02248f800a11eb7fc782dc1a168889b0b53da8",
+        "prompt.py": "e9d40f98c36ab68b8e3c33fd00a77e58218460fdc88c96b5edeef793a260d20b",
+        "runner.py": "ac195b19f60f985a6081ccecc1a5c9f7c9fbe6711e8916c0e9835aaaac0bc2a2",
+        "slots.py": "67adea5fb377a79832827c43054b4ce94de0fa48f5ba0a39e6f2867b7e59f373",
+        "video_processing_lfm3_vl.py": "597ca93c1df97f746166b93f3431edec4da6d938a1b3a60a9bf9900e54ab4e93"
+      },
+      "scored_with": {
+        "device": "mps",
+        "dtype": "torch.bfloat16",
+        "python": "3.12.13",
+        "versions": {
+          "torch": "2.15.0",
+          "transformers": "5.22.1",
+          "numpy": "2.5.4"
+        }
+      }
+    },
+    "LFM3-1.7B": {
+      "repo": "LiquidAI/LFM3-1.7B",
+      "revision": "ac2586a34f1a1c03329dbdcdefabd8b6478ddaa7",
+      "last_modified": "2026-10-28T17:16:37.000Z",
+      "license_tag": [
+        "license:other"
+      ],
+      "checkpoint_sha256": "135922caef64e81e52af88ede8b7c3ddaa9d6da220a9737fb3065275dbfb4330",
+      "custom_code_sha256": {
+        "configuration_lfm3.py": "176cced35657aedfea7d7002221360582d1c05fcaca882c21508bc3a73b282e5",
+        "lfm3_conv.py": "80d4a985382a22774212759248a6b4c737bfbf9c2a47b3dd7f797dda748e4bb4",
+        "modeling_lfm3.py": "e8cd5254ea99ce6bd731b57b10908c2e8b5010ce8315341f895a38484885eeab"
+      },
+      "scored_with": {
+        "device": "mps",
+        "dtype": "torch.bfloat16",
+        "python": null,
+        "versions": {
+          "torch": "2.15.0",
+          "transformers": "5.22.1"
+        }
+      }
+    }
+  }
+}

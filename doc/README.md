@@ -9,6 +9,7 @@ See the [project README](../README.md) for installation, commands, and testing.
 
 ## Active plans
 
+- [Improvement roadblocks](improvement-roadblocks.md): the November 2026 reliability fixes, local model experiments, candidate coverage limits, and remaining evidence needed for larger gains. Its reproducible code, pins and results are in [`experiments/2026-11-01-roadblocks/`](../experiments/2026-11-01-roadblocks/README.md).
 - [App rebuild plan](app-rebuild-plan.md): the staged rebuild, its scope, and the decisions behind each step. Open work is in GitHub issues, one milestone per step.
 - [Step 2 UI mockup](mockups/step-2-ui/README.md): the approved shared style for Triage, Polish, and the top bar.
 

@@ -1,0 +1,30 @@
+[project]
+name = "jipandan-roadblocks-2026-11-01"
+version = "0"
+description = "Pinned environment for the 2026-11-01 improvement-roadblocks experiments; not part of the application."
+requires-python = ">=3.14"
+dependencies = [
+    "numpy==2.5.4",
+    # Provides the ffmpeg binary that the application's clip-feature code calls (see README.md).
+    "imageio-ffmpeg==0.8.1",
+    # Imported by the application modules (jipandan.core) that the preparation code and audits use.
+    "platformdirs==4.14.4",
+]
+
+[dependency-groups]
+# Ranking preparation, evaluation and candidate audits.
+evaluate = [
+    "scipy==1.17.1",
+    "scikit-learn==1.9.1",
+]
+# Local d1 / LFM3 model scoring. Large: pulls in torch.
+inference = [
+    "torch==2.15.0",
+    "transformers==5.22.1",
+    "torchvision==0.29.2",
+    "pillow==13.0.0",
+    "huggingface_hub==2.4.0",
+]
+
+[tool.uv]
+package = false
