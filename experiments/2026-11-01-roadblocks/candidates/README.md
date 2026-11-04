@@ -37,3 +37,35 @@ the 0.25 s tolerance counts (0511 91 to 104 of 258, 0526 100 to 108 of 293, 0602
 The 0903 reference was an older transcript-based session file that no longer exists (its recorded
 hash starts `0ecc2409`), so its audit numbers cannot be recomputed. Wherever the report quotes a
 0903 value it comes from the earlier run, with the 0.05 s window error described above.
+
+## Candidate variants
+
+`candidate_variants.py` re-runs three variants on top of the audit's generator and writes
+`candidate-variants.json` (aggregate counts, candidates per hour, recall and acoustic start/end
+proxy rates; no row-level data):
+
+- **End extension:** move a clip's end to the end of the next speech run when that run starts
+  within a gap of 0.16, 0.32 or 0.6 s and the clip stays at most 5 s long.
+- **Energy additions:** add bursts where the level reaches -40, -35, -30 or -25 dB (joined across
+  gaps of up to 160 ms, padded, 0.6-5 s long, with almost no VAD speech).
+- **Deduplication:** drop a candidate whose overlap with a kept one reaches an IoU of 0.7, 0.8 or
+  0.9, keeping the shorter or the longer of two.
+
+```bash
+PYTHONPATH=../../src python candidates/candidate_variants.py \
+  --config <private recordings.json> --levels-dir <folder with the audit's .levels.npy> --out <new file>
+```
+
+Parameters are the named constants at the top of the script. 0602 was the development recording;
+the other results are descriptive transfer checks, and the references are keep-only approved clips
+with acoustic proxies, so none of this is a listening judgement. Each variant is re-matched to
+the references by best overlap, so its matched clips differ from the generator's; compare rates,
+not paired improvements.
+
+Rerunning on the private inputs reproduced the earlier private results exactly for all four
+recordings, with one exception: the earlier deduplication run for 0614 used 56 references (every
+clip that was kept or sent to Needs work) instead of the 42 approved ones, because it predates the
+evaluator correction ([#138](https://github.com/pomodorozhong/jipandan-clip/issues/138)). The
+numbers in `candidate-variants.json` use the 42. Under the corrected references, 0.8 deduplication
+preferring shorter clips removes 2.2-3.5% of candidates and changes recall at 0.5 s by at most
+0.7 points. 0903 follow-ups are kept from the earlier run and marked as not recomputed (see above).
