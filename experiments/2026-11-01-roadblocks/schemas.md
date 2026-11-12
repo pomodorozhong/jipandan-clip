@@ -29,7 +29,7 @@ set of every input file.
 | `feats.json` | List of `{rec, idx, status, txt, dur, <19 more audio features>}`. `txt` is the edited title in the old archive. |
 | `playback.json` | List of `{rec, idx, b_lo, ..., flux}`, the 13 playback-spectrum features. |
 | `whisperfeat.json` | List of `{rec, idx, avg_logprob, no_speech_prob, compression_ratio, wtext}`, the clip's own Whisper decode. |
-| `eg2_meta.json` | List of `{rec, idx, srt_text, ...}`; `srt_text` is the original SRT text. |
+| `eg2_meta.json` | List of `{rec, idx, srt_text, status, title, ...}`; `srt_text` is the original SRT text, `title` the title as last edited. A clip can occur more than once; the first entry counts. |
 | `0903.jipandan.db` | SQLite. Table `clip(clip_id, data JSON)` and table `meta(key, value)` whose `review_set` value is `{roles, random, top}`. Opened read-only. |
 | `recordings.json` | List of `{name, session, audio, words}` (plus `srt`, `vad` for the audit). `session` is a reviewed session JSON, `audio` the recording, `words` the Whisper word JSON with segments. |
 
@@ -38,6 +38,11 @@ set of every input file.
 - `ranking-input.json`: list of `{id, recording, text, label, role, source}`. `text` is the original
   SRT text (legacy) or the generated clip's `source_text`.
 - `ranking-input.sources.json` (from `prepare_inputs.py`): `{legacy_features, eg2_meta, snapshot_0903}`, the SHA-256 of the frozen inputs the rows were read from, already checked against `input-hashes.json`. Work folders made before 2026-11-13 hold the same content under the name `input-hashes.json`.
+- `audio-input.json` (from `prepare_audio_inputs.py`): the sampled `ranking-input.json` rows, each
+  with `audio_path`, the absolute path of its 16 kHz mono PCM excerpt `<recording>_<index>.wav`.
+- `title-input.json` (from `prepare_title_inputs.py`): list of `{id, recording, text, approved,
+  edited}`. `text` is the transcript, `approved` the exported title, and `edited` whether they differ
+  ignoring punctuation, spaces and symbols.
 - `ranking-features.npz` (from `build_baseline.py`): `X` is the 42-column corrected legacy matrix,
   plus `y`, `recording`, `ids`, and held-out predictions for `old_title_leak`,
   `previous_clean_still_agreement_leak`, `fully_clean`, `audio_only` and `single_clip_confidence`.
