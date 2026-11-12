@@ -20,19 +20,12 @@ from pathlib import Path
 import numpy as np
 from sklearn.ensemble import HistGradientBoostingClassifier
 
+import frozen_inputs
 from evaluate_semantic_ranking import metrics, paired_auc_ci
 
 
 MODEL = "d1-Omni-2B"
 SAME_IN_BOTH_RUNS = ("questions", "model_revision", "checkpoint_sha256", "custom_code_sha256", "dtype")
-
-
-def file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def load_scores(path, rows, audio=False):
@@ -55,7 +48,7 @@ def load_scores(path, rows, audio=False):
         excerpt = Path(row.get("audio_path") or "")
         if not excerpt.is_file():
             raise ValueError(f"audio excerpt for {row['id']} is missing; its score cannot be checked")
-        if score["audio_sha256"] != file_sha256(excerpt):
+        if score["audio_sha256"] != frozen_inputs.sha256(excerpt):
             raise ValueError(f"audio hash mismatch for {row['id']}: its excerpt changed after scoring")
     return np.array([[by_id[r["id"]]["scores"][k] for k in
                       ("reusable", "standalone", "expressive")] for r in rows])
@@ -107,7 +100,7 @@ def main(argv: list[str] | None = None) -> None:
                    help="the questions both runs must have used (default: this experiment's)")
     args = p.parse_args(argv)
     rows = json.loads(args.rows.read_text())
-    check_paired_runs(manifest(args.text_scores), manifest(args.audio_scores), file_sha256(args.rows),
+    check_paired_runs(manifest(args.text_scores), manifest(args.audio_scores), frozen_inputs.sha256(args.rows),
                       len(rows), json.loads(args.model_revisions.read_text())["models"][MODEL],
                       json.loads(args.questions.read_text()))
     text_scores = load_scores(args.text_scores, rows)

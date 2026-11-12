@@ -1,7 +1,9 @@
 {
-  "note": "SHA-256 of the frozen private inputs (first three) and of the derived files computed from them. The files themselves stay out of git.",
+  "note": "SHA-256 of the frozen private inputs, which the preparation scripts check before computing, and of the derived files computed from them. The files themselves stay out of git.",
   "frozen_inputs": {
     "legacy_features": "61f09e3b87c1229987919d425e4d2f34e026d54e1eccf68aed02e185b7946052",
+    "legacy_playback": "1575e6935e9ca6bfd55ceb301d2f3806a068755de69b109128b8a62c97d33ed3",
+    "legacy_whisper": "3f948f41d71ef62c7b44f61f44c2df3469405c764cf153f077eae1406b91e50a",
     "eg2_meta": "aceffa4eefa37cef79a33757011af1771b3ef80cdf13e21ca020766c17597e20",
     "snapshot_0903": "234c135f5802e84a9aeda4c5b6e0ac6aa4cbab21b1be07b429e595913984882a"
   },
