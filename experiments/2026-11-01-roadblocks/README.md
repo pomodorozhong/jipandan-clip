@@ -140,6 +140,15 @@ Checked on 2026-11-04 against the frozen outputs, on Apple silicon:
   `ranking-leakage.json` again reproduce byte for byte, as does `ranking-features.npz`. The hashes of
   `playback.json` and `whisperfeat.json` were recorded then, from the copies that reproduce these
   files; all five frozen inputs match `input-hashes.json`.
+- Method change on 2026-11-13 (#146): `build_baseline.py` and `evaluate_pipeline.py` sorted rows by
+  score to compute recall at a review budget, so input row order decided which rows of a score tie
+  fell inside the budget. All ranking evaluators now share `ranking/budget_metrics.py`, which uses
+  the expected order within a tie, as `evaluate_semantic_ranking.py` always did. Nine budget metrics
+  of the frozen `ranking-current.json` (2) and `pipeline-evaluation.json` (7) changed, by at most
+  0.42 percentage points; `results.json` lists each old and new value under
+  `budget_metric_correction`. No AUC, no `.npz` file, nothing in `ranking-leakage.json` and no other
+  number in `results.json` or the audit report changed. The frozen private reports keep the old
+  values, so these two files now reproduce except for those nine fields.
 - `prepare_pipeline_features.py` reproduces the frozen 0903 feature file byte for byte. Recomputed from
   the four older recordings with the locked ffmpeg, its values differ from the frozen ones by at most
   6e-6 (a different ffmpeg build), and `evaluate_pipeline.py` on them gives identical ranks and
