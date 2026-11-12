@@ -107,6 +107,11 @@ The fingerprint of a measured recording includes the ffmpeg build, so adopt with
 measured the files and that later runs will use: the command above runs the locked one through
 `with_ffmpeg.py`, and features adopted under another build stop it.
 
+`evaluate_audio_semantics.py` reads each score file with the `.manifest.json` the scorer wrote beside
+it, and stops unless the two are a text-only and a text-plus-audio run of the same rows file with the
+fixed questions of `omni-questions.json`, the same data type and the pinned d1-Omni-2B checkpoint, and the same token budget when both manifests record one. It also needs the audio excerpts: each
+audio score's hash is checked against the file at its row's `audio_path`.
+
 `recordings.json` is a private JSON list of `{name, session, audio, words}` entries (plus `srt`
 and `vad` for the audit); see [`schemas.md`](schemas.md). Keep it, and every path in it, out of git.
 
