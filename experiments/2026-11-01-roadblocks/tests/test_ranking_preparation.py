@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -20,6 +21,8 @@ HAS_SKLEARN = importlib.util.find_spec("sklearn") is not None
 if HAS_SKLEARN:
     import build_baseline
     import evaluate_pipeline
+    import frozen_inputs
+    import historical_scorer
     import prepare_inputs
     import prepare_pipeline_features
     import synthetic
@@ -38,12 +41,14 @@ class RankingPreparationTests(unittest.TestCase):
 
     def prepare(self, out: Path):
         prepare_inputs.main(["--legacy-features", str(self.inputs["feats"]), "--eg2-meta", str(self.inputs["eg2"]),
-                             "--snapshot", str(self.inputs["snapshot"]), "--out-dir", str(out)])
+                             "--snapshot", str(self.inputs["snapshot"]), "--out-dir", str(out),
+                             "--input-hashes", str(self.inputs["hashes"])])
         return json.loads((out / "ranking-input.json").read_text())
 
     def baseline(self, out: Path):
         build_baseline.main(["--rows", str(out / "ranking-input.json"), "--legacy-dir", str(self.inputs["legacy_dir"]),
-                             "--snapshot", str(self.inputs["snapshot"]), "--out-dir", str(out)])
+                             "--snapshot", str(self.inputs["snapshot"]), "--out-dir", str(out),
+                             "--input-hashes", str(self.inputs["hashes"])])
         with np.load(out / "ranking-features.npz") as arrays:
             return dict(arrays)
 
@@ -57,7 +62,7 @@ class RankingPreparationTests(unittest.TestCase):
         self.assertEqual(len(legacy), len(synthetic.LEGACY) * synthetic.PER_RECORDING - pending)
         self.assertEqual({r["role"] for r in rows if r["recording"] == "0903"}, {"random", "top"})
         # Row hashes of the inputs are recorded for later comparison.
-        self.assertEqual(set(json.loads((self.root / "a" / "input-hashes.json").read_text())),
+        self.assertEqual(set(json.loads((self.root / "a" / "ranking-input.sources.json").read_text())),
                          {"legacy_features", "eg2_meta", "snapshot_0903"})
 
     def test_ids_and_labels_align_with_the_rows(self):
@@ -77,6 +82,7 @@ class RankingPreparationTests(unittest.TestCase):
             if d["rec"] == "0602" and d["status"] != "pending":
                 d["status"] = "skipped" if d["status"] != "skipped" else "exported"
         self.inputs["feats"].write_text(json.dumps(feats))
+        synthetic.pin(self.inputs)
         self.prepare(out_b)
         b = self.baseline(out_b)
         held = a["recording"] == "0602"
@@ -92,6 +98,7 @@ class RankingPreparationTests(unittest.TestCase):
         for d in feats:
             d["txt"] = d["txt"] + " with a longer edited title!"
         self.inputs["feats"].write_text(json.dumps(feats))
+        synthetic.pin(self.inputs)
         b = self.baseline(out_a)  # same rows file; edited titles only
         np.testing.assert_array_equal(a["X"], b["X"])
         np.testing.assert_array_equal(a["fully_clean"], b["fully_clean"])
@@ -108,7 +115,7 @@ class RankingPreparationTests(unittest.TestCase):
         cfg = self.root / "recordings.json"
         cfg.write_text(json.dumps([{"name": "0903"}]))
         prepare_pipeline_features.main(["--config", str(cfg), "--snapshot", str(self.inputs["snapshot"]),
-                                        "--out-dir", str(pipeline)])
+                                        "--out-dir", str(pipeline), "--input-hashes", str(self.inputs["hashes"])])
         evaluate_pipeline.main(["--work-dir", str(pipeline), "--out-dir", str(out_a)])
         with np.load(out_a / "pipeline-ranking.npz") as arrays:
             a = dict(arrays)
@@ -124,13 +131,70 @@ class RankingPreparationTests(unittest.TestCase):
         for name in ("refit_logistic", "refit_gbm"):
             np.testing.assert_array_equal(a[name][legacy], b[name][legacy])
 
+    def test_the_comparison_keeps_the_scorer_from_before_the_tied_rank_correction(self):
+        # Three clips tie on every signal: the old scorer ranked them by input position.
+        tied = [SimpleNamespace(peak_db=1., no_speech_prob=.5, mid_share_db=1., bass_share_db=1.)] * 3
+        low = SimpleNamespace(peak_db=0., no_speech_prob=.9, mid_share_db=0., bass_share_db=2.)
+        self.assertEqual(historical_scorer.likely_keep_scores([low, *tied]), [0., 33.3, 66.7, 100.])
+        out = self.root / "a"
+        self.prepare(out)
+        self.baseline(out)
+        current = json.loads((out / "ranking-current.json").read_text())
+        # The synthetic snapshot has tied features; if "before" also averaged tied ranks, both
+        # sides would be the same score and this change would be exactly zero.
+        self.assertGreater(current["mean_absolute_score_change"], 0)
+        self.assertEqual(build_baseline.likely_keep_scores, historical_scorer.likely_keep_scores)
+
+    def test_every_frozen_input_is_checked_before_computing(self):
+        out = self.root / "a"
+        self.prepare(out)
+        for name in ("playback.json", "whisperfeat.json", "feats.json"):
+            path = self.inputs["legacy_dir"] / name
+            original = path.read_text()
+            path.write_text(original + " ")
+            with self.subTest(name), self.assertRaisesRegex(ValueError, name + " is not the frozen input"):
+                self.baseline(out)
+            path.write_text(original)
+        self.inputs["eg2"].write_text(self.inputs["eg2"].read_text() + " ")
+        with self.assertRaisesRegex(ValueError, "eg2_meta.json is not the frozen input"):
+            self.prepare(out)
+        self.assertFalse((out / "ranking-features.npz").exists())
+
+    def test_feature_preparation_checks_the_snapshot_it_reads(self):
+        out = self.root / "features"
+        with closing(sqlite3.connect(self.inputs["snapshot"])) as con, con:  # changed, but not pinned again
+            con.execute("update clip set data=json_set(data, '$.peak_db', 42.0) where clip_id='1'")
+        with self.assertRaisesRegex(ValueError, "0903.jipandan.db is not the frozen input snapshot_0903"):
+            self.pipeline_features(out)
+        self.assertFalse((out / "0903.pipeline-features.json").exists())
+
+    def test_a_snapshot_with_a_pending_write_ahead_log_is_refused(self):
+        log = self.inputs["snapshot"].with_name(self.inputs["snapshot"].name + "-wal")
+        log.write_bytes(b"")  # an empty log holds nothing, as beside the real snapshot
+        frozen_inputs.check({"snapshot_0903": self.inputs["snapshot"]}, self.inputs["hashes"])
+        log.write_bytes(b"pending rows")
+        with self.assertRaisesRegex(ValueError, "0903.jipandan.db-wal holds changes"):
+            frozen_inputs.check({"snapshot_0903": self.inputs["snapshot"]}, self.inputs["hashes"])
+
+    def test_the_hash_file_prepare_inputs_writes_is_not_mistaken_for_the_recorded_hashes(self):
+        out = self.root / "a"
+        self.prepare(out)
+        self.assertFalse((out / "input-hashes.json").exists())  # the recorded-hash file's name
+        with self.assertRaisesRegex(ValueError, "has no frozen_inputs section"):
+            frozen_inputs.check({"snapshot_0903": self.inputs["snapshot"]}, out / "ranking-input.sources.json")
+
+    def test_the_tracked_hashes_cover_every_frozen_input(self):
+        pinned = json.loads((RUN / "input-hashes.json").read_text())["frozen_inputs"]
+        self.assertEqual(set(pinned), set(json.loads(self.inputs["hashes"].read_text())["frozen_inputs"]))
+
     def pipeline_features(self, out: Path, *extra: str) -> tuple[float, str]:
         cfg = self.root / "recordings.json"
         cfg.write_text(json.dumps([{"name": "0903"}]))
         printed = io.StringIO()
         with contextlib.redirect_stdout(printed):
             prepare_pipeline_features.main(["--config", str(cfg), "--snapshot", str(self.inputs["snapshot"]),
-                                            "--out-dir", str(out), *extra])
+                                            "--out-dir", str(out), "--input-hashes", str(self.inputs["hashes"]),
+                                            *extra])
         rows = json.loads((out / "0903.pipeline-features.json").read_text())
         return next(r["peak_db"] for r in rows if r["id"] == "0903:1"), printed.getvalue()
 
@@ -138,6 +202,7 @@ class RankingPreparationTests(unittest.TestCase):
         with closing(sqlite3.connect(self.inputs["snapshot"])) as con, con:
             clip = json.loads(con.execute("select data from clip where clip_id='1'").fetchone()[0])
             con.execute("update clip set data=? where clip_id='1'", (json.dumps({**clip, "peak_db": value}),))
+        synthetic.pin(self.inputs)
 
     def test_pipeline_features_are_reused_only_for_unchanged_inputs(self):
         out = self.root / "features"

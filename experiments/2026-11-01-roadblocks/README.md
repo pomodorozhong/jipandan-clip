@@ -17,7 +17,7 @@ numbers without the private inputs (see [What is not reproducible](#what-is-not-
 |---|---|
 | `pyproject.toml`, `uv.lock`, `.python-version` | The one pinned environment (Python 3.14.10). Groups `evaluate` (scipy, scikit-learn) and `inference` (torch, transformers, ...). |
 | `model-revisions.json` | Hugging Face commit, checkpoint SHA-256 and custom-code SHA-256 of each model, plus how it was originally run. |
-| `input-hashes.json` | SHA-256 of the frozen private inputs and of the files derived from them. |
+| `input-hashes.json` | SHA-256 of every frozen private input, checked by every preparation script that reads one before it computes anything, and of the files derived from them. A snapshot with a non-empty write-ahead log beside it is refused, since the hash would not cover the log. |
 | `download_models.py` | Fetches the pinned revisions and verifies every hash. |
 | `with_ffmpeg.py` | Puts the locked `imageio-ffmpeg` binary on `PATH` as `ffmpeg` for one command. |
 | `ranking/` | Input rows, corrected legacy baseline, production-feature ranks, semantic and audio evaluations. |
@@ -133,6 +133,13 @@ Checked on 2026-11-04 against the frozen outputs, on Apple silicon:
 - `prepare_inputs.py`, `build_baseline.py` and `evaluate_pipeline.py` reproduce
   `ranking-input.json`, `ranking-features.npz`, `pipeline-ranking.npz` and the three JSON reports
   exactly, field by field. The SHA-256 of the three frozen inputs match `input-hashes.json`.
+- Corrected on 2026-11-13 (#145): from `9d55038` on, `build_baseline.py` no longer reproduced
+  `ranking-current.json`. It took the "before" score from the application, whose scorer gained the
+  tied-rank correction in that commit, so both sides of the comparison were the corrected score. The
+  old scorer is now frozen in `ranking/historical_scorer.py`, and `ranking-current.json` and
+  `ranking-leakage.json` again reproduce byte for byte, as does `ranking-features.npz`. The hashes of
+  `playback.json` and `whisperfeat.json` were recorded then, from the copies that reproduce these
+  files; all five frozen inputs match `input-hashes.json`.
 - `prepare_pipeline_features.py` reproduces the frozen 0903 feature file byte for byte. Recomputed from
   the four older recordings with the locked ffmpeg, its values differ from the frozen ones by at most
   6e-6 (a different ffmpeg build), and `evaluate_pipeline.py` on them gives identical ranks and

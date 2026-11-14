@@ -8,11 +8,13 @@ Outputs in --out-dir:
   recordings, row IDs and the held-out predictions of five feature sets.
 * ``ranking-leakage.json``: per-recording AUC and recall for those five sets.
 * ``ranking-current.json``: the generated 0903 session scored with the application's built-in
-  ranks before and after the tied-rank correction, with bootstrap intervals.
+  ranks before and after the tied-rank correction, with bootstrap intervals. "Before" is the
+  frozen copy of the application's old scorer in ``historical_scorer.py``.
 
 Two edited-title leaks are removed. Text-shape features (columns 20-23) and the
 Whisper-versus-text agreement (last column) are recomputed from the original SRT text, not from
-the edited title kept in the old archive. Needs the repository's ``src`` on PYTHONPATH.
+the edited title kept in the old archive. The three archives and the snapshot must match the
+hashes in ``input-hashes.json`` (--input-hashes).
 """
 from __future__ import annotations
 
@@ -20,6 +22,7 @@ import argparse
 import json
 import re
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -28,7 +31,8 @@ from scipy.stats import rankdata
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import roc_auc_score
 
-from jipandan.core.clip_features import SCORE_SIGNALS, likely_keep_scores
+import frozen_inputs
+from historical_scorer import SCORE_SIGNALS, likely_keep_scores
 
 AUDIO_FEATURES = ["dur", "db_mean", "db_max", "db_std", "db_p90", "rel_ctx", "rel_floor", "active_frac",
                   "pre_db", "post_db", "gap_prev", "voiced", "f0_med", "f0_std", "f0_range", "f0_slope",
@@ -63,7 +67,13 @@ def main(argv: list[str] | None = None) -> None:
                         help="data/ folder holding feats.json, playback.json and whisperfeat.json")
     parser.add_argument("--snapshot", type=Path, required=True, help="frozen 0903 .jipandan.db copy")
     parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument("--input-hashes", type=Path, default=frozen_inputs.PINNED,
+                        help="recorded hashes of the frozen inputs (default: this experiment's)")
     args = parser.parse_args(argv)
+    frozen_inputs.check({"legacy_features": args.legacy_dir / "feats.json",
+                         "legacy_playback": args.legacy_dir / "playback.json",
+                         "legacy_whisper": args.legacy_dir / "whisperfeat.json",
+                         "snapshot_0903": args.snapshot}, args.input_hashes)
 
     rows = json.loads(args.rows.read_text())
     texts = {r["id"]: r["text"] for r in rows}
@@ -113,7 +123,8 @@ def main(argv: list[str] | None = None) -> None:
     (args.out_dir / "ranking-leakage.json").write_text(json.dumps(results, indent=2))
 
     # Exact tie correction and missing-feature diagnostics on the real generated session.
-    with sqlite3.connect(f"file:{args.snapshot}?mode=ro", uri=True) as con:
+    # ``before`` is the scorer the session was reviewed with; ``after`` averages tied ranks.
+    with closing(sqlite3.connect(f"file:{args.snapshot}?mode=ro", uri=True)) as con:
         clips = {k: json.loads(d) for k, d in con.execute("select clip_id,data from clip")}
         review = json.loads(con.execute("select value from meta where key='review_set'").fetchone()[0])
     ids = sorted(clips, key=lambda k: (clips[k]["index"], clips[k]["suffix"]))
