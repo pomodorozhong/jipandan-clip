@@ -1,15 +1,8 @@
 # Improvement-roadblocks experiments (2026-11-01)
 
-Code, pinned environment and aggregate results behind
-[the audit report](../../doc/improvement-roadblocks.md). This folder is a frozen snapshot of
-one run: a later experiment gets its own dated folder instead of editing this one. The
-application itself never imports anything from here.
+Code, pinned environment and aggregate results behind [the audit report](../../doc/improvement-roadblocks.md). This folder is a frozen snapshot of one run: a later experiment gets its own dated folder instead of editing this one. The application itself never imports anything from here.
 
-Private data stays out of git: recordings, transcript text, review labels, audio excerpts,
-row-level scores, the 0903 database snapshot and the model checkpoints. Only code, pins,
-hashes, small synthetic fixtures and aggregate results are tracked. Outside reviewers can
-read the code, run the synthetic tests and inspect the pins, but cannot recompute the real
-numbers without the private inputs (see [What is not reproducible](#what-is-not-reproducible)).
+Private data stays out of git: recordings, transcript text, review labels, audio excerpts, row-level scores, the 0903 database snapshot and the model checkpoints. Only code, pins, hashes, small synthetic fixtures and aggregate results are tracked. Outside reviewers can read the code, run the synthetic tests and inspect the pins, but cannot recompute the real numbers without the private inputs (see [What is not reproducible](#what-is-not-reproducible)).
 
 ## Layout
 
@@ -30,10 +23,7 @@ numbers without the private inputs (see [What is not reproducible](#what-is-not-
 
 ## Environment
 
-Run everything from this folder. The preparation code reads two application modules
-(`jipandan.core.clip_features` and `jipandan.core.srt`, plus `candidates` and `vad` for the audit),
-so put the repository's `src` on the path instead of installing the app. Those modules have not
-changed since `95b5dcb`.
+Run everything from this folder. The preparation code reads two application modules (`jipandan.core.clip_features` and `jipandan.core.srt`, plus `candidates` and `vad` for the audit), so put the repository's `src` on the path instead of installing the app. Those modules have not changed since `95b5dcb`.
 
 ```bash
 cd experiments/2026-11-01-roadblocks
@@ -49,16 +39,13 @@ export PYTHONPATH=../../src LOKY_MAX_CPU_COUNT=4
 | pillow / huggingface_hub | 13.0.0 / 2.4.0 |
 | ffmpeg | the `imageio-ffmpeg` 0.8.1 binary (ffmpeg 9.0) |
 
-uv selects the exact Python patch from `.python-version`; it does not record which
-python-build-standalone release supplied it, so that part is not pinned.
+uv selects the exact Python patch from `.python-version`; it does not record which python-build-standalone release supplied it, so that part is not pinned.
 
-The original runs used Python 3.12.13 for model scoring and numpy 2.4.4 for evaluation. See
-[Verification](#verification) for why this single environment is equivalent.
+The original runs used Python 3.12.13 for model scoring and numpy 2.4.4 for evaluation. See [Verification](#verification) for why this single environment is equivalent.
 
 ## Commands
 
-`<work>` is a private folder for derived data, `<legacy>` the folder holding the frozen legacy
-archives, `<models>` the downloaded checkpoints.
+`<work>` is a private folder for derived data, `<legacy>` the folder holding the frozen legacy archives, `<models>` the downloaded checkpoints.
 
 ```bash
 # 1. Models (inference group): pinned revisions, hashes verified.
@@ -85,40 +72,60 @@ uv run --group inference python model_scoring/score_semantic.py --input <work>/r
 uv run --group evaluate python ranking/evaluate_semantic_ranking.py --rows <work>/ranking-input.json \
   --scores <work>/d1-scores.jsonl --legacy-features <work>/ranking-features.npz \
   --pipeline-features <work>/pipeline-ranking.npz --out <work>/semantic-evaluation.json
+
+# 5. Paired text/audio comparison (d1-Omni-2B): the same rows and questions, without and with audio.
+uv run --group evaluate python ranking/prepare_audio_inputs.py --rows <work>/ranking-input.json \
+  --config <work>/recordings.json --snapshot <work>/0903.jipandan.db \
+  --audio-dir <work>/audio --out <work>/audio-input.json
+uv run --group inference python model_scoring/score_semantic.py --input <work>/audio-input.json \
+  --model <models>/d1-Omni-2B --revision 431f1d667de5afcc9b0c58b2d9c170a7b38b358b \
+  --questions omni-questions.json --out <work>/omni-text.jsonl --batch-size 8
+uv run --group inference python model_scoring/score_semantic.py --input <work>/audio-input.json \
+  --model <models>/d1-Omni-2B --revision 431f1d667de5afcc9b0c58b2d9c170a7b38b358b \
+  --questions omni-questions.json --out <work>/omni-audio.jsonl --batch-size 8 --audio
+uv run --group evaluate python ranking/evaluate_audio_semantics.py --rows <work>/audio-input.json \
+  --text-scores <work>/omni-text.jsonl --audio-scores <work>/omni-audio.jsonl \
+  --pipeline-features <work>/pipeline-ranking.npz --out <work>/omni-evaluation.json
+
+# 6. Title experiment (LFM3-1.7B): 15 edited and 15 unchanged titles per recording.
+uv run --group evaluate python ranking/prepare_title_inputs.py \
+  --eg2-meta <legacy>/clip-ranking-experiment-2026-10-12-embeddinggemma2/data/eg2_meta.json \
+  --snapshot <work>/0903.jipandan.db --out <work>/title-input.json
+uv run --group inference python model_scoring/experiment_titles.py --input <work>/title-input.json \
+  --model <models>/LFM3-1.7B --revision ac2586a34f1a1c03329dbdcdefabd8b6478ddaa7 \
+  --out <work>/title-output.jsonl --per-stratum 15
 ```
 
-The Omni audio comparison and the title experiment take the same form
-(`model_scoring/score_semantic.py --audio`, `ranking/evaluate_audio_semantics.py`,
-`model_scoring/experiment_titles.py`); the candidate audit and its variants are run as described in
-[`candidates/README.md`](candidates/README.md). Their arguments are in each script's `--help`, and the revisions are in `model-revisions.json`. Scorers refuse to
-overwrite an existing output, so give reruns a new path. Run the tests with:
+Settings of the original audio and title runs, all of them in the commands above or fixed in the code:
+
+| Setting | Value |
+|---|---|
+| Audio rows | 128 rows per legacy recording, sampled uniformly with numpy seed 128 without looking at labels, plus all 300 rows of the generated review set: 812 rows, recordings in name order, each in `ranking-input.json` order. |
+| Audio excerpts | The clip's original bounds (before trimming), 16 kHz, mono, 16-bit PCM WAV, cut with the application's exact-seek arguments. |
+| Questions | [`omni-questions.json`](omni-questions.json) for both Omni runs (the d1-2B run of step 4 uses the scorer's built-in text questions). |
+| Omni runs | Batch size 8, Apple GPU, bfloat16. The text-only run recorded an 8,192-token budget, the scorer's default; the audio run's manifest predates that field. |
+| Title rows | Every approved clip (exported or Ready): 1,680 legacy rows in metadata order, then 169 generated rows in snapshot order. |
+| Title sample | `experiment_titles.py` draws up to 15 unchanged and 15 edited rows per recording (Python `random` seed 128), and as demonstrations one unchanged and one edited row from each other recording whose transcript does not occur in the held recording; greedy decoding, at most 80 new tokens. |
+
+`audio-input.json` stores absolute excerpt paths, so its recorded hash only comes back when `--audio-dir` is the same folder as in the original run. The excerpts' bytes depend on the ffmpeg build: the original run used the Homebrew ffmpeg 9.0.2 (the commands above use whichever `ffmpeg` is on `PATH`), and `with_ffmpeg.py`'s locked 9.0 gives excerpts that `evaluate_audio_semantics.py` rejects against the original audio scores (see Verification). `prepare_audio_inputs.py` stops when an excerpt already exists unless `--reuse-excerpts` is given.
+
+The candidate audit and its variants are run as described in [`candidates/README.md`](candidates/README.md). Every script's arguments are in its `--help`, and the revisions are in `model-revisions.json`. Scorers and input builders refuse to overwrite an existing output, so give reruns a new path. Run the tests with:
 
 ```bash
 uv run --group evaluate python -m unittest discover -s tests -v
 ```
 
-`prepare_pipeline_features.py` prints, for each recording, whether its features were `generated`,
-`reused`, `regenerated` or `adopted`. It reuses an existing feature file only when the input fingerprint saved
-beside it matches the current inputs; otherwise it stops before measuring anything, says what
-differs, and `--regenerate` measures those recordings again. Feature files made before fingerprints existed
-have none: `--adopt` records the current inputs as their fingerprint without measuring them again,
-which keeps the frozen files byte for byte (with `--regenerate` as well, such a file is still adopted).
-The fingerprint of a measured recording includes the ffmpeg build, so adopt with the `ffmpeg` that
-measured the files and that later runs will use: the command above runs the locked one through
-`with_ffmpeg.py`, and features adopted under another build stop it.
+`prepare_pipeline_features.py` prints, for each recording, whether its features were `generated`, `reused`, `regenerated` or `adopted`. It reuses an existing feature file only when the input fingerprint saved beside it matches the current inputs; otherwise it stops before measuring anything, says what differs, and `--regenerate` measures those recordings again. Feature files made before fingerprints existed have none: `--adopt` records the current inputs as their fingerprint without measuring them again, which keeps the frozen files byte for byte (with `--regenerate` as well, such a file is still adopted). The fingerprint of a measured recording includes the ffmpeg build, so adopt with the `ffmpeg` that measured the files and that later runs will use: the command above runs the locked one through `with_ffmpeg.py`, and features adopted under another build stop it.
 
-`evaluate_audio_semantics.py` reads each score file with the `.manifest.json` the scorer wrote beside
-it, and stops unless the two are a text-only and a text-plus-audio run of the same rows file with the
-fixed questions of `omni-questions.json`, the same data type and the pinned d1-Omni-2B checkpoint, and the same token budget when both manifests record one. It also needs the audio excerpts: each
-audio score's hash is checked against the file at its row's `audio_path`.
+`evaluate_audio_semantics.py` reads each score file with the `.manifest.json` the scorer wrote beside it, and stops unless the two are a text-only and a text-plus-audio run of the same rows file with the fixed questions of `omni-questions.json`, the same data type and the pinned d1-Omni-2B checkpoint, and the same token budget when both manifests record one. It also needs the audio excerpts: each audio score's hash is checked against the file at its row's `audio_path`.
 
-`recordings.json` is a private JSON list of `{name, session, audio, words}` entries (plus `srt`
-and `vad` for the audit); see [`schemas.md`](schemas.md). Keep it, and every path in it, out of git.
+`recordings.json` is a private JSON list of `{name, session, audio, words}` entries (plus `srt` and `vad` for the audit); see [`schemas.md`](schemas.md). Keep it, and every path in it, out of git.
 
 ## Provenance of the scripts
 
 | Folder / file | Origin |
 |---|---|
+| `ranking/prepare_audio_inputs.py`, `prepare_title_inputs.py` | Private scratch scripts of this run (`prepare_audio.py`, and the title rows of `workflow_audit.py`), with paths as arguments and no changes to selection, extraction or row order. Tracked on 2026-11-13. |
 | `ranking/prepare_inputs.py`, `build_baseline.py`, `prepare_pipeline_features.py`, `evaluate_pipeline.py` | Private scratch scripts of this run (`prepare_inputs.py`, `ranking_audit.py`, `pipeline_features.py`, `evaluate_pipeline.py`), reorganised with paths as arguments and no changes to the computation. |
 | `ranking/evaluate_semantic_ranking.py`, `evaluate_audio_semantics.py`, `model_scoring/*`, `candidates/*` | Added for this run in `0a3876c`. |
 | `legacy_extraction/feat.py`, `playback.py`, `wfeat.py` | Predate this run: the 2026-10-11 ranking experiment, which made `feats.json`, `playback.json` and `whisperfeat.json`. |
@@ -130,60 +137,24 @@ and `vad` for the audit); see [`schemas.md`](schemas.md). Keep it, and every pat
 Checked on 2026-11-04 against the frozen outputs, on Apple silicon:
 
 - All Python tests of this folder pass in the locked environment, with synthetic data.
-- `prepare_inputs.py`, `build_baseline.py` and `evaluate_pipeline.py` reproduce
-  `ranking-input.json`, `ranking-features.npz`, `pipeline-ranking.npz` and the three JSON reports
-  exactly, field by field. The SHA-256 of the three frozen inputs match `input-hashes.json`.
-- Corrected on 2026-11-13 (#145): from `9d55038` on, `build_baseline.py` no longer reproduced
-  `ranking-current.json`. It took the "before" score from the application, whose scorer gained the
-  tied-rank correction in that commit, so both sides of the comparison were the corrected score. The
-  old scorer is now frozen in `ranking/historical_scorer.py`, and `ranking-current.json` and
-  `ranking-leakage.json` again reproduce byte for byte, as does `ranking-features.npz`. The hashes of
-  `playback.json` and `whisperfeat.json` were recorded then, from the copies that reproduce these
-  files; all five frozen inputs match `input-hashes.json`.
-- Method change on 2026-11-13 (#146): `build_baseline.py` and `evaluate_pipeline.py` sorted rows by
-  score to compute recall at a review budget, so input row order decided which rows of a score tie
-  fell inside the budget. All ranking evaluators now share `ranking/budget_metrics.py`, which uses
-  the expected order within a tie, as `evaluate_semantic_ranking.py` always did. Nine budget metrics
-  of the frozen `ranking-current.json` (2) and `pipeline-evaluation.json` (7) changed, by at most
-  0.42 percentage points; `results.json` lists each old and new value under
-  `budget_metric_correction`. No AUC, no `.npz` file, nothing in `ranking-leakage.json` and no other
-  number in `results.json` or the audit report changed. The frozen private reports keep the old
-  values, so these two files now reproduce except for those nine fields.
-- `prepare_pipeline_features.py` reproduces the frozen 0903 feature file byte for byte. Recomputed from
-  the four older recordings with the locked ffmpeg, its values differ from the frozen ones by at most
-  6e-6 (a different ffmpeg build), and `evaluate_pipeline.py` on them gives identical ranks and
-  results.
-- `candidates/audit_candidate_coverage.py` run unchanged on the four older recordings reproduced the
-  earlier audit with no differences; the corrected oracle then changed only its 0.25 s counts (see
-  `candidates/README.md`). `candidates/candidate_variants.py` reproduced the earlier private
-  variant results for all four recordings, except 0614's deduplication, which the earlier run
-  computed against uncorrected references.
+- `prepare_inputs.py`, `build_baseline.py` and `evaluate_pipeline.py` reproduce `ranking-input.json`, `ranking-features.npz`, `pipeline-ranking.npz` and the three JSON reports exactly, field by field. The SHA-256 of the three frozen inputs match `input-hashes.json`.
+- Corrected on 2026-11-13 (#145): from `9d55038` on, `build_baseline.py` no longer reproduced `ranking-current.json`. It took the "before" score from the application, whose scorer gained the tied-rank correction in that commit, so both sides of the comparison were the corrected score. The old scorer is now frozen in `ranking/historical_scorer.py`, and `ranking-current.json` and `ranking-leakage.json` again reproduce byte for byte, as does `ranking-features.npz`. The hashes of `playback.json` and `whisperfeat.json` were recorded then, from the copies that reproduce these files; all five frozen inputs match `input-hashes.json`.
+- Method change on 2026-11-13 (#146): `build_baseline.py` and `evaluate_pipeline.py` sorted rows by score to compute recall at a review budget, so input row order decided which rows of a score tie fell inside the budget. All ranking evaluators now share `ranking/budget_metrics.py`, which uses the expected order within a tie, as `evaluate_semantic_ranking.py` always did. Nine budget metrics of the frozen `ranking-current.json` (2) and `pipeline-evaluation.json` (7) changed, by at most 0.42 percentage points; `results.json` lists each old and new value under `budget_metric_correction`. No AUC, no `.npz` file, nothing in `ranking-leakage.json` and no other number in `results.json` or the audit report changed. The frozen private reports keep the old values, so these two files now reproduce except for those nine fields.
+- `prepare_pipeline_features.py` reproduces the frozen 0903 feature file byte for byte. Recomputed from the four older recordings with the locked ffmpeg, its values differ from the frozen ones by at most 6e-6 (a different ffmpeg build), and `evaluate_pipeline.py` on them gives identical ranks and results.
+- `candidates/audit_candidate_coverage.py` run unchanged on the four older recordings reproduced the earlier audit with no differences; the corrected oracle then changed only its 0.25 s counts (see `candidates/README.md`). `candidates/candidate_variants.py` reproduced the earlier private variant results for all four recordings, except 0614's deduplication, which the earlier run computed against uncorrected references.
 - `evaluate_semantic_ranking.py` on the frozen scores reproduces all 229 numeric fields.
-- Python 3.14.10 reproduced the originally 3.12.13 model runs exactly: 240 `d1-2B` scores
-  (batch 24, GPU, bfloat16), 24 `d1-Omni-2B` rows with and without audio, and the raw outputs of
-  12 `LFM3-1.7B` title rows. Weight and custom-code hashes match `model-revisions.json`.
-- The packaged ffmpeg (9.0) and the Homebrew ffmpeg (9.0.2) used originally give clip features
-  that differ by at most 5e-14.
+- Checked on 2026-11-13 (#145): `prepare_title_inputs.py` and `prepare_audio_inputs.py` reproduce `title-input.json` and `audio-input.json` with the hashes in `input-hashes.json` (the audio rows with `--reuse-excerpts` and the original `--audio-dir`). Extracting all 812 excerpts again from the recordings with the Homebrew ffmpeg 9.0.2 gives files byte-identical to the ones the audio run scored (the `audio_sha256` of every row of the frozen `omni-audio.jsonl`). The locked ffmpeg 9.0 gives excerpts of the same length whose samples differ by at most one step of 16-bit PCM, in about 0.02% of samples on average, and whose header names another encoder version; no excerpt has the same hash. Model scoring was not rerun on them.
+- Python 3.14.10 reproduced the originally 3.12.13 model runs exactly: 240 `d1-2B` scores (batch 24, GPU, bfloat16), 24 `d1-Omni-2B` rows with and without audio, and the raw outputs of 12 `LFM3-1.7B` title rows. Weight and custom-code hashes match `model-revisions.json`.
+- The packaged ffmpeg (9.0) and the Homebrew ffmpeg (9.0.2) used originally give clip features that differ by at most 5e-14.
 - numpy 2.5.4 (inference runs) gives the same evaluation results as the 2.4.4 used for evaluation.
 
 ## What is not reproducible
 
-- **The private inputs themselves.** Hashes prove an input is the same file; they do not let an
-  outside reviewer obtain it.
-- **`legacy_extraction/`.** librosa, mlx-whisper and sentence-transformers are not locked, so these
-  scripts were not rerun even though the recordings exist. They are the record of how the legacy
-  archives were made, which are checked by hash only.
-- **Not rerun in the 2026-11-04 check:** the title-alternatives evaluation, and a full model
-  rescoring (samples with identical batches were compared instead).
-- **0903 candidate numbers.** The 0903 reference for the candidate audit and variants was an older
-  transcript-based session file that no longer exists. Its audit and follow-up numbers are the
-  earlier run's, marked as not recomputed; its oracle ceiling still has the 0.05 s window error that
-  the other recordings had.
-- **Title outputs.** The frozen `title-output.jsonl` predates the script's current format
-  recovery (stripping a repeated `...</think>...` artifact). The raw completions are identical;
-  `title-cleaned.jsonl` in the private folder is the post-recovery version.
-- **Python build.** The original model scoring ran on Python 3.12.13; the original evaluation
-  used an unlocked scikit-learn `--with` install (1.9.1 found in the uv cache). The exact
-  python-build-standalone release is not recorded.
-- **Model licenses.** All three models have the Hugging Face license tag `license:other`. Check
-  their terms before redistributing anything derived from them.
+- **The private inputs themselves.** Hashes prove an input is the same file; they do not let an outside reviewer obtain it.
+- **`legacy_extraction/`.** librosa, mlx-whisper and sentence-transformers are not locked, so these scripts were not rerun even though the recordings exist. They are the record of how the legacy archives were made, which are checked by hash only.
+- **Never rerun in full:** the title-alternatives evaluation, and model scoring (d1-2B, both d1-Omni-2B runs and the LFM3 titles). Samples with identical batches were compared instead, on 2026-11-04; the 2026-11-13 check reproduced the inputs and evaluations, not the scores.
+- **The workflow summary.** `workflow` in `results.json` (stage times, title-change counts) came from the same private script that built the title rows. Only the title rows have a tracked builder.
+- **0903 candidate numbers.** The 0903 reference for the candidate audit and variants was an older transcript-based session file that no longer exists. Its audit and follow-up numbers are the earlier run's, marked as not recomputed; its oracle ceiling still has the 0.05 s window error that the other recordings had.
+- **Title outputs.** The frozen `title-output.jsonl` predates the script's current format recovery (stripping a repeated `...</think>...` artifact). The raw completions are identical; `title-cleaned.jsonl` in the private folder is the post-recovery version.
+- **Python build.** The original model scoring ran on Python 3.12.13; the original evaluation used an unlocked scikit-learn `--with` install (1.9.1 found in the uv cache). The exact python-build-standalone release is not recorded.
+- **Model licenses.** All three models have the Hugging Face license tag `license:other`. Check their terms before redistributing anything derived from them.

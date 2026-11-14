@@ -41,7 +41,13 @@ def make_inputs(root: Path, seed: int = 7) -> dict[str, Path]:
             whisper.append({"rec": rec, "idx": idx, "avg_logprob": float(rng.normal()),
                             "no_speech_prob": float(rng.uniform()), "compression_ratio": float(rng.uniform(.5, 2)),
                             "wtext": "abcdefg"[: 1 + idx % 6]})
-            meta.append({"rec": rec, "idx": idx, "srt_text": "original text " + "ab" * (idx % 5 + 1)})
+            srt_text = "original text " + "ab" * (idx % 5 + 1)
+            # The metadata repeats clips; only the first entry of a clip counts. Titles differ from
+            # the transcript by punctuation only (not an edit) or by wording (an edit).
+            for copy in range(1 + idx % 2):
+                meta.append({"rec": rec, "idx": idx, "srt_text": srt_text,
+                             "status": status if status != "exported" or idx % 4 else "group2",
+                             "title": [srt_text + "!", "retitled " + str(idx)][(idx + copy) % 2]})
     (legacy_dir / "feats.json").write_text(json.dumps(feats))
     (legacy_dir / "playback.json").write_text(json.dumps(playback))
     (legacy_dir / "whisperfeat.json").write_text(json.dumps(whisper))
@@ -58,7 +64,9 @@ def make_inputs(root: Path, seed: int = 7) -> dict[str, Path]:
             kept = int(rng.integers(0, 2))
             con.execute("insert into clip values (?, ?)", (cid, json.dumps({
                 "index": int(cid), "suffix": "", "status": ["rejected", "exported"][kept],
-                "source_text": "generated " + cid,
+                "source_text": "generated " + cid, "title": "generated " + cid + "?",
+                "last_export_title": "exported " + cid if int(cid) % 3 == 0 else None,
+                "original_start": f"00:00:{int(cid):02d}.000", "original_end": f"00:00:{int(cid):02d}.500",
                 # Repeated values exercise the tied-rank correction.
                 "peak_db": float(round(rng.normal() + kept, 1)), "no_speech_prob": float(rng.uniform()),
                 "mid_share_db": float(round(rng.normal(), 1)), "bass_share_db": float(round(rng.normal(), 1)),
@@ -90,3 +98,22 @@ def write_pipeline_features(folder: Path, seed: int = 11) -> None:
                  "mid_share_db": float(rng.normal()), "bass_share_db": float(rng.normal())}
                 for idx in range(1, PER_RECORDING + 1)]
         (folder / f"{rec}.pipeline-features.json").write_text(json.dumps(rows))
+
+
+def write_sessions(folder: Path) -> Path:
+    """A recordings config with one reviewed session per legacy recording; a split clip in each."""
+    folder.mkdir(parents=True, exist_ok=True)
+    config = []
+    for rec in LEGACY:
+        clips = [{"index": idx, "original_start": f"00:{idx:02d}:00.000", "original_end": f"00:{idx:02d}:01.250"}
+                 for idx in range(1, PER_RECORDING + 1)]
+        clips.insert(1, {"index": 1, "suffix": 1, "original_start": "00:59:00.000", "original_end": "00:59:09.000"})
+        session = folder / f"{rec}.jipandan.json"
+        session.write_text(json.dumps({"candidates": clips}))
+        config.append({"name": rec, "session": str(session), "audio": str(folder / f"{rec}.mp3")})
+    config.append({"name": "0903", "audio": str(folder / "0903.mp3")})  # its clips come from the snapshot
+    for entry in config:
+        Path(entry["audio"]).write_bytes(b"")  # placeholders: the tests stub out the extraction
+    path = folder / "recordings.json"
+    path.write_text(json.dumps(config))
+    return path
