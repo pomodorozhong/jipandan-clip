@@ -2583,5 +2583,64 @@
   "candidate_files": {
     "audit": "candidates/candidate-coverage.json",
     "variants": "candidates/candidate-variants.json"
+  },
+  "budget_metric_correction": {
+    "note": "Review-budget metrics of ranking-current.json and pipeline-evaluation.json were first computed by sorting alone, so input row order decided which rows of a score tie fell inside the budget. They now use the expected order within ties (ranking/budget_metrics.py), like the other evaluators always did. These are all the fields that changed by more than 1e-9; no AUC changed, and ranking-leakage.json has no tie at a budget cutoff. Nothing else in this file was affected.",
+    "changed": [
+      {
+        "report": "ranking-current.json",
+        "field": "subsets/top/before/recall50",
+        "row_order": 0.49645390070921985,
+        "tie_aware": 0.4929078014184397
+      },
+      {
+        "report": "ranking-current.json",
+        "field": "subsets/top/tie_corrected/recall50",
+        "row_order": 0.49645390070921985,
+        "tie_aware": 0.4929078014184396
+      },
+      {
+        "report": "pipeline-evaluation.json",
+        "field": "0602_legacy/models/builtin_available/recall20",
+        "row_order": 0.22072072072072071,
+        "tie_aware": 0.22015765765765768
+      },
+      {
+        "report": "pipeline-evaluation.json",
+        "field": "0602_legacy/models/audio_builtin/recall20",
+        "row_order": 0.22072072072072071,
+        "tie_aware": 0.22015765765765768
+      },
+      {
+        "report": "pipeline-evaluation.json",
+        "field": "0903_top/models/peak/recall50",
+        "row_order": 0.5390070921985816,
+        "tie_aware": 0.5354609929078015
+      },
+      {
+        "report": "pipeline-evaluation.json",
+        "field": "0903_top/models/speech_confidence/recall50",
+        "row_order": 0.46808510638297873,
+        "tie_aware": 0.471631205673759
+      },
+      {
+        "report": "pipeline-evaluation.json",
+        "field": "0903_top/models/speech_confidence/review80",
+        "row_order": 0.7958333333333333,
+        "tie_aware": 0.8
+      },
+      {
+        "report": "pipeline-evaluation.json",
+        "field": "0903_top/models/mid_share/recall50",
+        "row_order": 0.49645390070921985,
+        "tie_aware": 0.4929078014184397
+      },
+      {
+        "report": "pipeline-evaluation.json",
+        "field": "0903_top/models/bass_share/recall50",
+        "row_order": 0.49645390070921985,
+        "tie_aware": 0.4929078014184397
+      }
+    ]
   }
 }

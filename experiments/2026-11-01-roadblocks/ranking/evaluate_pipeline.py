@@ -17,9 +17,10 @@ from scipy.stats import rankdata
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import roc_auc_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
+
+from budget_metrics import metrics
 
 FIELDS = ["peak_db", "no_speech_prob", "mid_share_db", "bass_share_db"]
 SIGNS = [1, -1, 1, -1]
@@ -83,13 +84,7 @@ def main(argv: list[str] | None = None) -> None:
                     out[key]["models"][name] = {"unavailable": True}
                     continue
                 pp = np.where(valid, pp, np.nanmedian(pp))
-                order = np.argsort(-pp, kind="stable")
-                cs = yy[order].cumsum() / yy.sum()
-                out[key]["models"][name] = {
-                    "auc": roc_auc_score(yy, pp), "recall20": float(cs[max(0, int(.2 * len(yy)) - 1)]),
-                    "recall50": float(cs[len(yy) // 2 - 1]),
-                    "review80": float((np.searchsorted(cs, .8) + 1) / len(yy)),
-                }
+                out[key]["models"][name] = metrics(yy, pp)
         print(r, out[r + "_" + ("legacy" if r != "0903" else "random")], flush=True)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
