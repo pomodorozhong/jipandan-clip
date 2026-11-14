@@ -44,6 +44,10 @@ set of every input file.
   the generated session before and after the tied-rank correction.
 - `<recording>.pipeline-features.json`: list of `{id, peak_db, mid_share_db, bass_share_db,
   no_speech_prob, ...}` from the application's own feature code.
+- `<recording>.pipeline-features.source.json`: `{recording, clip_features_version, ffmpeg, sha256}`, the
+  fingerprint of what that feature file was measured from: the SHA-256 of the `session`, `audio` and
+  `words` files with the ffmpeg build (`ffmpeg` is absent for 0903), or of the snapshot's clip rows for 0903. `prepare_pipeline_features.py` reuses a
+  feature file only when this matches the current inputs.
 - `pipeline-ranking.npz` (from `evaluate_pipeline.py`): `X` (n x 4), `y`, `recording`, `ids`, `role`,
   and held-out predictions `builtin_available`, `audio_builtin`, `peak`, `speech_confidence`,
   `mid_share`, `bass_share`, `refit_logistic`, `refit_gbm`.
