@@ -97,6 +97,16 @@ overwrite an existing output, so give reruns a new path. Run the tests with:
 uv run --group evaluate python -m unittest discover -s tests -v
 ```
 
+`prepare_pipeline_features.py` prints, for each recording, whether its features were `generated`,
+`reused`, `regenerated` or `adopted`. It reuses an existing feature file only when the input fingerprint saved
+beside it matches the current inputs; otherwise it stops before measuring anything, says what
+differs, and `--regenerate` measures those recordings again. Feature files made before fingerprints existed
+have none: `--adopt` records the current inputs as their fingerprint without measuring them again,
+which keeps the frozen files byte for byte (with `--regenerate` as well, such a file is still adopted).
+The fingerprint of a measured recording includes the ffmpeg build, so adopt with the `ffmpeg` that
+measured the files and that later runs will use: the command above runs the locked one through
+`with_ffmpeg.py`, and features adopted under another build stop it.
+
 `recordings.json` is a private JSON list of `{name, session, audio, words}` entries (plus `srt`
 and `vad` for the audit); see [`schemas.md`](schemas.md). Keep it, and every path in it, out of git.
 

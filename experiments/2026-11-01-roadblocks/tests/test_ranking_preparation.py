@@ -1,9 +1,11 @@
 """Synthetic end-to-end checks of the ranking preparation: row alignment, held-out exclusion and
 the two edited-title leakage corrections. Needs the ``evaluate`` dependency group."""
 import contextlib
+from contextlib import closing
 import importlib.util
 import io
 import json
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -121,6 +123,87 @@ class RankingPreparationTests(unittest.TestCase):
         legacy = a["recording"] != "0903"
         for name in ("refit_logistic", "refit_gbm"):
             np.testing.assert_array_equal(a[name][legacy], b[name][legacy])
+
+    def pipeline_features(self, out: Path, *extra: str) -> tuple[float, str]:
+        cfg = self.root / "recordings.json"
+        cfg.write_text(json.dumps([{"name": "0903"}]))
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            prepare_pipeline_features.main(["--config", str(cfg), "--snapshot", str(self.inputs["snapshot"]),
+                                            "--out-dir", str(out), *extra])
+        rows = json.loads((out / "0903.pipeline-features.json").read_text())
+        return next(r["peak_db"] for r in rows if r["id"] == "0903:1"), printed.getvalue()
+
+    def set_snapshot_peak(self, value: float) -> None:
+        with closing(sqlite3.connect(self.inputs["snapshot"])) as con, con:
+            clip = json.loads(con.execute("select data from clip where clip_id='1'").fetchone()[0])
+            con.execute("update clip set data=? where clip_id='1'", (json.dumps({**clip, "peak_db": value}),))
+
+    def test_pipeline_features_are_reused_only_for_unchanged_inputs(self):
+        out = self.root / "features"
+        self.set_snapshot_peak(.9)
+        self.assertEqual(self.pipeline_features(out), (.9, "0903 generated 50\n"))
+        self.assertEqual(sorted(p.name for p in out.iterdir()),  # no partly written file is left
+                         ["0903.pipeline-features.json", "0903.pipeline-features.source.json"])
+        self.assertEqual(self.pipeline_features(out), (.9, "0903 reused 0903.pipeline-features.json\n"))
+
+        self.set_snapshot_peak(100.9)
+        with self.assertRaises(SystemExit) as stopped, contextlib.redirect_stderr(io.StringIO()) as message:
+            self.pipeline_features(out)
+        self.assertEqual(stopped.exception.code, 1)
+        self.assertIn("measured from different inputs: the snapshot's clips", message.getvalue())
+        self.assertEqual(self.pipeline_features(out, "--regenerate"), (100.9, "0903 regenerated 50\n"))
+        self.assertEqual(self.pipeline_features(out), (100.9, "0903 reused 0903.pipeline-features.json\n"))
+
+    def test_a_feature_file_without_a_fingerprint_is_not_reused(self):
+        out = self.root / "features"
+        self.pipeline_features(out)
+        (out / "0903.pipeline-features.source.json").unlink()
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()) as message:
+            self.pipeline_features(out)
+        self.assertIn("no recorded input fingerprint", message.getvalue())
+
+    def test_a_recording_fingerprint_follows_each_of_its_files(self):
+        cfg = {}
+        for key in ("session", "audio", "words"):
+            cfg[key] = str(self.root / key)
+            Path(cfg[key]).write_text(key)
+        version = ["ffmpeg version 1"]
+        original = prepare_pipeline_features.ffmpeg_version
+        prepare_pipeline_features.ffmpeg_version = lambda: version[0]
+        self.addCleanup(setattr, prepare_pipeline_features, "ffmpeg_version", original)
+        before = prepare_pipeline_features.fingerprint("0511", cfg, self.inputs["snapshot"])
+        self.assertEqual(before, prepare_pipeline_features.fingerprint("0511", cfg, self.inputs["snapshot"]))
+        for key in ("session", "audio", "words"):
+            Path(cfg[key]).write_text(key + " changed")
+            after = prepare_pipeline_features.fingerprint("0511", cfg, self.inputs["snapshot"])
+            self.assertNotEqual(before["sha256"][key], after["sha256"][key])
+        self.assertEqual(prepare_pipeline_features.differences(before, after),
+                         "the audio file, the session file, the words file")
+        # Another ffmpeg build decodes to slightly different samples, so it is another fingerprint.
+        version[0] = "ffmpeg version 2"
+        other_build = prepare_pipeline_features.fingerprint("0511", cfg, self.inputs["snapshot"])
+        self.assertNotEqual(after, other_build)
+        self.assertEqual(prepare_pipeline_features.differences(after, other_build), "the ffmpeg build")
+
+    def test_adopting_fingerprints_an_old_file_without_measuring_it(self):
+        out = self.root / "features"
+        self.pipeline_features(out)
+        features = out / "0903.pipeline-features.json"
+        (out / "0903.pipeline-features.source.json").unlink()
+        features.write_text(features.read_text().replace("\n", "\n ", 1))  # would not survive measuring again
+        kept = features.read_bytes()
+        # Adopting wins over measuring again for a file that only lacks its fingerprint.
+        self.assertEqual(self.pipeline_features(out, "--adopt", "--regenerate")[1],
+                         "0903 adopted 0903.pipeline-features.json\n")
+        self.assertEqual(features.read_bytes(), kept)
+        self.assertEqual(self.pipeline_features(out)[1], "0903 reused 0903.pipeline-features.json\n")
+        # Adopting never covers a file whose recorded inputs differ from the current ones.
+        self.set_snapshot_peak(55.5)
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()) as message:
+            self.pipeline_features(out, "--adopt")
+        self.assertIn("measured from different inputs", message.getvalue())
+        self.assertEqual(features.read_bytes(), kept)
 
 
 if __name__ == "__main__":
