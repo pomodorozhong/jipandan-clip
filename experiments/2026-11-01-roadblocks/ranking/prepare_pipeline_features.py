@@ -11,7 +11,8 @@ build that decoded it. An existing feature file is reused only when that fingerp
 current inputs. Otherwise the command stops before measuring anything; pass --regenerate to
 measure those recordings again. A feature file from before fingerprints existed has none:
 --adopt records the current inputs as its fingerprint without measuring, for files known to have
-been measured from them.
+been measured from them. When the config includes 0903, the snapshot must match the hash recorded
+in ``input-hashes.json`` (--input-hashes).
 """
 from __future__ import annotations
 
@@ -26,18 +27,11 @@ from contextlib import closing
 from dataclasses import asdict
 from pathlib import Path
 
+import frozen_inputs
 from jipandan.core.clip_features import CLIP_FEATURES_VERSION, compute_clip_features
 from jipandan.core.srt import srt_time_to_seconds
 
 SNAPSHOT_FIELDS = ("peak_db", "mid_share_db", "bass_share_db", "no_speech_prob")
-
-
-def file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def snapshot_clips(snapshot: Path) -> list[tuple[str, str]]:
@@ -58,7 +52,7 @@ def fingerprint(name: str, cfg: dict, snapshot: Path) -> dict:
         rows = json.dumps(sorted(snapshot_clips(snapshot)), ensure_ascii=False).encode()
         return {"recording": name, "clip_features_version": CLIP_FEATURES_VERSION,
                 "sha256": {"snapshot_clips": hashlib.sha256(rows).hexdigest()}}
-    sources = {key: file_sha256(Path(cfg[key])) for key in ("session", "audio", "words")}
+    sources = {key: frozen_inputs.sha256(Path(cfg[key])) for key in ("session", "audio", "words")}
     return {"recording": name, "clip_features_version": CLIP_FEATURES_VERSION, "ffmpeg": ffmpeg_version(),
             "sha256": sources}
 
@@ -116,12 +110,17 @@ def main(argv: list[str] | None = None) -> None:
                              "that has none, without measuring; only for files known to come from them. "
                              "Run it with the ffmpeg build that measured them, which it records. "
                              "With --regenerate too, such a file is adopted, not measured again")
+    parser.add_argument("--input-hashes", type=Path, default=frozen_inputs.PINNED,
+                        help="recorded hashes of the frozen inputs (default: this experiment's)")
     args = parser.parse_args(argv)
+    config = json.loads(args.config.read_text())
+    if any(cfg["name"] == "0903" for cfg in config):
+        frozen_inputs.check({"snapshot_0903": args.snapshot}, args.input_hashes)
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     # Decide for every recording before measuring any, so a long run cannot stop halfway.
     plan, stale = [], []
-    for cfg in json.loads(args.config.read_text()):
+    for cfg in config:
         name = cfg["name"]
         dest = args.out_dir / f"{name}.pipeline-features.json"
         current = fingerprint(name, cfg, args.snapshot)

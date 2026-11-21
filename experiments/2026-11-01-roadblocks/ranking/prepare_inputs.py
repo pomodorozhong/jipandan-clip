@@ -4,22 +4,22 @@ Rows are the reviewed legacy clips (0511, 0526, 0602, 0614; pending clips exclud
 decided clips of the generated 0903 review set. Legacy text is the original SRT text recovered
 from the EmbeddingGemma metadata, never an edited title. Labels are kept (1) versus skipped or
 rejected (0) and are never shown to a model. Private inputs are read from paths given on the
-command line; nothing is written next to them.
+command line; nothing is written next to them. They must match the hashes recorded in
+``input-hashes.json`` (--input-hashes); the hashes read are written to
+``ranking-input.sources.json`` beside the rows.
 """
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sqlite3
+from contextlib import closing
 from collections import Counter
 from pathlib import Path
 
+import frozen_inputs
+
 GENERATED_DECIDED = ("exported", "group1", "group2", "rejected")
-
-
-def sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def legacy_rows(features: list[dict], srt_texts: dict[tuple[str, int], str]) -> list[dict]:
@@ -38,7 +38,7 @@ def generated_rows(snapshot: Path) -> list[dict]:
     """Decided clips of the 0903 snapshot, with the role (random or top) of the review set."""
     rows = []
     # Read-only: the snapshot is a frozen copy and must never be written.
-    with sqlite3.connect(f"file:{snapshot}?mode=ro", uri=True) as con:
+    with closing(sqlite3.connect(f"file:{snapshot}?mode=ro", uri=True)) as con:
         clips = {cid: json.loads(data) for cid, data in con.execute("select clip_id,data from clip")}
         review = json.loads(con.execute("select value from meta where key='review_set'").fetchone()[0])
     for cid, role in review["roles"].items():
@@ -60,7 +60,11 @@ def main(argv: list[str] | None = None) -> None:
                         help="eg2_meta.json from the 2026-10-12 EmbeddingGemma experiment")
     parser.add_argument("--snapshot", type=Path, required=True, help="frozen 0903 .jipandan.db copy")
     parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument("--input-hashes", type=Path, default=frozen_inputs.PINNED,
+                        help="recorded hashes of the frozen inputs (default: this experiment's)")
     args = parser.parse_args(argv)
+    hashes = frozen_inputs.check({"legacy_features": args.legacy_features, "eg2_meta": args.eg2_meta,
+                                  "snapshot_0903": args.snapshot}, args.input_hashes)
 
     srt_texts: dict[tuple[str, int], str] = {}
     for m in json.loads(args.eg2_meta.read_text()):
@@ -70,10 +74,7 @@ def main(argv: list[str] | None = None) -> None:
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     (args.out_dir / "ranking-input.json").write_text(json.dumps(rows, ensure_ascii=False, indent=2))
-    hashes = {name: sha256(path) for name, path in [
-        ("legacy_features", args.legacy_features), ("eg2_meta", args.eg2_meta),
-        ("snapshot_0903", args.snapshot)]}
-    (args.out_dir / "input-hashes.json").write_text(json.dumps(hashes, indent=2))
+    (args.out_dir / "ranking-input.sources.json").write_text(json.dumps(hashes, indent=2))
     print("rows", len(rows), "by recording", Counter(r["recording"] for r in rows))
 
 

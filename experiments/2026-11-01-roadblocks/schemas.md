@@ -37,11 +37,13 @@ set of every input file.
 
 - `ranking-input.json`: list of `{id, recording, text, label, role, source}`. `text` is the original
   SRT text (legacy) or the generated clip's `source_text`.
+- `ranking-input.sources.json` (from `prepare_inputs.py`): `{legacy_features, eg2_meta, snapshot_0903}`, the SHA-256 of the frozen inputs the rows were read from, already checked against `input-hashes.json`. Work folders made before 2026-11-13 hold the same content under the name `input-hashes.json`.
 - `ranking-features.npz` (from `build_baseline.py`): `X` is the 42-column corrected legacy matrix,
   plus `y`, `recording`, `ids`, and held-out predictions for `old_title_leak`,
   `previous_clean_still_agreement_leak`, `fully_clean`, `audio_only` and `single_clip_confidence`.
 - `ranking-leakage.json`, `ranking-current.json`: AUC and review-budget metrics per recording, and
-  the generated session before and after the tied-rank correction.
+  the generated session before and after the tied-rank correction. "Before" is the application's
+  scorer as it was when the session was reviewed, frozen in `ranking/historical_scorer.py`.
 - `<recording>.pipeline-features.json`: list of `{id, peak_db, mid_share_db, bass_share_db,
   no_speech_prob, ...}` from the application's own feature code.
 - `<recording>.pipeline-features.source.json`: `{recording, clip_features_version, ffmpeg, sha256}`, the
