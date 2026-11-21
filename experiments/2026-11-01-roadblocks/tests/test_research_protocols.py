@@ -17,7 +17,11 @@ from evaluate_title_alternatives import words_in_range
 
 HAS_SKLEARN = importlib.util.find_spec("sklearn") is not None
 if HAS_SKLEARN:
-    from evaluate_semantic_ranking import metrics
+    import budget_metrics
+    import build_baseline
+    import evaluate_pipeline
+    import evaluate_semantic_ranking
+    from budget_metrics import metrics
     from evaluate_audio_semantics import check_paired_runs, load_scores
 
 
@@ -64,6 +68,40 @@ class RankingProtocolTests(unittest.TestCase):
         self.assertAlmostEqual(result["recall20"], .2)
         self.assertAlmostEqual(result["recall50"], .5)
         self.assertAlmostEqual(result["review80"], .8)
+
+    def test_reaching_exactly_80_percent_counts_despite_rounding(self):
+        # Four of five keepers are found after five rows, but the tie's thirds sum to 0.7999999999999999.
+        result = metrics([1, 0, 1, 1, 1, 1], [6., 5., 5., 5., 2., 1.])
+        self.assertEqual(result["review80"], 5 / 6)
+
+    def test_row_order_inside_a_score_tie_cannot_change_a_budget_metric(self):
+        rng = np.random.default_rng(3)
+        # 40 rows in four score levels, so every budget cutoff (8, 20 and the 80% point) falls
+        # inside a tie that holds both keepers and rejects.
+        scores = np.repeat([.9, .6, .4, .1], 10)
+        y = np.r_[[1] * 7 + [0] * 3, [1] * 5 + [0] * 5, [1] * 3 + [0] * 7, [1] * 1 + [0] * 9]
+        expected = metrics(y, scores)
+        self.assertAlmostEqual(expected["recall20"], (7 * .8) / 16)
+        self.assertAlmostEqual(expected["recall50"], 12 / 16)
+        self.assertAlmostEqual(expected["review80"], 23 / 40)
+        for _ in range(20):
+            order = np.concatenate([level + rng.permutation(10) for level in (0, 10, 20, 30)])
+            np.testing.assert_array_equal(scores[order], scores)
+            shuffled = metrics(y[order], scores)
+            for name, value in expected.items():
+                self.assertAlmostEqual(shuffled[name], value, places=12, msg=name)
+        # Any row order of the whole table gives the same result too.
+        order = rng.permutation(40)
+        for name, value in metrics(y[order], scores[order]).items():
+            self.assertAlmostEqual(value, expected[name], places=12, msg=name)
+
+    def test_every_ranking_evaluator_uses_the_same_budget_metrics(self):
+        for evaluator in (build_baseline, evaluate_pipeline, evaluate_semantic_ranking):
+            self.assertIs(evaluator.metrics, budget_metrics.metrics, evaluator.__name__)
+        source = "".join((RUN / "ranking" / name).read_text() for name in
+                         ("build_baseline.py", "evaluate_pipeline.py", "evaluate_semantic_ranking.py",
+                          "evaluate_audio_semantics.py"))
+        self.assertNotIn("cumsum", source)  # no evaluator keeps a budget calculation of its own
 
     def test_stale_or_duplicate_scores_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

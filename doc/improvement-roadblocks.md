@@ -47,10 +47,7 @@ branch-specific verification, and the published issue handoff notes.
   evaluating their scores. Model fitting leaves each recording out; 0903 never trains a model.
 - Semantic blend weights use only older recordings. For the legacy model, weight selection
   uses an inner leave-one-recording-out loop excluding the outer held recording.
-- AUC is tie-aware. Recall at a fixed review budget uses the expected order within score ties.
-  The 95% intervals resample rows within the one generated recording; they do not measure
-  variation between future recordings. The old recording sets have been used in previous
-  experiments, so all results here remain exploratory.
+- AUC is tie-aware. Recall at a fixed review budget uses the expected order within score ties. The production-feature and tied-rank reports first sorted tied rows in input order instead; they were recomputed on 2026-11-13 ([#146](https://github.com/pomodorozhong/jipandan-clip/issues/146)). Nine of their budget metrics moved by at most 0.42 percentage points and no AUC changed. None of them is quoted in this report; `budget_metric_correction` in `results.json` lists the old and new values. The 95% intervals resample rows within the one generated recording; they do not measure variation between future recordings. The old recording sets have been used in previous experiments, so all results here remain exploratory.
 
 ## Ranking experiments
 

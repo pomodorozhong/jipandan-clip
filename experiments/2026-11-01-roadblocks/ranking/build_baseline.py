@@ -32,6 +32,7 @@ from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import roc_auc_score
 
 import frozen_inputs
+from budget_metrics import metrics
 from historical_scorer import SCORE_SIGNALS, likely_keep_scores
 
 AUDIO_FEATURES = ["dur", "db_mean", "db_max", "db_std", "db_p90", "rel_ctx", "rel_floor", "active_frac",
@@ -51,13 +52,6 @@ def text_shape(text: str, duration: float) -> list[float]:
 def agreement(a: str, b: str) -> float:
     a, b = set(a), set(b)
     return len(a & b) / max(len(a | b), 1)
-
-
-def metrics(y: np.ndarray, p: np.ndarray) -> dict:
-    order = np.argsort(-p, kind="stable")
-    cs = y[order].cumsum() / y.sum()
-    return dict(auc=roc_auc_score(y, p), recall20=cs[max(0, int(.2 * len(y)) - 1)],
-                recall50=cs[len(y) // 2 - 1], review80=(np.searchsorted(cs, .8) + 1) / len(y))
 
 
 def main(argv: list[str] | None = None) -> None:

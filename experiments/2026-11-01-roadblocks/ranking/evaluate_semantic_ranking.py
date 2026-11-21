@@ -15,25 +15,9 @@ import numpy as np
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import roc_auc_score
 
+from budget_metrics import metrics
+
 BLENDS = (0., .1, .25, .5, .75, 1.)
-
-
-def metrics(y, scores):
-    y, scores = np.asarray(y), np.asarray(scores)
-    if len(y) != len(scores) or len(np.unique(y)) != 2 or not np.isfinite(scores).all():
-        raise ValueError("metrics require aligned finite scores and both outcome classes")
-    order = np.argsort(-scores, kind="stable")
-    # Expected recall under a uniform ordering within score ties. Stable row order can
-    # otherwise make a constant score look useful when the input is grouped by label.
-    sorted_scores, expected = scores[order], y[order].astype(float)
-    boundaries = np.r_[0, np.flatnonzero(np.diff(sorted_scores)) + 1, len(y)]
-    for a, b in zip(boundaries[:-1], boundaries[1:]):
-        expected[a:b] = expected[a:b].mean()
-    cumulative = expected.cumsum() / y.sum()
-    return {"auc": float(roc_auc_score(y, scores)),
-            "recall20": float(cumulative[max(0, int(.2 * len(y)) - 1)]),
-            "recall50": float(cumulative[max(0, len(y) // 2 - 1)]),
-            "review80": float((np.searchsorted(cumulative, .8) + 1) / len(y))}
 
 
 def fit(X, y, train, test):
